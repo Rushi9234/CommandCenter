@@ -227,6 +227,6 @@ After your first log:
 **🎉 Enjoy CommandCenter! 🚀**
 
 **Questions?** Check the other documentation files:
-- GETTING_STARTED.md
-- QUICK_REFERENCE.md
-- SETUP.md
+- README.md
+- DATABASE_SETUP.md
+- DEPLOYMENT_GUIDE.md

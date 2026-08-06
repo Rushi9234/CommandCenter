@@ -5,8 +5,8 @@
 ### Prerequisites
 - Node.js 18+
 - PostgreSQL 14+
-- Redis 7+
-- MongoDB 6+
+
+> Redis and MongoDB are **not** currently used by the running app — both were removed as unused dependencies in Milestone 1 of the rebuild (see `docs/architecture/ENTERPRISE_REBUILD_BLUEPRINT.md`). They may be reintroduced deliberately for specific features (real-time chat, background jobs) later; don't install them for this app today.
 
 ### Installation
 
@@ -28,12 +28,10 @@ npm run dev
 
 ### Environment Variables
 
-Create `backend/.env`:
+Create `backend/.env` (see `backend/.env.example` for the authoritative template):
 ```
 DATABASE_URL=postgresql://user:password@localhost:5432/commandcenter
-REDIS_URL=redis://localhost:6379
-MONGODB_URL=mongodb://localhost:27017/commandcenter
-ANTHROPIC_API_KEY=your_api_key_here
+GROQ_API_KEY=your_groq_api_key_here
 JWT_SECRET=your_secret_here
 PORT=3001
 ```
@@ -55,5 +53,5 @@ See the main project documentation for complete feature specifications.
 
 - **Frontend:** React 18, TypeScript, Tailwind CSS, Framer Motion
 - **Backend:** Node.js, Express, TypeScript
-- **Database:** PostgreSQL, Redis, MongoDB
-- **AI:** Anthropic Claude Sonnet 4.5
+- **Database:** PostgreSQL
+- **AI:** Groq (Llama 3.3 70B)

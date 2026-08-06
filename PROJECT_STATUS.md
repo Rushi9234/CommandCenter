@@ -1,5 +1,7 @@
 # CommandCenter - Project Status
 
+> **Note (post-audit):** This file is kept as a historical record of what Phase 1 built. Its "Production Ready" status line below does not reflect the current assessment — see `docs/ARCHITECTURE.md` and `docs/architecture/ENTERPRISE_REBUILD_BLUEPRINT.md` for the audited, current state and the rebuild plan. The Redis/MongoDB items below were never actually wired into the running app and have since been removed as unused dependencies (Milestone 1).
+
 ## ✅ COMPLETED (Phase 1)
 
 ### Backend Infrastructure

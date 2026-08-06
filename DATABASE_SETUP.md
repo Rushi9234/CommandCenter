@@ -70,6 +70,8 @@ sudo -u postgres createdb commandcenter
 
 ### Option 2: Install MongoDB Directly
 
+> **Not currently required.** MongoDB is not used by the running app today — this section is kept for when it's deliberately reintroduced (see the rebuild blueprint's roadmap). Skip this for now.
+
 #### Windows
 1. **Download**: https://www.mongodb.com/try/download/community
 2. **Install**: Run the MSI installer
@@ -117,17 +119,13 @@ sudo systemctl start mongod
 # PostgreSQL (Primary Database)
 DATABASE_URL=postgresql://postgres:password123@localhost:5432/commandcenter
 
-# MongoDB (Optional - for some features)
-MONGODB_URL=mongodb://localhost:27017/commandcenter
-
-# Redis (Optional - for caching)
-REDIS_URL=redis://localhost:6379
+# MongoDB and Redis are not currently used by the app — omit them.
 
 # JWT Secret (Change this!)
 JWT_SECRET=your-secure-jwt-secret-key
 
-# Anthropic API Key (For AI features)
-ANTHROPIC_API_KEY=your-anthropic-api-key
+# Groq API Key (For AI features)
+GROQ_API_KEY=your-groq-api-key
 
 # Server Port
 PORT=3001
