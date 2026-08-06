@@ -1,17 +1,30 @@
 # Dependencies
 node_modules/
+**/node_modules/
 package-lock.json
 yarn.lock
 
 # Environment
 .env
-.env.local
-.env.production
+.env.*
+!.env.example
+!.env.docker
 
-# Build outputs
+# Build
 dist/
 build/
+coverage/
+.next/
+out/
+
+# Logs
 *.log
+logs/
+
+# Cache
+.cache/
+.parcel-cache/
+*.tsbuildinfo
 
 # IDE
 .vscode/
@@ -24,5 +37,18 @@ build/
 Thumbs.db
 
 # Database
-*.db
 *.sqlite
+*.db
+
+# Runtime
+tmp/
+temp/
+
+# Testing
+playwright-report/
+test-results/
+
+# Misc
+*.pem
+*.key
+*.crt
