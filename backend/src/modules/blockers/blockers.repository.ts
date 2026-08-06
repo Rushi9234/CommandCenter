@@ -1,4 +1,21 @@
-import { query, queryOne } from '../../db/client';
+import { query, queryOne, buildSetClause } from '../../db/client';
+
+const BLOCKER_UPDATABLE_COLUMNS = [
+  'title',
+  'description',
+  'blocker_type',
+  'urgency',
+  'impact',
+  'affected_tasks',
+  'attempted_solutions',
+  'severity',
+  'status',
+  'resolved_by',
+  'ai_suggestions',
+  'similar_blockers',
+  'suggested_helpers',
+  'resolved_at',
+];
 
 // Moved verbatim from the old databaseService.ts (blocker + message methods).
 export class BlockersRepository {
@@ -59,21 +76,19 @@ export class BlockersRepository {
   }
 
   async updateBlocker(blockerId: string, updates: Record<string, any>) {
-    // NOTE: preserved as-is -- same unallowlisted dynamic SET clause as the
-    // original. Out of scope for this architecture-only milestone.
-    const setClause = Object.keys(updates)
-      .map((key, index) => `${key} = $${index + 2}`)
-      .join(', ');
+    const built = buildSetClause(BLOCKER_UPDATABLE_COLUMNS, updates, 2);
+    if (!built) {
+      return this.getBlocker(blockerId);
+    }
 
     const text = `
       UPDATE blockers
-      SET ${setClause}, updated_at = CURRENT_TIMESTAMP
+      SET ${built.clause}, updated_at = CURRENT_TIMESTAMP
       WHERE blocker_id = $1
       RETURNING *
     `;
 
-    const params = [blockerId, ...Object.values(updates)];
-    return queryOne<any>(text, params);
+    return queryOne<any>(text, [blockerId, ...built.values]);
   }
 
   async getBlockerMessages(blockerId: string) {

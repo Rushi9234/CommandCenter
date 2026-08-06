@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import { postgresDB } from '../utils/postgresDB';
+import { authRepository as postgresDB } from '../modules/auth/auth.repository';
 import { generateVerificationToken, sendVerificationEmail } from '../services/emailService';
 
 const AUTO_VERIFY = process.env.AUTO_VERIFY === 'true';

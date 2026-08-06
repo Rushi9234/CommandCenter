@@ -1,9 +1,7 @@
-import { query, queryOne } from '../../db/client';
+import { query, queryOne, buildSetClause } from '../../db/client';
 
-// Moved verbatim from the old databaseService.ts. createUser/getUserByEmail/
-// getUserByUsername were dropped here -- they were dead code (grep confirmed
-// zero callers); auth exclusively uses utils/postgresDB.ts's own versions,
-// which this milestone deliberately does not touch.
+const UPDATABLE_COLUMNS = ['impact_score', 'streak_count', 'total_logs', 'privacy_settings'];
+
 export class UsersRepository {
   async getUserById(userId: string) {
     const text = 'SELECT * FROM users WHERE user_id = $1';
@@ -19,25 +17,25 @@ export class UsersRepository {
     return query(text);
   }
 
-  // NOTE: preserved as-is from the original implementation. This builds its
-  // SET clause from the caller-supplied object's keys with no column
-  // allowlist -- a known mass-assignment gap already flagged in the project
-  // audit. Fixing it is explicitly out of scope for this architecture-only
-  // milestone; tracked as follow-up work.
+  // The dynamic SET clause is now built from an explicit column allowlist
+  // (db/client.ts's buildSetClause) instead of every key the caller passed
+  // -- closes the mass-assignment gap flagged since the original audit.
+  // user_id, email, username, password_hash, role, and is_verified can
+  // never be set through this method regardless of what's in `updates`.
   async updateUser(userId: string, updates: Record<string, any>) {
-    const setClause = Object.keys(updates)
-      .map((key, index) => `${key} = $${index + 2}`)
-      .join(', ');
+    const built = buildSetClause(UPDATABLE_COLUMNS, updates, 2);
+    if (!built) {
+      return this.getUserById(userId);
+    }
 
     const text = `
       UPDATE users
-      SET ${setClause}, updated_at = CURRENT_TIMESTAMP
+      SET ${built.clause}, updated_at = CURRENT_TIMESTAMP
       WHERE user_id = $1
       RETURNING *
     `;
 
-    const params = [userId, ...Object.values(updates)];
-    return queryOne(text, params);
+    return queryOne(text, [userId, ...built.values]);
   }
 }
 

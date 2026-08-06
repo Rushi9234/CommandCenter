@@ -1,4 +1,6 @@
-import { query, queryOne } from '../../db/client';
+import { query, queryOne, buildSetClause } from '../../db/client';
+
+const GOAL_UPDATABLE_COLUMNS = ['title', 'description', 'goal_type', 'status', 'progress', 'parent_goal_id', 'target_date', 'completed_at'];
 
 // Moved verbatim from the old databaseService.ts (goal methods).
 export class GoalsRepository {
@@ -63,21 +65,19 @@ export class GoalsRepository {
   }
 
   async updateGoal(goalId: string, updates: Record<string, any>) {
-    // NOTE: preserved as-is -- same unallowlisted dynamic SET clause as the
-    // original. Out of scope for this architecture-only milestone.
-    const setClause = Object.keys(updates)
-      .map((key, index) => `${key} = $${index + 2}`)
-      .join(', ');
+    const built = buildSetClause(GOAL_UPDATABLE_COLUMNS, updates, 2);
+    if (!built) {
+      return this.getGoal(goalId);
+    }
 
     const text = `
       UPDATE goals
-      SET ${setClause}, updated_at = CURRENT_TIMESTAMP
+      SET ${built.clause}, updated_at = CURRENT_TIMESTAMP
       WHERE goal_id = $1
       RETURNING *
     `;
 
-    const params = [goalId, ...Object.values(updates)];
-    return queryOne(text, params);
+    return queryOne(text, [goalId, ...built.values]);
   }
 
   async deleteGoal(goalId: string) {

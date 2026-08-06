@@ -1,4 +1,6 @@
-import { query, queryOne } from '../../db/client';
+import { query, queryOne, buildSetClause } from '../../db/client';
+
+const LOG_UPDATABLE_COLUMNS = ['entry_text', 'entry_summary', 'sentiment_score', 'bullet_points', 'word_count'];
 
 // Moved verbatim from the old databaseService.ts (log methods) plus the
 // streak calculation, which lived under a "USER STREAK METHODS" comment in
@@ -61,19 +63,19 @@ export class LogsRepository {
   }
 
   async updateLog(logId: string, updates: Record<string, any>) {
-    const setClause = Object.keys(updates)
-      .map((key, index) => `${key} = $${index + 2}`)
-      .join(', ');
+    const built = buildSetClause(LOG_UPDATABLE_COLUMNS, updates, 2);
+    if (!built) {
+      return this.getLogById(logId);
+    }
 
     const text = `
       UPDATE daily_logs
-      SET ${setClause}, is_edited = true, updated_at = CURRENT_TIMESTAMP
+      SET ${built.clause}, is_edited = true, updated_at = CURRENT_TIMESTAMP
       WHERE log_id = $1
       RETURNING *
     `;
 
-    const params = [logId, ...Object.values(updates)];
-    return queryOne<any>(text, params);
+    return queryOne<any>(text, [logId, ...built.values]);
   }
 
   async calculateStreak(userId: string): Promise<number> {

@@ -1,4 +1,15 @@
-import { query, queryOne, withTransaction } from '../../db/client';
+import { query, queryOne, withTransaction, buildSetClause } from '../../db/client';
+
+const TEAM_SETTINGS_UPDATABLE_COLUMNS = [
+  'team_name',
+  'description',
+  'is_public',
+  'is_discoverable',
+  'max_team_size',
+  'parent_team_id',
+  'department',
+  'team_type',
+];
 
 // Moved verbatim from the old databaseService.ts (team/member/invite/join-
 // request methods). deleteTeam was dropped -- grep confirmed zero callers
@@ -256,22 +267,19 @@ export class TeamsRepository {
   }
 
   async updateTeamSettings(teamId: string, updates: Record<string, any>) {
-    // NOTE: preserved as-is -- same unallowlisted dynamic SET clause as the
-    // original. See users.repository.ts for the same note; fixing this is
-    // out of scope for this architecture-only milestone.
-    const setClause = Object.keys(updates)
-      .map((key, index) => `${key} = $${index + 2}`)
-      .join(', ');
+    const built = buildSetClause(TEAM_SETTINGS_UPDATABLE_COLUMNS, updates, 2);
+    if (!built) {
+      return this.getTeam(teamId);
+    }
 
     const text = `
       UPDATE teams
-      SET ${setClause}, updated_at = CURRENT_TIMESTAMP
+      SET ${built.clause}, updated_at = CURRENT_TIMESTAMP
       WHERE team_id = $1
       RETURNING *
     `;
 
-    const params = [teamId, ...Object.values(updates)];
-    return queryOne(text, params);
+    return queryOne(text, [teamId, ...built.values]);
   }
 
   async getSubTeams(parentTeamId: string) {

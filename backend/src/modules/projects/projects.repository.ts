@@ -1,4 +1,6 @@
-import { query, queryOne } from '../../db/client';
+import { query, queryOne, buildSetClause } from '../../db/client';
+
+const PROJECT_UPDATABLE_COLUMNS = ['project_name', 'description', 'team_id', 'status', 'priority', 'is_public', 'deadline'];
 
 // Moved verbatim from the old databaseService.ts (project methods).
 export class ProjectsRepository {
@@ -61,22 +63,19 @@ export class ProjectsRepository {
   }
 
   async updateProject(projectId: string, updates: Record<string, any>) {
-    // NOTE: preserved as-is -- same unallowlisted dynamic SET clause as the
-    // original databaseService.ts. See users.repository.ts for the same
-    // note; fixing this is out of scope for this architecture-only milestone.
-    const setClause = Object.keys(updates)
-      .map((key, index) => `${key} = $${index + 2}`)
-      .join(', ');
+    const built = buildSetClause(PROJECT_UPDATABLE_COLUMNS, updates, 2);
+    if (!built) {
+      return this.getProject(projectId);
+    }
 
     const text = `
       UPDATE projects
-      SET ${setClause}, updated_at = CURRENT_TIMESTAMP
+      SET ${built.clause}, updated_at = CURRENT_TIMESTAMP
       WHERE project_id = $1
       RETURNING *
     `;
 
-    const params = [projectId, ...Object.values(updates)];
-    return queryOne(text, params);
+    return queryOne(text, [projectId, ...built.values]);
   }
 
   async deleteProject(projectId: string) {

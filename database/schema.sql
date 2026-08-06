@@ -15,7 +15,8 @@ CREATE TABLE users (
     is_verified BOOLEAN DEFAULT false,
     verification_token VARCHAR(255),
     privacy_settings JSONB DEFAULT '{"ai_enabled": true, "sentiment_tracking": true, "leaderboard_visible": true, "analytics_opt_in": true}',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Teams table
@@ -30,7 +31,8 @@ CREATE TABLE teams (
     parent_team_id UUID REFERENCES teams(team_id),
     department VARCHAR(255),
     team_type VARCHAR(50) DEFAULT 'main',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Team members table
@@ -57,7 +59,8 @@ CREATE TABLE daily_logs (
     sentiment_score DECIMAL(3,2),
     word_count INTEGER,
     is_edited BOOLEAN DEFAULT false,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Projects table
@@ -71,7 +74,8 @@ CREATE TABLE projects (
     priority VARCHAR(50) DEFAULT 'medium',
     is_public BOOLEAN DEFAULT true,
     deadline TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Tasks table
@@ -88,6 +92,7 @@ CREATE TABLE tasks (
     priority VARCHAR(50) DEFAULT 'medium',
     created_by UUID NOT NULL REFERENCES users(user_id),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP
 );
 
@@ -110,6 +115,7 @@ CREATE TABLE blockers (
     similar_blockers JSONB,
     suggested_helpers JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     resolved_at TIMESTAMP
 );
 
@@ -135,6 +141,7 @@ CREATE TABLE goals (
     parent_goal_id UUID REFERENCES goals(goal_id),
     target_date TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP
 );
 
@@ -169,3 +176,18 @@ CREATE INDEX idx_blockers_team ON blockers(team_id);
 CREATE INDEX idx_messages_blocker ON messages(blocker_id);
 CREATE INDEX idx_goals_team ON goals(team_id);
 CREATE INDEX idx_goals_parent ON goals(parent_goal_id);
+
+-- Added by backend/migrations/1786004336567_add-updated-at-columns.sql and
+-- 1786004376387_add-missing-indexes.sql (Milestone 3). This file documents
+-- the schema for onboarding; backend/migrations/ is the actual source of
+-- truth going forward -- run `npm run migrate:up` there, not this file, to
+-- apply future schema changes.
+CREATE INDEX idx_team_invites_email ON team_invites(email);
+CREATE INDEX idx_team_invites_team ON team_invites(team_id);
+CREATE INDEX idx_join_requests_team ON join_requests(team_id);
+CREATE INDEX idx_projects_team ON projects(team_id);
+CREATE INDEX idx_projects_created_by ON projects(created_by);
+CREATE INDEX idx_goals_created_by ON goals(created_by);
+CREATE INDEX idx_daily_logs_log_date ON daily_logs(log_date);
+CREATE INDEX idx_blockers_team_status ON blockers(team_id, status);
+CREATE INDEX idx_tasks_project_status ON tasks(project_id, status);

@@ -1,4 +1,16 @@
-import { query, queryOne } from '../../db/client';
+import { query, queryOne, buildSetClause } from '../../db/client';
+
+const TASK_UPDATABLE_COLUMNS = [
+  'title',
+  'description',
+  'owner',
+  'contributors',
+  'reviewer',
+  'dependencies',
+  'status',
+  'priority',
+  'completed_at',
+];
 
 // Moved verbatim from the old databaseService.ts (task methods). Tasks live
 // inside the projects module rather than a separate top-level module -- they
@@ -56,19 +68,19 @@ export class TasksRepository {
   }
 
   async updateTask(taskId: string, updates: Record<string, any>) {
-    const setClause = Object.keys(updates)
-      .map((key, index) => `${key} = $${index + 2}`)
-      .join(', ');
+    const built = buildSetClause(TASK_UPDATABLE_COLUMNS, updates, 2);
+    if (!built) {
+      return this.getTask(taskId);
+    }
 
     const text = `
       UPDATE tasks
-      SET ${setClause}, updated_at = CURRENT_TIMESTAMP
+      SET ${built.clause}, updated_at = CURRENT_TIMESTAMP
       WHERE task_id = $1
       RETURNING *
     `;
 
-    const params = [taskId, ...Object.values(updates)];
-    return queryOne(text, params);
+    return queryOne(text, [taskId, ...built.values]);
   }
 
   async deleteTask(taskId: string) {

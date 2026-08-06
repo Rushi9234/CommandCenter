@@ -12,8 +12,10 @@ import aiRoutes from '../modules/ai/ai.routes';
 
 const router = Router();
 
-// Auth routes -- deliberately untouched by this milestone (controller,
-// middleware, and postgresDB.ts all stay exactly as they were).
+// Auth routes -- authController.ts's business logic and middleware/auth.ts
+// are untouched (that's Milestone 4's territory). Its data access moved from
+// utils/postgresDB.ts (its own separate connection pool) to
+// modules/auth/auth.repository.ts (the shared pool) in Milestone 3.
 router.post('/auth/register', authController.register);
 router.post('/auth/login', authController.login);
 router.post('/auth/verify-email', authController.verifyEmail);
