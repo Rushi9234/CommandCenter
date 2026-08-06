@@ -1,7 +1,7 @@
 import { teamsRepository } from './teams.repository';
 import { usersRepository } from '../users/users.repository';
 import { sendTeamInviteEmail } from '../../services/emailService';
-import { BadRequestError, ForbiddenError, NotFoundError } from '../../common/errors';
+import { ForbiddenError, NotFoundError } from '../../common/errors';
 
 export class TeamsService {
   createTeam(userId: string, body: any) {

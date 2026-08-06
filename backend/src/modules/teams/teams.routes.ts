@@ -10,6 +10,7 @@ import {
   updateMemberPermissionsSchema,
   inviteMemberSchema,
   searchTeamsQuerySchema,
+  updateTeamSettingsSchema,
 } from './teams.dto';
 
 // Mounted at the API root (not under /teams) so it can also own /invites/*
@@ -29,7 +30,12 @@ router.post('/teams/:teamId/invite', authenticate, validate(inviteMemberSchema),
 router.post('/teams/:teamId/join', authenticate, asyncHandler(teamsController.requestJoin));
 router.get('/teams/:teamId/join-requests', authenticate, asyncHandler(teamsController.getJoinRequests));
 router.post('/teams/:teamId/leave', authenticate, asyncHandler(teamsController.leaveTeam));
-router.put('/teams/:teamId/settings', authenticate, asyncHandler(teamsController.updateTeamSettings));
+router.put(
+  '/teams/:teamId/settings',
+  authenticate,
+  validate(updateTeamSettingsSchema),
+  asyncHandler(teamsController.updateTeamSettings)
+);
 router.delete('/teams/:teamId/members/:userId', authenticate, asyncHandler(teamsController.removeMember));
 router.put(
   '/teams/:teamId/members/:userId/role',
