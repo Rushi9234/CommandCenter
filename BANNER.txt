@@ -1,0 +1,51 @@
+
+   ██████╗ ██████╗ ███╗   ███╗███╗   ███╗ █████╗ ███╗   ██╗██████╗  ██████╗███████╗███╗   ██╗████████╗███████╗██████╗ 
+  ██╔════╝██╔═══██╗████╗ ████║████╗ ████║██╔══██╗████╗  ██║██╔══██╗██╔════╝██╔════╝████╗  ██║╚══██╔══╝██╔════╝██╔══██╗
+  ██║     ██║   ██║██╔████╔██║██╔████╔██║███████║██╔██╗ ██║██║  ██║██║     █████╗  ██╔██╗ ██║   ██║   █████╗  ██████╔╝
+  ██║     ██║   ██║██║╚██╔╝██║██║╚██╔╝██║██╔══██║██║╚██╗██║██║  ██║██║     ██╔══╝  ██║╚██╗██║   ██║   ██╔══╝  ██╔══██╗
+  ╚██████╗╚██████╔╝██║ ╚═╝ ██║██║ ╚═╝ ██║██║  ██║██║ ╚████║██████╔╝╚██████╗███████╗██║ ╚████║   ██║   ███████╗██║  ██║
+   ╚═════╝ ╚═════╝ ╚═╝     ╚═╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝  ╚═════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝╚═╝  ╚═╝
+                                                                                                                        
+  ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+                          🚀 TEAM PRODUCTIVITY & AI-MENTORSHIP ECOSYSTEM 🚀
+  ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+  ✨ FEATURES:
+     ⚡ THE PULSE      - Daily Work Logging with AI Analysis
+     🏆 THE GRID       - Gamified Leaderboard (Coming Soon)
+     🆘 SOS HUB        - Blocker Chat & AI Mentorship (Coming Soon)
+     📊 EXECUTIVE BRIEF - Manager's Dashboard (Coming Soon)
+
+  🎨 TECH STACK:
+     Frontend:  React 18 + TypeScript + Tailwind CSS + Framer Motion
+     Backend:   Node.js + Express + TypeScript
+     Database:  PostgreSQL + Redis + MongoDB
+     AI:        Anthropic Claude Sonnet 4.5
+
+  🔐 SECURITY:
+     ✓ JWT Authentication
+     ✓ Bcrypt Password Hashing
+     ✓ Cryptographic Log Signing (SHA-256)
+     ✓ Role-Based Access Control
+     ✓ Audit Trail Logging
+
+  📚 DOCUMENTATION:
+     → README.md           - Project overview
+     → SETUP.md            - Setup instructions
+     → PROJECT_STATUS.md   - Current status & roadmap
+     → QUICK_REFERENCE.md  - Command cheat sheet
+     → BUILD_COMPLETE.md   - Build summary
+
+  🚀 QUICK START:
+     1. Run: install.bat
+     2. Setup databases (PostgreSQL, Redis, MongoDB)
+     3. Configure: backend/.env
+     4. Start backend: cd backend && npm run dev
+     5. Start frontend: cd frontend && npm run dev
+     6. Open: http://localhost:3000
+
+  ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+                                    Built with ❤️ by Amazon Q Developer
+                                         Version 1.0.0 | 2025
+  ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+

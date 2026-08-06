@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: postgres-commandcenter
+    environment:
+      POSTGRES_DB: commandcenter
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - commandcenter-network
+
+  mongodb:
+    image: mongo:7
+    container_name: mongodb-commandcenter
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - commandcenter-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis-commandcenter
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - commandcenter-network
+
+volumes:
+  postgres_data:
+  mongodb_data:
+  redis_data:
+
+networks:
+  commandcenter-network:
+    driver: bridge

@@ -1,0 +1,221 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900 font-body antialiased;
+    min-height: 100vh;
+  }
+  
+  * {
+    @apply border-gray-200;
+  }
+}
+
+@layer components {
+  /* Professional Card */
+  .pro-card {
+    @apply bg-white border border-gray-200 rounded-xl shadow-sm;
+  }
+  
+  .pro-card-hover {
+    @apply bg-white border border-gray-200 rounded-xl shadow-sm;
+    @apply hover:shadow-md hover:border-gray-300 transition-all duration-200;
+  }
+
+  /* Professional Buttons */
+  .btn-primary {
+    @apply px-4 py-2.5 bg-blue-600 text-white rounded-lg font-medium;
+    @apply hover:bg-blue-700 active:bg-blue-800;
+    @apply transition-colors duration-150;
+    @apply focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2;
+  }
+
+  .btn-secondary {
+    @apply px-4 py-2.5 bg-white border border-gray-300 text-gray-700 rounded-lg font-medium;
+    @apply hover:bg-gray-50 hover:border-gray-400;
+    @apply transition-colors duration-150;
+    @apply focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2;
+  }
+  
+  .btn-ghost {
+    @apply px-4 py-2.5 text-gray-700 rounded-lg font-medium;
+    @apply hover:bg-gray-100;
+    @apply transition-colors duration-150;
+  }
+
+  /* Professional Input */
+  .input-field {
+    @apply w-full px-3.5 py-2.5 bg-white border border-gray-300 rounded-lg;
+    @apply text-gray-900 placeholder-gray-400;
+    @apply focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent;
+    @apply transition-all duration-150;
+  }
+  
+  .input-field:disabled {
+    @apply bg-gray-50 text-gray-500 cursor-not-allowed;
+  }
+
+  /* Professional Badge */
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+  
+  .badge-blue {
+    @apply bg-blue-100 text-blue-800;
+  }
+  
+  .badge-green {
+    @apply bg-green-100 text-green-800;
+  }
+  
+  .badge-yellow {
+    @apply bg-yellow-100 text-yellow-800;
+  }
+  
+  .badge-red {
+    @apply bg-red-100 text-red-800;
+  }
+  
+  .badge-gray {
+    @apply bg-gray-100 text-gray-800;
+  }
+  
+  .badge-purple {
+    @apply bg-purple-100 text-purple-800;
+  }
+
+  /* Professional Sidebar */
+  .sidebar {
+    @apply w-64 bg-white border-r border-gray-200 h-screen fixed left-0 top-0;
+  }
+  
+  .sidebar-item {
+    @apply flex items-center gap-3 px-4 py-2.5 text-gray-700 rounded-lg;
+    @apply hover:bg-gray-100 transition-colors duration-150 cursor-pointer;
+  }
+  
+  .sidebar-item-active {
+    @apply flex items-center gap-3 px-4 py-2.5 bg-blue-50 text-blue-700 rounded-lg;
+    @apply font-medium;
+  }
+
+  /* Professional Table */
+  .table-container {
+    @apply overflow-hidden rounded-xl border border-gray-200;
+  }
+  
+  .table {
+    @apply w-full;
+  }
+  
+  .table thead {
+    @apply bg-gray-50 border-b border-gray-200;
+  }
+  
+  .table th {
+    @apply px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider;
+  }
+  
+  .table td {
+    @apply px-6 py-4 text-sm text-gray-900 border-b border-gray-100;
+  }
+  
+  .table tbody tr:hover {
+    @apply bg-gray-50;
+  }
+
+  /* Professional Stats Card */
+  .stat-card {
+    @apply pro-card p-6;
+  }
+  
+  .stat-label {
+    @apply text-sm font-medium text-gray-600 mb-1;
+  }
+  
+  .stat-value {
+    @apply text-3xl font-bold text-gray-900;
+  }
+  
+  .stat-change {
+    @apply text-sm font-medium mt-2;
+  }
+  
+  .stat-change-positive {
+    @apply text-green-600;
+  }
+  
+  .stat-change-negative {
+    @apply text-red-600;
+  }
+
+  /* Professional Alert */
+  .alert {
+    @apply p-4 rounded-lg border;
+  }
+  
+  .alert-info {
+    @apply bg-blue-50 border-blue-200 text-blue-800;
+  }
+  
+  .alert-success {
+    @apply bg-green-50 border-green-200 text-green-800;
+  }
+  
+  .alert-warning {
+    @apply bg-yellow-50 border-yellow-200 text-yellow-800;
+  }
+  
+  .alert-error {
+    @apply bg-red-50 border-red-200 text-red-800;
+  }
+
+  /* Professional Divider */
+  .divider {
+    @apply border-t border-gray-200 my-6;
+  }
+  
+  /* Professional Avatar */
+  .avatar {
+    @apply rounded-full bg-gradient-to-br from-blue-500 to-purple-600;
+    @apply flex items-center justify-center text-white font-semibold;
+  }
+  
+  /* Professional Loading */
+  .spinner {
+    @apply animate-spin rounded-full border-2 border-gray-300 border-t-blue-600;
+  }
+}
+
+/* Custom scrollbar - Professional */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Smooth transitions */
+* {
+  @apply transition-colors duration-150;
+}
+
+/* Focus visible for accessibility */
+*:focus-visible {
+  @apply outline-none ring-2 ring-blue-500 ring-offset-2;
+}
