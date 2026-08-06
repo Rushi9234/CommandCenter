@@ -11,10 +11,18 @@ export const requireAccess = (
   message: string = 'Access denied'
 ) => {
   return async (req: AuthRequest, res: Response, next: NextFunction) => {
-    const allowed = await checkAccess(req);
-    if (!allowed) {
-      return res.status(403).json({ error: message });
+    try {
+      const allowed = await checkAccess(req);
+      if (!allowed) {
+        return res.status(403).json({ error: message });
+      }
+      next();
+    } catch (error) {
+      // An async Express middleware that rejects without catching is an
+      // unhandled promise rejection, not a clean 500 -- the independent
+      // review that found this pointed out authenticate.ts already guards
+      // its own async work; this middleware didn't.
+      next(error);
     }
-    next();
   };
 };

@@ -117,6 +117,22 @@ export class TasksRepository {
     const result = await queryOne(text, [taskId, userId]);
     return result !== null;
   }
+
+  // Milestone 5 review: same viewer-exclusion fix as
+  // projects.repository.ts's canWriteProject -- canAccessTask alone let a
+  // read-only viewer update or delete a task.
+  async canWriteTask(userId: string, taskId: string): Promise<boolean> {
+    const text = `
+      SELECT tk.task_id FROM tasks tk
+      INNER JOIN projects p ON tk.project_id = p.project_id
+      WHERE tk.task_id = $1 AND (
+        p.created_by = $2 OR
+        p.team_id IN (SELECT team_id FROM team_members WHERE user_id = $2 AND role != 'viewer')
+      )
+    `;
+    const result = await queryOne(text, [taskId, userId]);
+    return result !== null;
+  }
 }
 
 export const tasksRepository = new TasksRepository();

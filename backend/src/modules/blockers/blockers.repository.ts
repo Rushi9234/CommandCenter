@@ -125,6 +125,19 @@ export class BlockersRepository {
     const result = await queryOne(text, [blockerId, userId]);
     return result !== null;
   }
+
+  // Milestone 5 review: same viewer-exclusion fix as
+  // projects.repository.ts's canWriteProject.
+  async canWriteBlocker(userId: string, blockerId: string): Promise<boolean> {
+    const text = `
+      SELECT b.blocker_id FROM blockers b
+      WHERE b.blocker_id = $1 AND b.team_id IN (
+        SELECT team_id FROM team_members WHERE user_id = $2 AND role != 'viewer'
+      )
+    `;
+    const result = await queryOne(text, [blockerId, userId]);
+    return result !== null;
+  }
 }
 
 export const blockersRepository = new BlockersRepository();

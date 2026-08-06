@@ -19,23 +19,27 @@ export const requireTeamRole = (
   allowedRoles: string[]
 ) => {
   return async (req: TeamRoleRequest, res: Response, next: NextFunction) => {
-    const teamId = await resolveTeamId(req);
-    if (!teamId) {
-      return res.status(404).json({ error: 'Team not found' });
+    try {
+      const teamId = await resolveTeamId(req);
+      if (!teamId) {
+        return res.status(404).json({ error: 'Team not found' });
+      }
+
+      const role = await teamsRepository.getMemberRole(req.user!.userId, teamId);
+
+      if (!role) {
+        return res.status(403).json({ error: 'Not a member of this team' });
+      }
+
+      if (!allowedRoles.includes(role)) {
+        return res.status(403).json({ error: 'Insufficient permissions' });
+      }
+
+      req.teamRole = role;
+      next();
+    } catch (error) {
+      next(error);
     }
-
-    const role = await teamsRepository.getMemberRole(req.user!.userId, teamId);
-
-    if (!role) {
-      return res.status(403).json({ error: 'Not a member of this team' });
-    }
-
-    if (!allowedRoles.includes(role)) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
-    }
-
-    req.teamRole = role;
-    next();
   };
 };
 
@@ -43,19 +47,23 @@ export const requireTeamRole = (
 // member" without a role tier, e.g. viewing the member list.
 export const requireTeamMembership = (resolveTeamId: (req: AuthRequest) => Promise<string | null>) => {
   return async (req: TeamRoleRequest, res: Response, next: NextFunction) => {
-    const teamId = await resolveTeamId(req);
-    if (!teamId) {
-      return res.status(404).json({ error: 'Team not found' });
+    try {
+      const teamId = await resolveTeamId(req);
+      if (!teamId) {
+        return res.status(404).json({ error: 'Team not found' });
+      }
+
+      const role = await teamsRepository.getMemberRole(req.user!.userId, teamId);
+
+      if (!role) {
+        return res.status(403).json({ error: 'Not a member of this team' });
+      }
+
+      req.teamRole = role;
+      next();
+    } catch (error) {
+      next(error);
     }
-
-    const role = await teamsRepository.getMemberRole(req.user!.userId, teamId);
-
-    if (!role) {
-      return res.status(403).json({ error: 'Not a member of this team' });
-    }
-
-    req.teamRole = role;
-    next();
   };
 };
 
@@ -70,22 +78,26 @@ export const requireTeamRoleIfSpecified = (
   allowedRoles: string[]
 ) => {
   return async (req: TeamRoleRequest, res: Response, next: NextFunction) => {
-    const teamId = await resolveTeamId(req);
-    if (!teamId) {
-      return next();
-    }
+    try {
+      const teamId = await resolveTeamId(req);
+      if (!teamId) {
+        return next();
+      }
 
-    const role = await teamsRepository.getMemberRole(req.user!.userId, teamId);
+      const role = await teamsRepository.getMemberRole(req.user!.userId, teamId);
 
-    if (!role) {
-      return res.status(403).json({ error: 'Not a member of this team' });
-    }
-    if (!allowedRoles.includes(role)) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
-    }
+      if (!role) {
+        return res.status(403).json({ error: 'Not a member of this team' });
+      }
+      if (!allowedRoles.includes(role)) {
+        return res.status(403).json({ error: 'Insufficient permissions' });
+      }
 
-    req.teamRole = role;
-    next();
+      req.teamRole = role;
+      next();
+    } catch (error) {
+      next(error);
+    }
   };
 };
 

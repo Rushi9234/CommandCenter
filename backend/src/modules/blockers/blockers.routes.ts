@@ -9,7 +9,10 @@ import { teamsRepository } from '../teams/teams.repository';
 import * as blockersController from './blockers.controller';
 import { createBlockerSchema, sendMessageSchema, updateBlockerSchema } from './blockers.dto';
 
-const ALL_ROLES = ['owner', 'admin', 'manager', 'member', 'viewer'];
+// Milestone 5 review: viewer is documented as read-only, so it's excluded
+// from creating blockers or posting messages (canWriteBlocker applies the
+// same exclusion to update).
+const WRITE_ROLES = ['owner', 'admin', 'manager', 'member'];
 
 const router = Router();
 
@@ -21,7 +24,7 @@ router.post(
   '/blockers',
   authenticate,
   validate(createBlockerSchema),
-  requireTeamRole(teamIdFromBody, ALL_ROLES),
+  requireTeamRole(teamIdFromBody, WRITE_ROLES),
   asyncHandler(blockersController.createBlocker)
 );
 
@@ -38,14 +41,14 @@ router.get(
 router.put(
   '/blockers/:blockerId',
   authenticate,
-  requireAccess((req) => blockersRepository.canAccessBlocker(req.user!.userId, req.params.blockerId), 'Access denied to this blocker'),
+  requireAccess((req) => blockersRepository.canWriteBlocker(req.user!.userId, req.params.blockerId), 'Access denied to this blocker'),
   validate(updateBlockerSchema),
   asyncHandler(blockersController.updateBlocker)
 );
 router.post(
   '/blockers/:blockerId/messages',
   authenticate,
-  requireAccess((req) => blockersRepository.canAccessBlocker(req.user!.userId, req.params.blockerId), 'Access denied to this blocker'),
+  requireAccess((req) => blockersRepository.canWriteBlocker(req.user!.userId, req.params.blockerId), 'Access denied to this blocker'),
   validate(sendMessageSchema),
   asyncHandler(blockersController.sendMessage)
 );

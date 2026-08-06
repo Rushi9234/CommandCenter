@@ -118,7 +118,9 @@ export class TeamsService {
   // inviteId belonging to someone else could join a team they were never
   // invited to. Now verifies the invite's email matches the caller's own
   // email before accepting.
-  async acceptInvite(inviteId: string, userId: string) {
+  // Shared by accept/reject -- pulled out after an independent review found
+  // the same five lines duplicated in both methods.
+  private async assertInviteBelongsToCaller(inviteId: string, userId: string): Promise<void> {
     const user = await usersRepository.getUserById(userId);
     const invites = user ? await teamsRepository.getUserInvites(user.email) : [];
     const matchesCaller = invites.some((invite: any) => invite.invite_id === inviteId);
@@ -126,19 +128,15 @@ export class TeamsService {
     if (!matchesCaller) {
       throw new ForbiddenError('This invitation was not sent to you');
     }
+  }
 
+  async acceptInvite(inviteId: string, userId: string) {
+    await this.assertInviteBelongsToCaller(inviteId, userId);
     await teamsRepository.acceptInvite(inviteId, userId);
   }
 
   async rejectInvite(inviteId: string, userId: string) {
-    const user = await usersRepository.getUserById(userId);
-    const invites = user ? await teamsRepository.getUserInvites(user.email) : [];
-    const matchesCaller = invites.some((invite: any) => invite.invite_id === inviteId);
-
-    if (!matchesCaller) {
-      throw new ForbiddenError('This invitation was not sent to you');
-    }
-
+    await this.assertInviteBelongsToCaller(inviteId, userId);
     await teamsRepository.rejectInvite(inviteId);
   }
 

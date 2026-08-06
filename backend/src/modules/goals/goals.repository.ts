@@ -130,6 +130,20 @@ export class GoalsRepository {
     const result = await queryOne(text, [goalId, userId]);
     return result !== null;
   }
+
+  // Milestone 5 review: same viewer-exclusion fix as
+  // projects.repository.ts's canWriteProject.
+  async canWriteGoal(userId: string, goalId: string): Promise<boolean> {
+    const text = `
+      SELECT goal_id FROM goals
+      WHERE goal_id = $1 AND (
+        created_by = $2 OR
+        team_id IN (SELECT team_id FROM team_members WHERE user_id = $2 AND role != 'viewer')
+      )
+    `;
+    const result = await queryOne(text, [goalId, userId]);
+    return result !== null;
+  }
 }
 
 export const goalsRepository = new GoalsRepository();

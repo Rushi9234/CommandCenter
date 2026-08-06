@@ -8,7 +8,11 @@ import { goalsRepository } from './goals.repository';
 import * as goalsController from './goals.controller';
 import { createGoalSchema, updateGoalSchema } from './goals.dto';
 
-const ALL_ROLES = ['owner', 'admin', 'manager', 'member', 'viewer'];
+// Milestone 5 review: viewer is documented as read-only -- READ_ROLES
+// covers list/hierarchy GETs, WRITE_ROLES gates creation (canWriteGoal
+// applies the same exclusion to update/delete).
+const READ_ROLES = ['owner', 'admin', 'manager', 'member', 'viewer'];
+const WRITE_ROLES = ['owner', 'admin', 'manager', 'member'];
 
 const router = Router();
 
@@ -19,15 +23,15 @@ router.post(
   '/goals',
   authenticate,
   validate(createGoalSchema),
-  requireTeamRoleIfSpecified(teamIdFromBody, ALL_ROLES),
+  requireTeamRoleIfSpecified(teamIdFromBody, WRITE_ROLES),
   asyncHandler(goalsController.createGoal)
 );
 
-router.get('/goals', authenticate, requireTeamRoleIfSpecified(teamIdFromQuery, ALL_ROLES), asyncHandler(goalsController.getGoals));
+router.get('/goals', authenticate, requireTeamRoleIfSpecified(teamIdFromQuery, READ_ROLES), asyncHandler(goalsController.getGoals));
 router.get(
   '/goals/hierarchy',
   authenticate,
-  requireTeamRoleIfSpecified(teamIdFromQuery, ALL_ROLES),
+  requireTeamRoleIfSpecified(teamIdFromQuery, READ_ROLES),
   asyncHandler(goalsController.getGoalHierarchy)
 );
 
@@ -42,14 +46,14 @@ router.get(
 router.put(
   '/goals/:goalId',
   authenticate,
-  requireAccess((req) => goalsRepository.canAccessGoal(req.user!.userId, req.params.goalId), 'Access denied to this goal'),
+  requireAccess((req) => goalsRepository.canWriteGoal(req.user!.userId, req.params.goalId), 'Access denied to this goal'),
   validate(updateGoalSchema),
   asyncHandler(goalsController.updateGoal)
 );
 router.delete(
   '/goals/:goalId',
   authenticate,
-  requireAccess((req) => goalsRepository.canAccessGoal(req.user!.userId, req.params.goalId), 'Access denied to this goal'),
+  requireAccess((req) => goalsRepository.canWriteGoal(req.user!.userId, req.params.goalId), 'Access denied to this goal'),
   asyncHandler(goalsController.deleteGoal)
 );
 

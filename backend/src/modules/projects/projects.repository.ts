@@ -106,6 +106,25 @@ export class ProjectsRepository {
     return result !== null;
   }
 
+  // Milestone 5 review: canAccessProject alone let a 'viewer' -- a role the
+  // model documents as read-only -- update a project, because it only
+  // checked "is any kind of team member", not which role. This is the same
+  // check with `role != 'viewer'` added to the team-membership branch;
+  // creator ownership still bypasses role entirely, same as before.
+  async canWriteProject(userId: string, projectId: string): Promise<boolean> {
+    const text = `
+      SELECT p.project_id FROM projects p
+      WHERE p.project_id = $1 AND (
+        p.created_by = $2 OR
+        p.team_id IN (
+          SELECT team_id FROM team_members WHERE user_id = $2 AND role != 'viewer'
+        )
+      )
+    `;
+    const result = await queryOne(text, [projectId, userId]);
+    return result !== null;
+  }
+
   // Milestone 5: delete keeps its own, narrower rule -- creator only, not
   // "creator or any team member" like canAccessProject. Unchanged from the
   // original behavior; pulled into the repository so requireAccess can call

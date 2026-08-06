@@ -10,7 +10,10 @@ import { teamsRepository } from '../teams/teams.repository';
 import * as projectsController from './projects.controller';
 import { createProjectSchema, analyzeProjectSchema, createTaskSchema, updateProjectSchema, updateTaskSchema } from './projects.dto';
 
-const ALL_ROLES = ['owner', 'admin', 'manager', 'member', 'viewer'];
+// Milestone 5 review: viewer is documented as read-only, so it's excluded
+// from the create-project allowlist (canWriteProject/canWriteTask below
+// apply the same exclusion to update/delete).
+const WRITE_ROLES = ['owner', 'admin', 'manager', 'member'];
 
 // Mounted at the API root -- mirrors the original flat path list, which mixes
 // /projects/* and /tasks/* and /teams/:teamId/projects under one controller.
@@ -26,7 +29,7 @@ router.post(
   '/projects',
   authenticate,
   validate(createProjectSchema),
-  requireTeamRoleIfSpecified(teamIdFromBody, ALL_ROLES),
+  requireTeamRoleIfSpecified(teamIdFromBody, WRITE_ROLES),
   asyncHandler(projectsController.createProject)
 );
 
@@ -42,7 +45,7 @@ router.get(
 router.put(
   '/projects/:projectId',
   authenticate,
-  requireAccess((req) => projectsRepository.canAccessProject(req.user!.userId, req.params.projectId), 'Access denied to this project'),
+  requireAccess((req) => projectsRepository.canWriteProject(req.user!.userId, req.params.projectId), 'Access denied to this project'),
   validate(updateProjectSchema),
   asyncHandler(projectsController.updateProject)
 );
@@ -60,7 +63,7 @@ router.post('/projects/analyze', authenticate, validate(analyzeProjectSchema), a
 router.post(
   '/projects/:projectId/tasks',
   authenticate,
-  requireAccess((req) => projectsRepository.canAccessProject(req.user!.userId, req.params.projectId), 'Access denied to this project'),
+  requireAccess((req) => projectsRepository.canWriteProject(req.user!.userId, req.params.projectId), 'Access denied to this project'),
   validate(createTaskSchema),
   asyncHandler(projectsController.createTask)
 );
@@ -77,14 +80,14 @@ router.get(
 router.put(
   '/tasks/:taskId',
   authenticate,
-  requireAccess((req) => tasksRepository.canAccessTask(req.user!.userId, req.params.taskId), 'Access denied to this task'),
+  requireAccess((req) => tasksRepository.canWriteTask(req.user!.userId, req.params.taskId), 'Access denied to this task'),
   validate(updateTaskSchema),
   asyncHandler(projectsController.updateTask)
 );
 router.delete(
   '/tasks/:taskId',
   authenticate,
-  requireAccess((req) => tasksRepository.canAccessTask(req.user!.userId, req.params.taskId), 'Access denied to this task'),
+  requireAccess((req) => tasksRepository.canWriteTask(req.user!.userId, req.params.taskId), 'Access denied to this task'),
   asyncHandler(projectsController.deleteTask)
 );
 
