@@ -1,10 +1,10 @@
-import dotenv from 'dotenv';
-import { maskPII, sanitizeForAI, AI_DISCLAIMERS, PRIVACY_CONFIG } from '../utils/privacyConfig';
+import { env } from '../../config/env';
+import { GROQ_API_URL, GROQ_MODEL } from '../../common/constants';
+import { maskPII, AI_DISCLAIMERS, PRIVACY_CONFIG } from './privacy-config';
 
-dotenv.config();
-
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+// Moved from services/aiService.ts. Behavior is unchanged -- only the API
+// key/URL/model went from being re-declared per file to the shared
+// config/env.ts and common/constants.ts.
 
 interface LogAnalysis {
   tasks_identified: string[];
@@ -16,9 +16,28 @@ interface LogAnalysis {
   quality_score: number;
 }
 
+const callGroq = async (messages: { role: string; content: string }[], options: { temperature?: number; max_tokens?: number } = {}) => {
+  const response = await fetch(GROQ_API_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.groqApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      messages,
+      temperature: options.temperature ?? 0.7,
+      max_tokens: options.max_tokens ?? 500,
+    }),
+  });
+
+  const data = (await response.json()) as any;
+  return data.choices[0].message.content as string;
+};
+
 export const analyzeLog = async (entryText: string, userContext: any): Promise<LogAnalysis> => {
   const sanitizedText = maskPII(entryText);
-  
+
   const prompt = `Analyze this work log and extract key information.
 
 Work Log:
@@ -38,24 +57,9 @@ Return ONLY valid JSON:
 Note: ${AI_DISCLAIMERS.ANALYSIS}`;
 
   try {
-    const response = await fetch(GROQ_API_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.7,
-        max_tokens: 800,
-      }),
-    });
-
-    const data = await response.json() as any;
-    const content = data.choices[0].message.content;
+    const content = await callGroq([{ role: 'user', content: prompt }], { max_tokens: 800 });
     const jsonMatch = content.match(/\{[\s\S]*\}/);
-    
+
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0]);
     }
@@ -82,27 +86,13 @@ Blocker:
 ${blockerText}
 
 Recent Chat:
-${chatHistory.slice(-3).map(m => `${m.username}: ${m.message_text}`).join('\n')}
+${chatHistory.slice(-3).map((m) => `${m.username}: ${m.message_text}`).join('\n')}
 
 Advice:`;
 
   try {
-    const response = await fetch(GROQ_API_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.7,
-        max_tokens: 200,
-      }),
-    });
-
-    const data = await response.json() as any;
-    return data.choices[0].message.content || 'Unable to generate advice at this time.';
+    const content = await callGroq([{ role: 'user', content: prompt }], { max_tokens: 200 });
+    return content || 'Unable to generate advice at this time.';
   } catch (error) {
     console.error('AI Mentor Error:', error);
     return 'I apologize, but I encountered an error generating advice. Please try again.';
@@ -126,24 +116,9 @@ Return ONLY valid JSON:
 }`;
 
   try {
-    const response = await fetch(GROQ_API_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.7,
-        max_tokens: 1500,
-      }),
-    });
-
-    const data = await response.json() as any;
-    const content = data.choices[0].message.content;
+    const content = await callGroq([{ role: 'user', content: prompt }], { max_tokens: 1500 });
     const jsonMatch = content.match(/\{[\s\S]*\}/);
-    
+
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0]);
     }
@@ -174,24 +149,9 @@ Return ONLY valid JSON:
 }`;
 
   try {
-    const response = await fetch(GROQ_API_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.8,
-        max_tokens: 300,
-      }),
-    });
-
-    const data = await response.json() as any;
-    const content = data.choices[0].message.content;
+    const content = await callGroq([{ role: 'user', content: prompt }], { temperature: 0.8, max_tokens: 300 });
     const jsonMatch = content.match(/\{[\s\S]*\}/);
-    
+
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0]);
     }
@@ -209,7 +169,7 @@ Return ONLY valid JSON:
 export const generateProductivityInsights = async (logs: any[], tasks: any[], streakCount: number) => {
   const prompt = `Analyze productivity data briefly.
 
-Logs: ${logs.length}, Completed: ${tasks.filter(t => t.status === 'done').length}, Streak: ${streakCount}
+Logs: ${logs.length}, Completed: ${tasks.filter((t) => t.status === 'done').length}, Streak: ${streakCount}
 
 Return ONLY valid JSON:
 {
@@ -220,24 +180,9 @@ Return ONLY valid JSON:
 }`;
 
   try {
-    const response = await fetch(GROQ_API_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.7,
-        max_tokens: 400,
-      }),
-    });
-
-    const data = await response.json() as any;
-    const content = data.choices[0].message.content;
+    const content = await callGroq([{ role: 'user', content: prompt }], { max_tokens: 400 });
     const jsonMatch = content.match(/\{[\s\S]*\}/);
-    
+
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0]);
     }
@@ -257,10 +202,10 @@ export const chatWithAI = async (message: string, context: string) => {
   if (!PRIVACY_CONFIG.AI_TRAINING_ALLOWED) {
     console.log('[PRIVACY] AI processing in session-only mode');
   }
-  
+
   const sanitizedMessage = maskPII(message);
   const sanitizedContext = maskPII(context);
-  
+
   const prompt = `Answer in 2-3 sentences max. Be brief and actionable.
 
 Context: ${sanitizedContext}
@@ -270,22 +215,8 @@ User: ${sanitizedMessage}
 Assistant: ${AI_DISCLAIMERS.SUGGESTION}`;
 
   try {
-    const response = await fetch(GROQ_API_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.7,
-        max_tokens: 150,
-      }),
-    });
-
-    const data = await response.json() as any;
-    return data.choices[0].message.content || 'I apologize, I could not generate a response.';
+    const content = await callGroq([{ role: 'user', content: prompt }], { max_tokens: 150 });
+    return content || 'I apologize, I could not generate a response.';
   } catch (error) {
     console.error('AI Chat Error:', error);
     return 'I apologize, I encountered an error. Please try again.';
@@ -308,24 +239,9 @@ Return ONLY valid JSON:
 }`;
 
   try {
-    const response = await fetch(GROQ_API_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.7,
-        max_tokens: 400,
-      }),
-    });
-
-    const data = await response.json() as any;
-    const content = data.choices[0].message.content;
+    const content = await callGroq([{ role: 'user', content: prompt }], { max_tokens: 400 });
     const jsonMatch = content.match(/\{[\s\S]*\}/);
-    
+
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0]);
     }
@@ -337,7 +253,7 @@ Return ONLY valid JSON:
 };
 
 export const generateStandup = async (logs: any[], teamMembers: any[]) => {
-  const standupData = logs.map(log => ({
+  const standupData = logs.map((log) => ({
     member: log.username,
     yesterday: log.bullet_points?.slice(0, 3) || [],
     sentiment: log.sentiment_score || 0,
@@ -357,24 +273,9 @@ Return ONLY valid JSON:
 }`;
 
   try {
-    const response = await fetch(GROQ_API_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.7,
-        max_tokens: 500,
-      }),
-    });
-
-    const data = await response.json() as any;
-    const content = data.choices[0].message.content;
+    const content = await callGroq([{ role: 'user', content: prompt }], { max_tokens: 500 });
     const jsonMatch = content.match(/\{[\s\S]*\}/);
-    
+
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0]);
     }

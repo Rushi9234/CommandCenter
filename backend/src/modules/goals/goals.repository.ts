@@ -1,0 +1,119 @@
+import { query, queryOne } from '../../db/client';
+
+// Moved verbatim from the old databaseService.ts (goal methods).
+export class GoalsRepository {
+  async createGoal(goalData: {
+    title: string;
+    description?: string;
+    goal_type?: string;
+    status?: string;
+    progress?: number;
+    created_by: string;
+    team_id?: string;
+    parent_goal_id?: string;
+    target_date?: Date;
+  }) {
+    const text = `
+      INSERT INTO goals (
+        title, description, goal_type, status, progress,
+        created_by, team_id, parent_goal_id, target_date
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING *
+    `;
+
+    const params = [
+      goalData.title,
+      goalData.description || null,
+      goalData.goal_type || 'milestone',
+      goalData.status || 'planning',
+      goalData.progress || 0,
+      goalData.created_by,
+      goalData.team_id || null,
+      goalData.parent_goal_id || null,
+      goalData.target_date || null,
+    ];
+
+    return queryOne<any>(text, params);
+  }
+
+  async getGoal(goalId: string) {
+    const text = 'SELECT * FROM goals WHERE goal_id = $1';
+    return queryOne<any>(text, [goalId]);
+  }
+
+  async getUserGoals(userId: string) {
+    const text = `
+      SELECT * FROM goals
+      WHERE created_by = $1 OR team_id IN (
+        SELECT team_id FROM team_members WHERE user_id = $1
+      )
+      ORDER BY created_at DESC
+    `;
+    return query<any>(text, [userId]);
+  }
+
+  async getTeamGoals(teamId: string) {
+    const text = `
+      SELECT * FROM goals
+      WHERE team_id = $1
+      ORDER BY created_at DESC
+    `;
+    return query<any>(text, [teamId]);
+  }
+
+  async updateGoal(goalId: string, updates: Record<string, any>) {
+    // NOTE: preserved as-is -- same unallowlisted dynamic SET clause as the
+    // original. Out of scope for this architecture-only milestone.
+    const setClause = Object.keys(updates)
+      .map((key, index) => `${key} = $${index + 2}`)
+      .join(', ');
+
+    const text = `
+      UPDATE goals
+      SET ${setClause}, updated_at = CURRENT_TIMESTAMP
+      WHERE goal_id = $1
+      RETURNING *
+    `;
+
+    const params = [goalId, ...Object.values(updates)];
+    return queryOne(text, params);
+  }
+
+  async deleteGoal(goalId: string) {
+    const text = 'DELETE FROM goals WHERE goal_id = $1';
+    return query(text, [goalId]);
+  }
+
+  async calculateGoalProgress(goalId: string) {
+    const text = `
+      WITH RECURSIVE goal_tree AS (
+        SELECT goal_id, progress, status FROM goals WHERE goal_id = $1
+        UNION ALL
+        SELECT g.goal_id, g.progress, g.status
+        FROM goals g
+        INNER JOIN goal_tree gt ON g.parent_goal_id = gt.goal_id
+      )
+      SELECT
+        COUNT(*) as total_goals,
+        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_goals,
+        AVG(progress) as avg_progress
+      FROM goal_tree
+    `;
+    const result = await queryOne<any>(text, [goalId]);
+
+    if (!result) return { progress: 0, completed: 0, total: 0 };
+
+    const total = parseInt(result.total_goals);
+    const completed = parseInt(result.completed_goals);
+    const avgProgress = parseFloat(result.avg_progress) || 0;
+
+    return {
+      progress: total > 0 ? Math.round((completed / total) * 100) : avgProgress,
+      completed,
+      total,
+    };
+  }
+}
+
+export const goalsRepository = new GoalsRepository();

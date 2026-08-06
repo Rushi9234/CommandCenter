@@ -1,21 +1,19 @@
-// Privacy Configuration and Data Classification
+// Moved verbatim from utils/privacyConfig.ts -- relocated here because
+// everything in it exists to support the AI service (PII masking,
+// disclaimers, usage rules), which is the only thing that imports it.
 
 export const PRIVACY_CONFIG = {
-  // Core principle: Users own their data
   DATA_OWNERSHIP: 'USER',
   AI_ROLE: 'TEMPORARY_PROCESSOR',
-  
-  // Data retention
+
   AI_SESSION_TIMEOUT: 3600000, // 1 hour
   CHAT_HISTORY_RETENTION: 30, // days
   AUTO_DELETE_ENABLED: true,
-  
-  // AI processing
+
   AI_TRAINING_ALLOWED: false,
   CROSS_USER_LEARNING: false,
   CROSS_TEAM_LEARNING: false,
-  
-  // Privacy modes
+
   STRICT_MODE: true,
   ANONYMIZE_ANALYTICS: true,
   ENCRYPTION_REQUIRED: true,
@@ -34,23 +32,10 @@ export const DATA_CLASSIFICATION = {
     'documents',
     'source_code',
   ],
-  
-  PII: [
-    'name',
-    'email',
-    'role',
-    'organization',
-    'ip_address',
-    'user_id',
-  ],
-  
-  BEHAVIORAL_METADATA: [
-    'activity_timestamps',
-    'log_frequency',
-    'streak_data',
-    'productivity_scores',
-    'sentiment_scores',
-  ],
+
+  PII: ['name', 'email', 'role', 'organization', 'ip_address', 'user_id'],
+
+  BEHAVIORAL_METADATA: ['activity_timestamps', 'log_frequency', 'streak_data', 'productivity_scores', 'sentiment_scores'],
 };
 
 export const AI_USAGE_RULES = {
@@ -62,7 +47,7 @@ export const AI_USAGE_RULES = {
     'project_planning',
     'blocker_resolution',
   ],
-  
+
   FORBIDDEN: [
     'store_data_permanently',
     'use_for_training',
@@ -78,14 +63,8 @@ export const AI_USAGE_RULES = {
 };
 
 export const PRIVACY_LABELS = {
-  FORBIDDEN_LABELS: [
-    'Low performer',
-    'Negative personality',
-    'Unproductive member',
-    'At-risk employee',
-    'Likely to quit',
-  ],
-  
+  FORBIDDEN_LABELS: ['Low performer', 'Negative personality', 'Unproductive member', 'At-risk employee', 'Likely to quit'],
+
   ALLOWED_PHRASES: [
     'You may consider taking a break',
     'Your logs indicate increased stress language',
@@ -107,15 +86,9 @@ export const USER_RIGHTS = {
 };
 
 export const maskPII = (text: string): string => {
-  // Mask email addresses
   text = text.replace(/[\w.-]+@[\w.-]+\.\w+/g, '[EMAIL]');
-  
-  // Mask phone numbers
   text = text.replace(/\b\d{3}[-.]?\d{3}[-.]?\d{4}\b/g, '[PHONE]');
-  
-  // Mask IP addresses
   text = text.replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, '[IP]');
-  
   return text;
 };
 
@@ -130,7 +103,6 @@ export const sanitizeForAI = (data: any, userId: string): any => {
 };
 
 const hashUserId = (userId: string): string => {
-  // Simple hash for anonymization
   return Buffer.from(userId).toString('base64').substring(0, 8);
 };
 
