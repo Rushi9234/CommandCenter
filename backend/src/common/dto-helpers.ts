@@ -7,5 +7,5 @@ import { z } from 'zod';
 // "expected string, received undefined" message, which would have been a
 // silent regression against the original hand-written `if (!field)` checks
 // this DTO layer replaced.
-export const requiredString = (message: string) =>
-  z.preprocess((val) => (val === undefined || val === null ? '' : val), z.string().min(1, message));
+export const requiredString = (message: string, minLength: number = 1) =>
+  z.preprocess((val) => (val === undefined || val === null ? '' : val), z.string().min(minLength, message));

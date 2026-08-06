@@ -1,29 +1,118 @@
-import { queryOne } from '../../db/client';
+import { query, queryOne, buildSetClause } from '../../db/client';
 
-// Replaces utils/postgresDB.ts, which held its own separate pg.Pool() with
-// an explicit `ssl: false` in development -- the second live database
-// connection pool in the app, and the reason register/login failed against
-// Neon (which requires SSL) whenever NODE_ENV wasn't "production". Routing
-// through the shared query/queryOne helpers (backed by the single pgPool in
-// utils/database.ts, which has no such override) fixes both the duplicate
-// pool and the SSL bug as one change.
-//
-// getUserById and getAllUsers, which used to live on postgresDB, are not
-// carried over here -- grep confirmed authController never calls them
-// (usersRepository already has its own versions, which is what every other
-// module actually uses).
+const AUTH_UPDATABLE_COLUMNS = [
+  'is_verified',
+  'verification_token',
+  'verification_token_expires',
+  'password_hash',
+  'password_reset_token_hash',
+  'password_reset_expires',
+];
+
 export class AuthRepository {
-  async createUser(email: string, username: string, fullName: string, passwordHash: string, verificationToken?: string) {
+  async createUser(
+    email: string,
+    username: string,
+    fullName: string,
+    passwordHash: string,
+    verificationTokenHash: string | null,
+    verificationTokenExpires: Date | null
+  ) {
     const text = `
-      INSERT INTO users (email, username, full_name, password_hash, verification_token, is_verified)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO users (email, username, full_name, password_hash, is_verified, verification_token, verification_token_expires)
+      VALUES ($1, $2, $3, $4, false, $5, $6)
       RETURNING *
     `;
-    return queryOne<any>(text, [email, username, fullName, passwordHash, verificationToken, true]);
+    return queryOne<any>(text, [email, username, fullName, passwordHash, verificationTokenHash, verificationTokenExpires]);
   }
 
   async getUserByEmail(email: string) {
     return queryOne<any>('SELECT * FROM users WHERE email = $1', [email]);
+  }
+
+  async getUserById(userId: string) {
+    return queryOne<any>('SELECT * FROM users WHERE user_id = $1', [userId]);
+  }
+
+  // Same allowlisted-update pattern introduced in Milestone 3 -- a client
+  // can never reach this with arbitrary keys (auth.service.ts only ever
+  // calls it with a fixed, known shape), but the allowlist stays as
+  // defense-in-depth and for consistency with every other repository.
+  async updateUser(userId: string, updates: Record<string, any>) {
+    const built = buildSetClause(AUTH_UPDATABLE_COLUMNS, updates, 2);
+    if (!built) {
+      return this.getUserById(userId);
+    }
+
+    const text = `
+      UPDATE users
+      SET ${built.clause}, updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = $1
+      RETURNING *
+    `;
+    return queryOne<any>(text, [userId, ...built.values]);
+  }
+
+  // Looks a user up by the HASH of their raw verification token, not by
+  // treating the token as an email (the bug flagged in every prior audit).
+  // Also enforces expiry -- verification tokens never expired before.
+  async getUserByVerificationTokenHash(tokenHash: string) {
+    const text = `
+      SELECT * FROM users
+      WHERE verification_token = $1
+        AND verification_token_expires > CURRENT_TIMESTAMP
+    `;
+    return queryOne<any>(text, [tokenHash]);
+  }
+
+  async getUserByPasswordResetTokenHash(tokenHash: string) {
+    const text = `
+      SELECT * FROM users
+      WHERE password_reset_token_hash = $1
+        AND password_reset_expires > CURRENT_TIMESTAMP
+    `;
+    return queryOne<any>(text, [tokenHash]);
+  }
+
+  // ---- Refresh tokens ----
+
+  async createRefreshToken(userId: string, tokenHash: string, expiresAt: Date) {
+    const text = `
+      INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
+      VALUES ($1, $2, $3)
+      RETURNING *
+    `;
+    return queryOne<any>(text, [userId, tokenHash, expiresAt]);
+  }
+
+  async getValidRefreshToken(tokenHash: string) {
+    const text = `
+      SELECT * FROM refresh_tokens
+      WHERE token_hash = $1
+        AND revoked_at IS NULL
+        AND expires_at > CURRENT_TIMESTAMP
+    `;
+    return queryOne<any>(text, [tokenHash]);
+  }
+
+  async revokeRefreshToken(tokenId: string) {
+    const text = `
+      UPDATE refresh_tokens
+      SET revoked_at = CURRENT_TIMESTAMP
+      WHERE token_id = $1
+    `;
+    return query(text, [tokenId]);
+  }
+
+  // Called on password reset -- every existing session gets logged out,
+  // not just the one that triggered the reset.
+  async revokeAllRefreshTokensForUser(userId: string) {
+    const text = `
+      UPDATE refresh_tokens
+      SET revoked_at = CURRENT_TIMESTAMP
+      WHERE user_id = $1 AND revoked_at IS NULL
+    `;
+    return query(text, [userId]);
   }
 }
 

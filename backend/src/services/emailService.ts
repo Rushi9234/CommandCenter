@@ -1,12 +1,11 @@
-import crypto from 'crypto';
-
-export const generateVerificationToken = () => {
-  return crypto.randomBytes(32).toString('hex');
-};
+// Milestone 4: generateVerificationToken removed -- it duplicated
+// modules/auth/jwt.ts's generateOpaqueToken (same crypto.randomBytes(32)
+// implementation), which auth.service.ts now uses instead. This file's job
+// is sending, not generating, tokens.
 
 export const sendVerificationEmail = async (email: string, token: string, fullName: string) => {
   const verificationUrl = `http://localhost:3000/verify-email?token=${token}`;
-  
+
   console.log('\n========================================');
   console.log('📧 EMAIL VERIFICATION');
   console.log('========================================');
@@ -16,20 +15,39 @@ export const sendVerificationEmail = async (email: string, token: string, fullNa
   console.log(verificationUrl);
   console.log('\n⚠️  IMPORTANT: Click link above to verify your email');
   console.log('========================================\n');
-  
+
   // TODO: Replace with actual email service (SendGrid, AWS SES, etc.)
   // For now, just log to console
-  
+
+  return true;
+};
+
+export const sendPasswordResetEmail = async (email: string, token: string, fullName: string) => {
+  const resetUrl = `http://localhost:3000/reset-password?token=${token}`;
+
+  console.log('\n========================================');
+  console.log('📧 PASSWORD RESET');
+  console.log('========================================');
+  console.log(`To: ${email}`);
+  console.log(`Name: ${fullName}`);
+  console.log(`\nReset Link (expires in 1 hour):`);
+  console.log(resetUrl);
+  console.log('\n⚠️  If you did not request this, ignore this email.');
+  console.log('========================================\n');
+
+  // TODO: Replace with actual email service (SendGrid, AWS SES, etc.)
+  // For now, just log to console
+
   return true;
 };
 
 export const sendTeamInviteEmail = async (email: string, teamName: string, inviterName: string) => {
-  const baseUrl = process.env.NODE_ENV === 'production' 
-    ? 'https://commandcenter-sand.vercel.app' 
+  const baseUrl = process.env.NODE_ENV === 'production'
+    ? 'https://commandcenter-sand.vercel.app'
     : 'http://localhost:3000';
-  
+
   const inviteLink = `${baseUrl}/login?invite=${encodeURIComponent(email)}&team=${encodeURIComponent(teamName)}`;
-  
+
   console.log('\n========================================');
   console.log('📧 TEAM INVITATION');
   console.log('========================================');
@@ -43,9 +61,9 @@ export const sendTeamInviteEmail = async (email: string, teamName: string, invit
   console.log('2. Login or create an account');
   console.log('3. Accept the team invitation');
   console.log('========================================\n');
-  
+
   // TODO: Replace with actual email service (SendGrid, AWS SES, etc.)
   // For now, just log to console
-  
+
   return true;
 };

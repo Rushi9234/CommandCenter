@@ -1,164 +1,135 @@
 import { Request, Response } from 'express';
-import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
-import { authRepository as postgresDB } from '../modules/auth/auth.repository';
-import { generateVerificationToken, sendVerificationEmail } from '../services/emailService';
+import { authService } from '../modules/auth/auth.service';
+import { ACCESS_TOKEN_TTL_SECONDS } from '../modules/auth/jwt';
+import { setSessionCookies, clearSessionCookies } from '../common/middleware/auth-cookies';
+import { csrfTokenMatches } from '../common/security/csrf';
 
-const AUTO_VERIFY = process.env.AUTO_VERIFY === 'true';
+// Thin by design -- every branch of business logic (password hashing,
+// token generation, verification/reset lookups, session issuance) now
+// lives in auth.service.ts. This file only parses the request, calls one
+// service method, and shapes the response -- the same convention every
+// other module already follows.
 
 export const register = async (req: Request, res: Response) => {
   try {
     const { email, username, fullName, password } = req.body;
-
-    if (!email || !username || !fullName || !password) {
-      return res.status(400).json({ error: 'All fields required' });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 10);
-    const verificationToken = generateVerificationToken();
-
-    const user = await postgresDB.createUser(email, username, fullName, passwordHash, verificationToken);
-
-    if (AUTO_VERIFY) {
-      user.is_verified = true;
-      user.verification_token = undefined;
-      console.log('✅ AUTO-VERIFIED:', email);
-    } else {
-      await sendVerificationEmail(email, verificationToken, fullName);
-    }
+    const result = await authService.register(email, username, fullName, password);
 
     res.status(201).json({
       success: true,
-      message: AUTO_VERIFY 
-        ? 'Account created and verified! You can now login.' 
+      message: result.is_verified
+        ? 'Account created and verified! You can now login.'
         : 'Registration successful! Check backend console for verification link.',
-      data: {
-        email: user.email,
-        username: user.username,
-        is_verified: user.is_verified,
-      },
+      data: result,
     });
   } catch (error: any) {
-    console.error('Register error:', error);
-    if (error.message === 'User already exists') {
-      return res.status(400).json({ error: 'Email or username already exists' });
-    }
-    res.status(500).json({ error: 'Registration failed' });
+    res.status(error.status || 500).json({ error: error.status ? error.message : 'Registration failed' });
   }
 };
 
 export const login = async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password required' });
-    }
-
-    const user = await postgresDB.getUserByEmail(email);
-
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    if (!user.is_verified) {
-      return res.status(403).json({ error: 'Please verify your email before logging in' });
-    }
-
-    const validPassword = await bcrypt.compare(password, user.password_hash);
-
-    if (!validPassword) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    const token = jwt.sign(
-      { userId: user.user_id, role: user.role },
-      process.env.JWT_SECRET || 'secret',
-      { expiresIn: '7d' }
-    );
+    const session = await authService.login(email, password);
+    setSessionCookies(res, session.accessToken, session.refreshToken);
 
     res.json({
       success: true,
       message: 'Login successful!',
-      data: {
-        user: {
-          user_id: user.user_id,
-          email: user.email,
-          username: user.username,
-          full_name: user.full_name,
-          role: user.role,
-          impact_score: user.impact_score,
-          streak_count: user.streak_count,
-        },
-        token,
-      },
+      data: { user: session.user, token: session.token },
     });
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'Login failed' });
+  } catch (error: any) {
+    res.status(error.status || 500).json({ error: error.status ? error.message : 'Login failed' });
   }
 };
 
 export const verifyEmail = async (req: Request, res: Response) => {
   try {
-    const { token } = req.body;
-
-    if (!token) {
-      return res.status(400).json({ error: 'Verification token required' });
-    }
-
-    const user = await postgresDB.getUserByEmail(req.body.token);
-    if (!user) throw new Error('Invalid verification token');
-
-    const authToken = jwt.sign(
-      { userId: user.user_id, role: user.role },
-      process.env.JWT_SECRET || 'secret',
-      { expiresIn: '7d' }
-    );
+    const session = await authService.verifyEmail(req.body.token);
+    setSessionCookies(res, session.accessToken, session.refreshToken);
 
     res.json({
       success: true,
       message: 'Email verified successfully!',
-      data: {
-        user: {
-          user_id: user.user_id,
-          email: user.email,
-          username: user.username,
-          full_name: user.full_name,
-          role: user.role,
-          impact_score: user.impact_score,
-          streak_count: user.streak_count,
-        },
-        token: authToken,
-      },
+      data: { user: session.user, token: session.token },
     });
   } catch (error: any) {
-    console.error('Verify email error:', error);
-    res.status(400).json({ error: error.message || 'Verification failed' });
+    res.status(error.status || 400).json({ error: error.message || 'Verification failed' });
   }
 };
 
 export const resendVerification = async (req: Request, res: Response) => {
   try {
-    const { email } = req.body;
+    await authService.resendVerification(req.body.email);
+    res.json({ success: true, message: 'Verification email sent!' });
+  } catch (error: any) {
+    res.status(error.status || 400).json({ error: error.message || 'Failed to resend verification' });
+  }
+};
 
-    if (!email) {
-      return res.status(400).json({ error: 'Email required' });
+// ---- New in Milestone 4 ----
+
+export const refresh = async (req: Request, res: Response) => {
+  try {
+    const viaCookie = !req.body.refreshToken && !!req.cookies?.refresh_token;
+    const token = req.cookies?.refresh_token || req.body.refreshToken;
+    if (!token) {
+      return res.status(401).json({ error: 'No refresh token provided' });
     }
 
-    const newToken = generateVerificationToken();
-    const user = await postgresDB.getUserByEmail(email);
-    if (!user) throw new Error('User not found');
-    if (user.is_verified) throw new Error('User already verified');
+    // Same double-submit check middleware/auth.ts applies to protected
+    // routes -- this endpoint reads its credential from a cookie before
+    // authenticate ever runs, so it has to check independently rather than
+    // relying on that middleware.
+    if (viaCookie && !csrfTokenMatches(req)) {
+      return res.status(403).json({ error: 'CSRF token missing or invalid' });
+    }
 
-    await sendVerificationEmail(email, newToken, user.full_name);
+    const session = await authService.refresh(token);
+    setSessionCookies(res, session.accessToken, session.refreshToken);
 
     res.json({
       success: true,
-      message: 'Verification email sent!',
+      message: 'Token refreshed',
+      data: { accessToken: session.accessToken, expiresIn: ACCESS_TOKEN_TTL_SECONDS },
     });
   } catch (error: any) {
-    console.error('Resend verification error:', error);
-    res.status(400).json({ error: error.message || 'Failed to resend verification' });
+    clearSessionCookies(res);
+    res.status(error.status || 401).json({ error: error.message || 'Failed to refresh token' });
+  }
+};
+
+export const logout = async (req: Request, res: Response) => {
+  const viaCookie = !req.body.refreshToken && !!req.cookies?.refresh_token;
+
+  if (viaCookie && !csrfTokenMatches(req)) {
+    return res.status(403).json({ error: 'CSRF token missing or invalid' });
+  }
+
+  try {
+    const token = req.cookies?.refresh_token || req.body.refreshToken;
+    await authService.logout(token);
+  } finally {
+    clearSessionCookies(res);
+  }
+  res.json({ success: true, message: 'Logged out' });
+};
+
+export const forgotPassword = async (req: Request, res: Response) => {
+  try {
+    await authService.forgotPassword(req.body.email);
+  } catch (error) {
+    // Intentionally swallowed -- see auth.service.ts: this endpoint must
+    // not reveal whether the email exists via a differing response.
+  }
+  res.json({ success: true, message: 'If that email is registered, a reset link has been sent.' });
+};
+
+export const resetPassword = async (req: Request, res: Response) => {
+  try {
+    await authService.resetPassword(req.body.token, req.body.newPassword);
+    res.json({ success: true, message: 'Password reset successfully. Please log in again.' });
+  } catch (error: any) {
+    res.status(error.status || 400).json({ error: error.message || 'Failed to reset password' });
   }
 };
