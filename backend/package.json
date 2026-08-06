@@ -9,7 +9,8 @@
     "start": "node dist/server.js",
     "migrate:create": "node-pg-migrate create --migration-file-language sql --",
     "migrate:up": "node-pg-migrate up",
-    "migrate:down": "node-pg-migrate down"
+    "migrate:down": "node-pg-migrate down",
+    "cleanup:refresh-tokens": "ts-node --transpile-only src/jobs/cleanupRefreshTokens.ts"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",

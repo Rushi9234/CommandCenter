@@ -114,6 +114,22 @@ export class AuthRepository {
     `;
     return query(text, [userId]);
   }
+
+  // Milestone 8: refresh_tokens only ever grew -- revoke set revoked_at but
+  // nothing ever deleted a row. Scoped strictly to tokens that are already
+  // expired or already revoked; a token that's neither (still active, still
+  // in its validity window) is never touched, so this can't race an
+  // in-flight refresh. Returns the deleted rows so the cleanup job can log
+  // how many it removed.
+  async deleteExpiredRefreshTokens() {
+    const text = `
+      DELETE FROM refresh_tokens
+      WHERE expires_at < CURRENT_TIMESTAMP
+         OR revoked_at IS NOT NULL
+      RETURNING token_id
+    `;
+    return query<{ token_id: string }>(text);
+  }
 }
 
 export const authRepository = new AuthRepository();

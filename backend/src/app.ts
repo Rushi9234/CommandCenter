@@ -5,7 +5,6 @@ import helmet from 'helmet';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import routes from './routes';
 import { pgPool } from './utils/database';
-import { mockDbService } from './services/mockDatabaseService';
 import { errorHandler } from './common/middleware/errorHandler';
 import { env } from './config/env';
 
@@ -76,8 +75,12 @@ app.get('/health', async (req, res) => {
       await pgPool.query('SELECT 1');
       res.json({ status: 'ok', message: 'CommandCenter API is running 🚀 (PostgreSQL Mode)' });
     } else {
-      await mockDbService.testConnection();
-      res.json({ status: 'ok', message: 'CommandCenter API is running 🚀 (Mock Mode - Persistent)' });
+      // Milestone 8: this branch is no longer reachable in production (see
+      // server.ts -- a failed initial connection exits the process there
+      // instead of listening in mock mode). In development, mock mode means
+      // real DB-backed endpoints can't function, so /health must not claim
+      // 'ok' here -- a 503 is the honest signal for any monitor polling this.
+      res.status(503).json({ status: 'degraded', message: 'CommandCenter API is running in Mock Mode - PostgreSQL unavailable' });
     }
   } catch (error) {
     res.status(500).json({ status: 'error', message: 'Database connection failed' });
