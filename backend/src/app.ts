@@ -6,6 +6,7 @@ import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import routes from './routes';
 import { pgPool } from './utils/database';
 import { errorHandler } from './common/middleware/errorHandler';
+import { requestId } from './common/middleware/requestId';
 import { env } from './config/env';
 
 // Express app is now built and exported here rather than constructed inline
@@ -15,6 +16,11 @@ import { env } from './config/env';
 // split called for in the architecture review.
 
 export const app = express();
+
+// Milestone 11: registered first, before anything else, so every
+// response -- including error responses -- carries an X-Request-ID
+// header and every later middleware/handler can read req.requestId.
+app.use(requestId);
 
 // Milestone 7: the rate limiter below keys on req.ip. Behind a reverse
 // proxy (production), req.ip is the proxy's address unless Express is told

@@ -73,6 +73,11 @@ export class AuthService {
   async login(email: string, password: string) {
     const user = await authRepository.getUserByEmail(email);
     if (!user) {
+      // Milestone 11: security-relevant, structured, no password included.
+      // Email is logged deliberately -- it's what makes "this account is
+      // being targeted" visible at all, and it isn't a secret the way the
+      // password/token fields this milestone must never log are.
+      console.warn({ event: 'auth.failed_login', reason: 'user_not_found', email });
       throw new UnauthorizedError('Invalid credentials');
     }
 
@@ -82,6 +87,7 @@ export class AuthService {
 
     const validPassword = await bcrypt.compare(password, user.password_hash);
     if (!validPassword) {
+      console.warn({ event: 'auth.failed_login', reason: 'invalid_password', email });
       throw new UnauthorizedError('Invalid credentials');
     }
 
@@ -115,11 +121,21 @@ export class AuthService {
     const tokenHash = hashToken(rawRefreshToken);
     const stored = await authRepository.getValidRefreshToken(tokenHash);
     if (!stored) {
+      // Milestone 11: covers both "never existed" and "reuse of a token
+      // that was already rotated/revoked" -- getValidRefreshToken's query
+      // (repository.ts, out of this milestone's scope) filters out
+      // revoked/expired rows the same way it filters out a hash that never
+      // existed, so a null result here can't be split into "invalid" vs.
+      // "suspicious reuse" without a repository-level change. This is the
+      // single signal available from the service layer today; the raw
+      // token, its hash, and the JWT are never included.
+      console.warn({ event: 'auth.invalid_refresh_token', reason: 'not_found_or_already_used' });
       throw new UnauthorizedError('Invalid or expired refresh token');
     }
 
     const user = await authRepository.getUserById(stored.user_id);
     if (!user) {
+      console.warn({ event: 'auth.invalid_refresh_token', reason: 'user_not_found', userId: stored.user_id });
       throw new UnauthorizedError('Invalid or expired refresh token');
     }
 
