@@ -9,6 +9,7 @@ yarn.lock
 .env.*
 !.env.example
 !.env.docker
+!.env.test.example
 
 # Build
 dist/
