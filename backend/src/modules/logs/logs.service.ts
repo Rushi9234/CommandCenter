@@ -52,10 +52,6 @@ export class LogsService {
       throw new BadRequestError('Log not found');
     }
 
-    if (log.user_id !== userId) {
-      throw new BadRequestError('Cannot edit this log (not owner)');
-    }
-
     const hoursSinceCreation = (Date.now() - new Date(log.created_at).getTime()) / (1000 * 60 * 60);
     if (hoursSinceCreation > 24) {
       throw new BadRequestError('Cannot edit this log (>24hrs old)');

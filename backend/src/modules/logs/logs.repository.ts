@@ -78,6 +78,15 @@ export class LogsRepository {
     return queryOne<any>(text, [logId, ...built.values]);
   }
 
+  // Milestone 6: ownership check moved here from logs.service.ts so it runs
+  // in requireAccess middleware, matching the canWriteX pattern established
+  // for projects/tasks/goals/blockers in Milestone 5.
+  async canWriteLog(userId: string, logId: string): Promise<boolean> {
+    const text = 'SELECT log_id FROM daily_logs WHERE log_id = $1 AND user_id = $2';
+    const result = await queryOne(text, [logId, userId]);
+    return result !== null;
+  }
+
   async calculateStreak(userId: string): Promise<number> {
     const text = `
       WITH ordered_logs AS (
