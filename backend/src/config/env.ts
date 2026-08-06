@@ -16,13 +16,18 @@ if (!process.env.JWT_SECRET) {
   );
 }
 
+const isProduction = process.env.NODE_ENV === 'production';
+
 export const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT || '3001', 10),
   databaseUrl: process.env.DATABASE_URL,
   jwtSecret: process.env.JWT_SECRET,
   groqApiKey: process.env.GROQ_API_KEY,
-  autoVerify: process.env.AUTO_VERIFY === 'true',
-  isProduction: process.env.NODE_ENV === 'production',
+  // Milestone 7: forced false in production no matter what AUTO_VERIFY is
+  // set to -- a copied/misconfigured .env should never be able to make
+  // production silently skip email verification for every new account.
+  autoVerify: !isProduction && process.env.AUTO_VERIFY === 'true',
+  isProduction,
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
 };
