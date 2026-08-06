@@ -209,3 +209,6 @@ CREATE INDEX idx_tasks_project_status ON tasks(project_id, status);
 -- Added by backend/migrations/1786005423769_add-auth-tables.sql (Milestone 4)
 CREATE INDEX idx_refresh_tokens_user ON refresh_tokens(user_id);
 CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens(token_hash);
+
+-- Added by backend/migrations/1786050608547_add-tasks-created-by-index.sql (Milestone 10)
+CREATE INDEX idx_tasks_created_by ON tasks(created_by);

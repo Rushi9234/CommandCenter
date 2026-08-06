@@ -1,55 +1,57 @@
-import { usersRepository } from '../users/users.repository';
-import { logsRepository } from '../logs/logs.repository';
-import { tasksRepository } from '../projects/tasks.repository';
+import { leaderboardRepository } from './leaderboard.repository';
 
-// Moved verbatim from leaderboardController.ts. calculateImpactScore was a
-// private module-level function there; kept the exact same math here.
-async function calculateImpactScore(userId: string): Promise<number> {
-  const user = await usersRepository.getUserById(userId);
-  if (!user) return 0;
-
-  const logs = await logsRepository.getUserLogs(userId, 30);
-  const tasks = await tasksRepository.getUserTasks(userId);
-
-  // Work Points (0-50)
-  const completedTasks = tasks.filter((t: any) => t.status === 'done').length;
-  const avgLogQuality = logs.reduce((sum: number, log: any) => sum + (log.word_count > 100 ? 10 : 5), 0) / Math.max(logs.length, 1);
-  const workPoints = Math.min(completedTasks * 5 + avgLogQuality, 50);
-
-  // Consistency Points (0-30)
-  const consistencyPoints = Math.min(user.streak_count * 2, 30);
-
-  // Peer Help Points (0-20) - placeholder
-  const peerHelpPoints = 0;
-
-  return Math.round(workPoints + consistencyPoints + peerHelpPoints);
-}
-
+// Milestone 10: the scoring formula itself is unchanged from the old
+// per-user implementation -- only how its inputs are fetched changed (one
+// aggregate query instead of a per-user fan-out; see leaderboard.repository.ts
+// for exactly which query replaced which old per-user call).
 export class LeaderboardService {
   async getLeaderboard() {
-    const allUsers = await usersRepository.getAllUsers();
+    const rows = await leaderboardRepository.getAggregateStats();
 
-    const usersWithScores = await Promise.all(
-      allUsers.map(async (user: any) => {
-        const score = await calculateImpactScore(user.user_id);
-        await usersRepository.updateUser(user.user_id, { impact_score: score });
+    const scored = rows.map((row) => {
+      const completedTasks = row.completed_tasks;
+      const avgLogQuality = row.quality_sum_30 / Math.max(row.log_count_30, 1);
 
-        const logs = await logsRepository.getUserLogs(user.user_id, 7);
-        const recentActivity = logs.length;
+      // Work Points (0-50)
+      const workPoints = Math.min(completedTasks * 5 + avgLogQuality, 50);
 
-        return {
-          user_id: user.user_id,
-          username: user.username,
-          full_name: user.full_name,
-          impact_score: score,
-          streak_count: await logsRepository.calculateStreak(user.user_id),
-          recent_activity: recentActivity,
-          team_id: user.team_id,
-        };
-      })
-    );
+      // Consistency Points (0-30)
+      const consistencyPoints = Math.min(row.stored_streak_count * 2, 30);
 
-    return usersWithScores.filter((u) => u.recent_activity > 0).sort((a, b) => b.impact_score - a.impact_score);
+      // Peer Help Points (0-20) - placeholder
+      const peerHelpPoints = 0;
+
+      const impactScore = Math.round(workPoints + consistencyPoints + peerHelpPoints);
+
+      // recent_activity is `min(total log rows, 7)`, not "logged in the
+      // last 7 days" -- matches the old getUserLogs(userId, 7).length,
+      // which returns the 7 most recent rows regardless of their age.
+      const recentActivity = Math.min(row.total_logs, 7);
+
+      return {
+        user_id: row.user_id,
+        username: row.username,
+        full_name: row.full_name,
+        impact_score: impactScore,
+        streak_count: row.live_streak,
+        recent_activity: recentActivity,
+        // Preserved from the old implementation: getAllUsers() never
+        // selected users.team_id, so this field has always been
+        // undefined in the response. Not fixed here -- out of scope for
+        // a scalability rewrite that must not change behavior.
+        team_id: undefined as string | undefined,
+      };
+    });
+
+    // impact_score is read elsewhere (auth.service.ts's session payload,
+    // rendered by the frontend's ExecutiveBrief page) -- the old
+    // implementation refreshed it for every user on every leaderboard
+    // view via N single-row UPDATEs; this preserves that exact behavior
+    // (including updating users who get filtered out below) as one bulk
+    // statement instead.
+    await leaderboardRepository.bulkUpdateImpactScores(scored.map((s) => ({ userId: s.user_id, score: s.impact_score })));
+
+    return scored.filter((s) => s.recent_activity > 0).sort((a, b) => b.impact_score - a.impact_score);
   }
 }
 
