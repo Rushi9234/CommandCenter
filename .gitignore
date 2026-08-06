@@ -1,8 +1,9 @@
 # Dependencies
 node_modules/
 **/node_modules/
-package-lock.json
 yarn.lock
+# package-lock.json is intentionally tracked (Milestone 12) -- npm ci in
+# CI requires a committed lockfile.
 
 # Environment
 .env
