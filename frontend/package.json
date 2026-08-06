@@ -13,8 +13,7 @@
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.22.0",
     "framer-motion": "^11.0.5",
-    "axios": "^1.6.7",
-    "date-fns": "^3.3.1"
+    "axios": "^1.6.7"
   },
   "devDependencies": {
     "@types/react": "^18.2.55",
