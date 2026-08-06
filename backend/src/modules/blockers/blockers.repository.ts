@@ -110,6 +110,21 @@ export class BlockersRepository {
     `;
     return queryOne<any>(text, [blockerId, userId, messageText]);
   }
+
+  // Milestone 5: blockers.team_id is NOT NULL -- unlike projects/goals,
+  // every blocker is team-scoped, so this is a pure membership check, no
+  // creator-ownership fallback needed. update/messages/ai-advice had no
+  // authorization check of any kind before this milestone.
+  async canAccessBlocker(userId: string, blockerId: string): Promise<boolean> {
+    const text = `
+      SELECT b.blocker_id FROM blockers b
+      WHERE b.blocker_id = $1 AND b.team_id IN (
+        SELECT team_id FROM team_members WHERE user_id = $2
+      )
+    `;
+    const result = await queryOne(text, [blockerId, userId]);
+    return result !== null;
+  }
 }
 
 export const blockersRepository = new BlockersRepository();

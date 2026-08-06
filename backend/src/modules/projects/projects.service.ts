@@ -1,9 +1,8 @@
 import { projectsRepository } from './projects.repository';
 import { tasksRepository } from './tasks.repository';
-import { teamsRepository } from '../teams/teams.repository';
 import { usersRepository } from '../users/users.repository';
 import { analyzeProjectWithAI } from '../ai/ai.service';
-import { ForbiddenError, NotFoundError } from '../../common/errors';
+import { NotFoundError } from '../../common/errors';
 
 export class ProjectsService {
   async getAllPublicProjects() {
@@ -60,30 +59,21 @@ export class ProjectsService {
     return projectsRepository.getUserProjects(userId);
   }
 
-  async getTeamProjects(teamId: string, userId: string) {
-    const canAccess = await teamsRepository.canAccessTeam(userId, teamId);
-    if (!canAccess) {
-      throw new ForbiddenError('Access denied to this team');
-    }
+  // Milestone 5: base gate (requireAccess + teamsRepository.canAccessTeam)
+  // moved to projects.routes.ts.
+  getTeamProjects(teamId: string) {
     return projectsRepository.getTeamProjects(teamId);
   }
 
-  async updateProject(projectId: string, updates: Record<string, any>, userId: string) {
-    const canAccess = await projectsRepository.canAccessProject(userId, projectId);
-    if (!canAccess) {
-      throw new ForbiddenError('Access denied to this project');
-    }
+  // Milestone 5: base gate (requireAccess + canAccessProject) moved to
+  // projects.routes.ts.
+  updateProject(projectId: string, updates: Record<string, any>) {
     return projectsRepository.updateProject(projectId, updates);
   }
 
-  async deleteProject(projectId: string, userId: string) {
-    const project = await projectsRepository.getProject(projectId);
-    if (!project) {
-      throw new NotFoundError('Project not found');
-    }
-    if (project.created_by !== userId) {
-      throw new ForbiddenError('Only project creator can delete');
-    }
+  // Milestone 5: base gate (requireAccess + isProjectCreator) moved to
+  // projects.routes.ts.
+  async deleteProject(projectId: string) {
     await projectsRepository.deleteProject(projectId);
   }
 
@@ -91,12 +81,9 @@ export class ProjectsService {
     return analyzeProjectWithAI(projectName, description, requirements);
   }
 
-  async createTask(projectId: string, body: any, userId: string) {
-    const canAccess = await projectsRepository.canAccessProject(userId, projectId);
-    if (!canAccess) {
-      throw new ForbiddenError('Access denied to this project');
-    }
-
+  // Milestone 5: base gate (requireAccess + canAccessProject) moved to
+  // projects.routes.ts.
+  createTask(projectId: string, body: any, userId: string) {
     return tasksRepository.createTask({
       project_id: projectId,
       title: body.title,
@@ -110,12 +97,7 @@ export class ProjectsService {
     });
   }
 
-  async getProjectTasks(projectId: string, userId: string) {
-    const canAccess = await projectsRepository.canAccessProject(userId, projectId);
-    if (!canAccess) {
-      throw new ForbiddenError('Access denied to this project');
-    }
-
+  async getProjectTasks(projectId: string) {
     const tasks = await tasksRepository.getProjectTasks(projectId);
 
     return Promise.all(
@@ -150,6 +132,8 @@ export class ProjectsService {
     );
   }
 
+  // Milestone 5: base gate (requireAccess + tasksRepository.canAccessTask)
+  // moved to projects.routes.ts. Previously had no check of any kind.
   updateTask(taskId: string, updates: Record<string, any>) {
     return tasksRepository.updateTask(taskId, updates);
   }

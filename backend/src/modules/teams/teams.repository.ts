@@ -50,7 +50,11 @@ export class TeamsRepository {
     const team = await queryOne<any>(text, params);
 
     if (team) {
-      await this.addTeamMember(team.team_id, teamData.created_by, 'admin');
+      // Milestone 5: the creator is the owner, not an admin -- the two are
+      // now distinct roles with different authority (see requireTeamRole
+      // usages across every module's routes). Previously this assigned
+      // 'admin', which meant no team ever actually had an owner.
+      await this.addTeamMember(team.team_id, teamData.created_by, 'owner');
     }
 
     return team;
@@ -187,13 +191,20 @@ export class TeamsRepository {
     return query(text, [searchPattern]);
   }
 
-  async isTeamOwnerOrAdmin(userId: string, teamId: string): Promise<boolean> {
+  // Returns the caller's role in the team, or null if they aren't a member
+  // at all. This is the one place that reads a user's standing in a team --
+  // requireTeamRole (common/middleware/requireTeamRole.ts) calls this
+  // instead of each route re-implementing its own membership/role lookup.
+  // Replaces isTeamOwnerOrAdmin, which only ever answered a yes/no question
+  // for exactly one tier; every team-management action now needs to know
+  // the actual role to enforce the owner-vs-admin distinction.
+  async getMemberRole(userId: string, teamId: string): Promise<string | null> {
     const text = `
-      SELECT tm.role FROM team_members tm
-      WHERE tm.user_id = $1 AND tm.team_id = $2
+      SELECT role FROM team_members
+      WHERE user_id = $1 AND team_id = $2
     `;
     const result = await queryOne<any>(text, [userId, teamId]);
-    return result ? result.role === 'owner' || result.role === 'admin' : false;
+    return result ? result.role : null;
   }
 
   async updateMemberRole(teamId: string, userId: string, role: string) {
@@ -223,6 +234,13 @@ export class TeamsRepository {
       RETURNING *
     `;
     return queryOne(text, [teamId, userId]);
+  }
+
+  // Milestone 5: approve/reject-join-request only had :requestId in the
+  // URL, no :teamId -- this lets requireTeamRole resolve which team a
+  // request belongs to before checking the caller's role in it.
+  async getJoinRequestById(requestId: string) {
+    return queryOne<any>('SELECT * FROM join_requests WHERE request_id = $1', [requestId]);
   }
 
   async getTeamJoinRequests(teamId: string) {

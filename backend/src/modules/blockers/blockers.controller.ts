@@ -9,7 +9,7 @@ export const createBlocker = async (req: AuthRequest, res: Response) => {
 };
 
 export const getTeamBlockers = async (req: AuthRequest, res: Response) => {
-  const blockers = await blockersService.getTeamBlockers(req.params.teamId, req.user!.userId);
+  const blockers = await blockersService.getTeamBlockers(req.params.teamId);
   ok(res, blockers);
 };
 

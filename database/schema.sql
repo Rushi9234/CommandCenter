@@ -15,6 +15,9 @@ CREATE TABLE users (
     is_verified BOOLEAN DEFAULT false,
     verification_token VARCHAR(255),
     privacy_settings JSONB DEFAULT '{"ai_enabled": true, "sentiment_tracking": true, "leaderboard_visible": true, "analytics_opt_in": true}',
+    verification_token_expires TIMESTAMP,
+    password_reset_token_hash VARCHAR(255),
+    password_reset_expires TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -40,10 +43,20 @@ CREATE TABLE team_members (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     team_id UUID NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-    role VARCHAR(50) DEFAULT 'member',
+    role VARCHAR(50) DEFAULT 'member' CHECK (role IN ('owner', 'admin', 'manager', 'member', 'viewer')),
     permissions JSONB DEFAULT '{"can_assign_tasks": false, "can_delete_tasks": false, "can_view_analytics": false, "can_view_individual_performance": false, "can_export_data": false, "can_manage_members": false, "can_manage_settings": false}',
     joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(team_id, user_id)
+);
+
+-- Refresh tokens table (Milestone 4)
+CREATE TABLE refresh_tokens (
+    token_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    token_hash VARCHAR(255) NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    revoked_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Daily logs table
@@ -152,7 +165,8 @@ CREATE TABLE team_invites (
     email VARCHAR(255) NOT NULL,
     invited_by UUID NOT NULL REFERENCES users(user_id),
     status VARCHAR(50) DEFAULT 'pending',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    accepted_at TIMESTAMP
 );
 
 -- Join requests table
@@ -191,3 +205,7 @@ CREATE INDEX idx_goals_created_by ON goals(created_by);
 CREATE INDEX idx_daily_logs_log_date ON daily_logs(log_date);
 CREATE INDEX idx_blockers_team_status ON blockers(team_id, status);
 CREATE INDEX idx_tasks_project_status ON tasks(project_id, status);
+
+-- Added by backend/migrations/1786005423769_add-auth-tables.sql (Milestone 4)
+CREATE INDEX idx_refresh_tokens_user ON refresh_tokens(user_id);
+CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens(token_hash);

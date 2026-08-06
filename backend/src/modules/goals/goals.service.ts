@@ -1,6 +1,4 @@
 import { goalsRepository } from './goals.repository';
-import { teamsRepository } from '../teams/teams.repository';
-import { ForbiddenError } from '../../common/errors';
 
 async function buildGoalTree(parentId: string, allGoals: any[]): Promise<any[]> {
   const children = allGoals.filter((g) => g.parent_goal_id === parentId);
@@ -25,17 +23,10 @@ export class GoalsService {
     });
   }
 
+  // Milestone 5: base gate (requireTeamRoleIfSpecified + canAccessTeam)
+  // moved to goals.routes.ts.
   async getGoals(userId: string, teamId?: string, goalType?: string) {
-    let goals;
-    if (teamId) {
-      const canAccess = await teamsRepository.canAccessTeam(userId, teamId);
-      if (!canAccess) {
-        throw new ForbiddenError('Access denied to this team');
-      }
-      goals = await goalsRepository.getTeamGoals(teamId);
-    } else {
-      goals = await goalsRepository.getUserGoals(userId);
-    }
+    let goals = teamId ? await goalsRepository.getTeamGoals(teamId) : await goalsRepository.getUserGoals(userId);
 
     if (goalType) {
       goals = goals.filter((g: any) => g.goal_type === goalType);

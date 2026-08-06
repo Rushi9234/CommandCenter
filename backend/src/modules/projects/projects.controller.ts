@@ -24,17 +24,17 @@ export const getMyProjects = async (req: AuthRequest, res: Response) => {
 };
 
 export const getTeamProjects = async (req: AuthRequest, res: Response) => {
-  const projects = await projectsService.getTeamProjects(req.params.teamId, req.user!.userId);
+  const projects = await projectsService.getTeamProjects(req.params.teamId);
   ok(res, projects);
 };
 
 export const updateProject = async (req: AuthRequest, res: Response) => {
-  const project = await projectsService.updateProject(req.params.projectId, req.body, req.user!.userId);
+  const project = await projectsService.updateProject(req.params.projectId, req.body);
   ok(res, project, 'Project updated successfully');
 };
 
 export const deleteProject = async (req: AuthRequest, res: Response) => {
-  await projectsService.deleteProject(req.params.projectId, req.user!.userId);
+  await projectsService.deleteProject(req.params.projectId);
   ok(res, undefined, 'Project deleted successfully');
 };
 
@@ -49,7 +49,7 @@ export const createTask = async (req: AuthRequest, res: Response) => {
 };
 
 export const getProjectTasks = async (req: AuthRequest, res: Response) => {
-  const tasks = await projectsService.getProjectTasks(req.params.projectId, req.user!.userId);
+  const tasks = await projectsService.getProjectTasks(req.params.projectId);
   ok(res, tasks);
 };
 

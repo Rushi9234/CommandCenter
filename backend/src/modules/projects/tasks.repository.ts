@@ -99,6 +99,24 @@ export class TasksRepository {
     `;
     return query<any>(text, [userId]);
   }
+
+  // Milestone 5: a task's own access rule is its parent project's --
+  // mirrors projects.repository.ts's canAccessProject exactly (project
+  // creator, or a member of the project's team) rather than inventing a
+  // separate rule. Used by requireAccess on the task update/delete routes,
+  // which had no authorization check of any kind before this milestone.
+  async canAccessTask(userId: string, taskId: string): Promise<boolean> {
+    const text = `
+      SELECT tk.task_id FROM tasks tk
+      INNER JOIN projects p ON tk.project_id = p.project_id
+      WHERE tk.task_id = $1 AND (
+        p.created_by = $2 OR
+        p.team_id IN (SELECT team_id FROM team_members WHERE user_id = $2)
+      )
+    `;
+    const result = await queryOne(text, [taskId, userId]);
+    return result !== null;
+  }
 }
 
 export const tasksRepository = new TasksRepository();

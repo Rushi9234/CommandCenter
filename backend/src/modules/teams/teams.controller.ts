@@ -1,7 +1,8 @@
 import { Response } from 'express';
-import { AuthRequest } from '../../middleware/auth';
+import { TeamRoleRequest } from '../../common/middleware/requireTeamRole';
 import { ok, created } from '../../common/http/respond';
 import { teamsService } from './teams.service';
+type AuthRequest = TeamRoleRequest;
 
 export const createTeam = async (req: AuthRequest, res: Response) => {
   const team = await teamsService.createTeam(req.user!.userId, req.body);
@@ -29,12 +30,12 @@ export const addMember = async (req: AuthRequest, res: Response) => {
 };
 
 export const removeMember = async (req: AuthRequest, res: Response) => {
-  await teamsService.removeMember(req.params.teamId, req.params.userId, req.user!.userId);
+  await teamsService.removeMember(req.params.teamId, req.params.userId, req.teamRole!);
   ok(res, undefined, 'Member removed successfully');
 };
 
 export const updateMemberRole = async (req: AuthRequest, res: Response) => {
-  await teamsService.updateMemberRole(req.params.teamId, req.params.userId, req.body.role, req.user!.userId);
+  await teamsService.updateMemberRole(req.params.teamId, req.params.userId, req.body.role, req.teamRole!);
   ok(res, undefined, 'Member role updated successfully');
 };
 
@@ -54,7 +55,7 @@ export const acceptInvite = async (req: AuthRequest, res: Response) => {
 };
 
 export const rejectInvite = async (req: AuthRequest, res: Response) => {
-  await teamsService.rejectInvite(req.params.inviteId);
+  await teamsService.rejectInvite(req.params.inviteId, req.user!.userId);
   ok(res, undefined, 'Invitation rejected');
 };
 
@@ -89,7 +90,7 @@ export const leaveTeam = async (req: AuthRequest, res: Response) => {
 };
 
 export const updateTeamSettings = async (req: AuthRequest, res: Response) => {
-  const team = await teamsService.updateTeamSettings(req.params.teamId, req.body, req.user!.userId);
+  const team = await teamsService.updateTeamSettings(req.params.teamId, req.body);
   ok(res, team, 'Team settings updated');
 };
 
@@ -104,6 +105,6 @@ export const getDepartments = async (req: AuthRequest, res: Response) => {
 };
 
 export const updateMemberPermissions = async (req: AuthRequest, res: Response) => {
-  await teamsService.updateMemberPermissions(req.params.teamId, req.params.userId, req.body.permissions, req.user!.userId);
+  await teamsService.updateMemberPermissions(req.params.teamId, req.params.userId, req.body.permissions);
   ok(res, undefined, 'Member permissions updated successfully');
 };

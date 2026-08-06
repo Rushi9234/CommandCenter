@@ -114,6 +114,22 @@ export class GoalsRepository {
       total,
     };
   }
+
+  // Milestone 5: goals have no update/delete/progress authorization check
+  // of any kind today -- any authenticated user could read or modify any
+  // goal by ID, team-scoped or not. Same rule shape as canAccessProject:
+  // the creator, or a member of the goal's team if it has one.
+  async canAccessGoal(userId: string, goalId: string): Promise<boolean> {
+    const text = `
+      SELECT goal_id FROM goals
+      WHERE goal_id = $1 AND (
+        created_by = $2 OR
+        team_id IN (SELECT team_id FROM team_members WHERE user_id = $2)
+      )
+    `;
+    const result = await queryOne(text, [goalId, userId]);
+    return result !== null;
+  }
 }
 
 export const goalsRepository = new GoalsRepository();

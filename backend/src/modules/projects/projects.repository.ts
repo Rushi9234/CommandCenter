@@ -105,6 +105,19 @@ export class ProjectsRepository {
     const result = await queryOne(text, [projectId, userId]);
     return result !== null;
   }
+
+  // Milestone 5: delete keeps its own, narrower rule -- creator only, not
+  // "creator or any team member" like canAccessProject. Unchanged from the
+  // original behavior; pulled into the repository so requireAccess can call
+  // it the same way it calls every other access check, instead of
+  // projects.service.ts fetching the row and comparing created_by inline.
+  async isProjectCreator(userId: string, projectId: string): Promise<boolean> {
+    const result = await queryOne('SELECT project_id FROM projects WHERE project_id = $1 AND created_by = $2', [
+      projectId,
+      userId,
+    ]);
+    return result !== null;
+  }
 }
 
 export const projectsRepository = new ProjectsRepository();

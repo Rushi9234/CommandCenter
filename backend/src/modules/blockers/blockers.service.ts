@@ -2,7 +2,7 @@ import { blockersRepository } from './blockers.repository';
 import { teamsRepository } from '../teams/teams.repository';
 import { usersRepository } from '../users/users.repository';
 import { analyzeBlocker, generateMentorAdvice } from '../ai/ai.service';
-import { ForbiddenError, NotFoundError } from '../../common/errors';
+import { NotFoundError } from '../../common/errors';
 
 async function generateBlockerSuggestions(title: string, description: string, type: string, attempted: string): Promise<string[]> {
   try {
@@ -29,7 +29,7 @@ async function findSimilarBlockers(teamId: string, title: string, description: s
 async function suggestTeamHelpers(teamId: string): Promise<string[]> {
   const members = await teamsRepository.getTeamMembers(teamId);
   return members
-    .filter((m: any) => m.role === 'admin' || m.role === 'manager')
+    .filter((m: any) => m.role === 'admin' || m.role === 'manager' || m.role === 'owner')
     .slice(0, 3)
     .map((m: any) => m.user_id);
 }
@@ -56,12 +56,9 @@ export class BlockersService {
     });
   }
 
-  async getTeamBlockers(teamId: string, userId: string) {
-    const canAccess = await teamsRepository.canAccessTeam(userId, teamId);
-    if (!canAccess) {
-      throw new ForbiddenError('Access denied to this team');
-    }
-
+  // Milestone 5: base gate (requireAccess + canAccessTeam) moved to
+  // blockers.routes.ts.
+  async getTeamBlockers(teamId: string) {
     const blockers = await blockersRepository.getTeamBlockers(teamId);
 
     return Promise.all(
