@@ -27,16 +27,33 @@ export class LogsService {
     const userContext = { recentTasks: [], projectName: 'CommandCenter' };
     const analysis = await analyzeLog(entryText, userContext);
 
-    const log = await logsRepository.createLog({
-      user_id: userId,
-      entry_text: entryText,
-      log_date: logDate.toISOString().split('T')[0],
-      log_time: logDate.toTimeString().split(' ')[0],
-      crypto_signature: cryptoSignature,
-      entry_summary: analysis.summary,
-      sentiment_score: analysis.sentiment_score,
-      bullet_points: analysis.bullet_points,
-    });
+    let log;
+    try {
+      log = await logsRepository.createLog({
+        user_id: userId,
+        entry_text: entryText,
+        log_date: logDate.toISOString().split('T')[0],
+        log_time: logDate.toTimeString().split(' ')[0],
+        crypto_signature: cryptoSignature,
+        entry_summary: analysis.summary,
+        sentiment_score: analysis.sentiment_score,
+        bullet_points: analysis.bullet_points,
+      });
+    } catch (error: any) {
+      // Milestone 24: the check above is a TOCTOU race -- two concurrent
+      // requests can both pass it before either commits (there's a slow
+      // AI call in between). The daily_logs_user_id_log_date_unique
+      // constraint (migrations/..._add-daily-logs-unique-constraint.sql)
+      // is what actually prevents the duplicate; this translates the
+      // race-losing INSERT's raw Postgres error (23505 = unique
+      // violation) into the same error the pre-check above already
+      // throws, so both paths produce an identical response. Any other
+      // error is rethrown unchanged.
+      if (error.code === '23505') {
+        throw new BadRequestError('Log already submitted for today');
+      }
+      throw error;
+    }
 
     return { log, analysis };
   }

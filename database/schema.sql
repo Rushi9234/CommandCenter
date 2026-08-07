@@ -212,3 +212,9 @@ CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens(token_hash);
 
 -- Added by backend/migrations/1786050608547_add-tasks-created-by-index.sql (Milestone 10)
 CREATE INDEX idx_tasks_created_by ON tasks(created_by);
+
+-- Added by backend/migrations/1786134769436_add-daily-logs-unique-constraint.sql (Milestone 24)
+-- Closes a race condition: logs.service.ts's createLog() only enforced
+-- "one log per day" with a check-then-insert in application code, with a
+-- slow AI call in between -- this is the actual enforcement.
+ALTER TABLE daily_logs ADD CONSTRAINT daily_logs_user_id_log_date_unique UNIQUE (user_id, log_date);
