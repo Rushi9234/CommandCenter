@@ -2,6 +2,7 @@ import request from 'supertest';
 import { app } from './utils/testApp';
 import { pgPool } from '../src/utils/database';
 import { resetDatabase, closeTestPool } from './utils/db';
+import { authHeader, registerAndLogin } from './utils/fixtures';
 import { ExpressRateLimitProvider } from '../src/common/rateLimit/expressRateLimitProvider';
 import { getRateLimitProvider, resetRateLimitProviderCache } from '../src/common/rateLimit/rateLimitProviderFactory';
 
@@ -20,6 +21,13 @@ describe('ExpressRateLimitProvider', () => {
     const limiter = provider.createAuthLimiter();
     expect(typeof limiter).toBe('function');
     // Express middleware signature: (req, res, next).
+    expect(limiter.length).toBe(3);
+  });
+
+  it('createApiLimiter returns Express middleware', () => {
+    const provider = new ExpressRateLimitProvider();
+    const limiter = provider.createApiLimiter();
+    expect(typeof limiter).toBe('function');
     expect(limiter.length).toBe(3);
   });
 });
@@ -124,5 +132,34 @@ describe('Auth rate limiter -- threshold and keying unchanged from before Milest
 
     expect(res.headers['ratelimit-limit']).toBeDefined();
     expect(res.headers['ratelimit-remaining']).toBeDefined();
+  });
+});
+
+describe('Milestone 22 -- POST /api/ai/chat rate limiter, keyed by user ID', () => {
+  it('allows attempts under the threshold, 429s at the threshold, and does not block a different user', async () => {
+    const userA = await registerAndLogin('apilimit_a');
+    const userB = await registerAndLogin('apilimit_b');
+
+    // 20 chat requests for userA -- max: 20 allows exactly this many.
+    for (let i = 0; i < 20; i++) {
+      const res = await request(app).post('/api/ai/chat').set(authHeader(userA.token)).send({ message: `hello ${i}` });
+      expect(res.status).not.toBe(429);
+    }
+
+    // The 21st attempt for the same user crosses the threshold.
+    const twentyFirst = await request(app).post('/api/ai/chat').set(authHeader(userA.token)).send({ message: 'one too many' });
+    expect(twentyFirst.status).toBe(429);
+    expect(twentyFirst.body.error).toMatch(/too many attempts/i);
+
+    // A different authenticated user is keyed separately (per-user, not
+    // per-IP) -- supertest requests all originate from the same
+    // connection, so this proves the key is req.user.userId, not req.ip.
+    const otherUser = await request(app).post('/api/ai/chat').set(authHeader(userB.token)).send({ message: 'hi' });
+    expect(otherUser.status).not.toBe(429);
+  });
+
+  it('rejects unauthenticated requests before the rate limiter is ever reached', async () => {
+    const res = await request(app).post('/api/ai/chat').send({ message: 'hello' });
+    expect(res.status).toBe(401);
   });
 });

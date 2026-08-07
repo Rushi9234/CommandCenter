@@ -18,28 +18,41 @@ instead is put the interface in place *now*, so that decision -- if and
 when it's made -- is a new provider class and a config change, not a
 rewrite of `app.ts`.
 
-This directory puts one interface (`RateLimitProvider`) between `app.ts`
-and whichever concrete rate-limiting mechanism is active. `app.ts` never
-imports `express-rate-limit`, `MemoryStore`, or any vendor SDK -- it calls
-`getRateLimitProvider().createAuthLimiter()` and gets back a plain
-Express `RequestHandler`.
+This directory puts one interface (`RateLimitProvider`) between callers
+(`app.ts`, `ai.routes.ts`) and whichever concrete rate-limiting mechanism
+is active. Callers never import `express-rate-limit`, `MemoryStore`, or
+any vendor SDK -- they call `getRateLimitProvider().createAuthLimiter()`
+or `.createApiLimiter()` and get back a plain Express `RequestHandler`.
 
 ## Current free implementation
 
 `RATE_LIMIT_PROVIDER=express` (the default if unset) selects
-`ExpressRateLimitProvider`, which contains the *exact* configuration that
-was previously inline in `app.ts`: 10 requests per 15 minutes, keyed on
-IP+email via `ipKeyGenerator` (not raw `req.ip`, which mishandles IPv6),
-same 429 response body, same implicit in-memory store (no `store` option
-passed -- identical behavior to before this milestone). Free, no new
-dependency, no external account, zero behavior change.
+`ExpressRateLimitProvider`, which implements two limiters:
+
+- **`createAuthLimiter()`** -- the *exact* configuration that was
+  previously inline in `app.ts`: 10 requests per 15 minutes, keyed on
+  IP+email via `ipKeyGenerator` (not raw `req.ip`, which mishandles
+  IPv6), applied to `/api/auth/{login,register,forgot-password}`.
+- **`createApiLimiter()`** (Milestone 22) -- 20 requests per 5 minutes,
+  keyed by authenticated user ID (`req.user.userId`) rather than IP --
+  this route has already run `authenticate` by the time the limiter
+  runs, so a per-user key is precise in a way the pre-authentication
+  auth limiter's IP+email key can't be. Currently applied only to
+  `POST /api/ai/chat`, the one AI-triggering endpoint with no natural
+  brake of its own (log/blocker/project creation only trigger an AI call
+  as a side effect of creating a resource; `/chat` is a direct,
+  repeatable call into whichever `AIProvider` is active with nothing
+  else limiting it).
+
+Both use the same implicit in-memory store (no `store` option passed).
+Free, no new dependency, no external account.
 
 ## Future enterprise migration path
 
 A `RedisRateLimitProvider` (or one backed by `rate-limiter-flexible`,
 Cloudflare, or Upstash -- not implemented in this milestone) would
-implement the same single-method `RateLimitProvider` interface
-(`createAuthLimiter(): RequestHandler`), internally using
+implement the same `RateLimitProvider` interface (both
+`createAuthLimiter()` and `createApiLimiter()`), internally using
 `express-rate-limit`'s own pluggable `store` option pointed at a shared
 backend, or a different limiting library entirely -- the interface
 doesn't care how the middleware is built, only that it returns one.
@@ -50,11 +63,11 @@ RATE_LIMIT_PROVIDER=express   # current free default
 RATE_LIMIT_PROVIDER=redis     # future -- not implemented yet
 ```
 
-`app.ts` does not change either way.
+Callers do not change either way.
 
 ## Adding a new kind of limiter later
 
-Only one limiter exists today (`createAuthLimiter`). If a second kind is
-ever needed (e.g. a general API rate limiter, a webhook limiter), add a
-new method to `RateLimitProvider` and implement it in every existing
-provider -- not a new interface, and not a method nothing calls yet.
+Two limiters exist today (`createAuthLimiter`, `createApiLimiter`). If a
+third kind is ever needed (e.g. a webhook limiter), add a new method to
+`RateLimitProvider` and implement it in every existing provider -- not a
+new interface, and not a method nothing calls yet.

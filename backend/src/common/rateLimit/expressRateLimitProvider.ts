@@ -1,6 +1,7 @@
 import { RequestHandler } from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { RateLimitProvider } from './rateLimitProvider.interface';
+import { AuthRequest } from '../../middleware/auth';
 
 // The free, zero-dependency default (Engineering Charter rule 1).
 // Everything express-rate-limit-specific -- the rateLimit() call itself,
@@ -26,6 +27,28 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
       standardHeaders: true,
       legacyHeaders: false,
       keyGenerator: (req) => `${ipKeyGenerator(req.ip || '')}:${String(req.body?.email || '').toLowerCase()}`,
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many attempts. Please try again later.' });
+      },
+    });
+  }
+
+  // Milestone 22: POST /api/ai/chat had no throttling at all -- a direct,
+  // repeatable, side-effect-free call into whichever AIProvider is active
+  // (ai.service.ts), with nothing to blunt a fast or scripted loop. Keyed
+  // by authenticated user ID, not IP -- this route already ran
+  // `authenticate` before this middleware, so req.user is always set by
+  // the time this runs, and a per-user key is more precise than the auth
+  // limiter's necessarily-pre-authentication IP+email key. 20 requests
+  // per 5 minutes is generous enough for a real back-and-forth
+  // conversation, tight enough to blunt a tight-loop script.
+  createApiLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 5 * 60 * 1000,
+      max: 20,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
       handler: (_req, res) => {
         res.status(429).json({ error: 'Too many attempts. Please try again later.' });
       },
