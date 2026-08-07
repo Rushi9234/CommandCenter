@@ -33,6 +33,11 @@ export const env = {
   // getLogger() selects. 'console' (the free default) if unset. Business
   // logic never reads this directly -- only the factory does.
   loggerProvider: process.env.LOGGER || 'console',
+  // Milestone 15: which EmailProvider implementation
+  // emailProviderFactory.ts's getEmailProvider() selects. 'console' (the
+  // free default) if unset. Business logic never reads this directly --
+  // only the factory does.
+  emailProvider: process.env.EMAIL_PROVIDER || 'console',
   // Milestone 7: forced false in production no matter what AUTO_VERIFY is
   // set to -- a copied/misconfigured .env should never be able to make
   // production silently skip email verification for every new account.
