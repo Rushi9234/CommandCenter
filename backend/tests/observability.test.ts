@@ -118,16 +118,21 @@ describe('errorHandler -- structured logs carry the request ID', () => {
 
     const loggedEntry = errorSpy.mock.calls.find((call) => {
       const arg = call[0];
-      return typeof arg === 'object' && arg !== null && (arg as any).event === 'request.error';
+      return typeof arg === 'object' && arg !== null && (arg as any).context?.event === 'request.error';
     });
 
+    // Milestone 14: errorHandler.ts now logs through ConsoleLogger, which
+    // wraps every call in {timestamp, level, message, context} -- the
+    // same requestId/method/path/errorType/statusCode fields this test
+    // has always checked now live under `context`, not at the top level.
     expect(loggedEntry).toBeDefined();
     const entry = loggedEntry![0] as any;
-    expect(entry.requestId).toBe(responseRequestId);
-    expect(entry.method).toBe('POST');
-    expect(entry.path).toBe('/api/teams');
-    expect(entry.status).toBe(400);
-    expect(entry.errorType).toBe('BadRequestError');
+    expect(entry.level).toBe('error');
+    expect(entry.context.requestId).toBe(responseRequestId);
+    expect(entry.context.method).toBe('POST');
+    expect(entry.context.path).toBe('/api/teams');
+    expect(entry.context.statusCode).toBe(400);
+    expect(entry.context.errorType).toBe('BadRequestError');
 
     errorSpy.mockRestore();
   });
@@ -141,11 +146,13 @@ describe('auth.service.ts -- security event logs never include secrets', () => {
 
     await login(user.email, 'TotallyWrongPassword1').expect(401);
 
-    const loggedEntry = warnSpy.mock.calls.find((call) => (call[0] as any)?.event === 'auth.failed_login');
+    // Milestone 14: auth.service.ts now logs through ConsoleLogger --
+    // event/email/reason live under `context`, not at the top level.
+    const loggedEntry = warnSpy.mock.calls.find((call) => (call[0] as any)?.context?.event === 'auth.failed_login');
     expect(loggedEntry).toBeDefined();
     const entry = loggedEntry![0] as any;
-    expect(entry.email).toBe(user.email);
-    expect(entry.reason).toBe('invalid_password');
+    expect(entry.context.email).toBe(user.email);
+    expect(entry.context.reason).toBe('invalid_password');
 
     const allLoggedText = warnSpy.mock.calls.map((call) => JSON.stringify(call)).join('\n');
     expect(allLoggedText).not.toContain('TotallyWrongPassword1');
@@ -159,7 +166,7 @@ describe('auth.service.ts -- security event logs never include secrets', () => {
 
     await request(app).post('/api/auth/refresh').send({ refreshToken: rawToken }).expect(401);
 
-    const loggedEntry = warnSpy.mock.calls.find((call) => (call[0] as any)?.event === 'auth.invalid_refresh_token');
+    const loggedEntry = warnSpy.mock.calls.find((call) => (call[0] as any)?.context?.event === 'auth.invalid_refresh_token');
     expect(loggedEntry).toBeDefined();
 
     const allLoggedText = warnSpy.mock.calls.map((call) => JSON.stringify(call)).join('\n');

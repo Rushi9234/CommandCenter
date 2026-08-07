@@ -29,6 +29,10 @@ export const env = {
   // default) if unset. 'none' makes zero external requests. Business
   // logic never reads this directly -- only the factory does.
   aiProvider: process.env.AI_PROVIDER || 'groq',
+  // Milestone 14: which Logger implementation loggerFactory.ts's
+  // getLogger() selects. 'console' (the free default) if unset. Business
+  // logic never reads this directly -- only the factory does.
+  loggerProvider: process.env.LOGGER || 'console',
   // Milestone 7: forced false in production no matter what AUTO_VERIFY is
   // set to -- a copied/misconfigured .env should never be able to make
   // production silently skip email verification for every new account.

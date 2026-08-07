@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from 'express';
 import { AppError } from '../errors';
+import { getLogger } from '../logging/loggerFactory';
 
 // Single place that turns a thrown error into an HTTP response. Preserves the
 // `{ error: string }` shape every controller already returned before this
@@ -17,26 +18,28 @@ import { AppError } from '../errors';
 // `err.message` (passwords/tokens are never echoed back in a thrown
 // error), so this doesn't introduce a new leakage risk.
 export const errorHandler = (err: any, req: Request, res: Response, _next: NextFunction) => {
+  const logger = getLogger();
+
   if (err instanceof AppError) {
-    console.error({
+    logger.error('Request error', {
       event: 'request.error',
       requestId: req.requestId,
       method: req.method,
       path: req.path,
       errorType: err.constructor.name,
-      status: err.status,
+      statusCode: err.status,
     });
     return res.status(err.status).json({ error: err.message });
   }
 
-  console.error({
+  logger.error('Request error', {
     event: 'request.error',
     requestId: req.requestId,
     method: req.method,
     path: req.path,
     errorType: err?.constructor?.name || 'UnknownError',
-    status: 500,
-    message: err?.message,
+    statusCode: 500,
+    errorMessage: err?.message,
   });
   res.status(500).json({ error: 'Internal server error' });
 };

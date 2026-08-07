@@ -11,6 +11,7 @@ import {
 } from './jwt';
 import { BadRequestError, UnauthorizedError, ForbiddenError } from '../../common/errors';
 import { env } from '../../config/env';
+import { getLogger } from '../../common/logging/loggerFactory';
 
 const BCRYPT_COST = 12; // raised from 10 -- existing hashes still verify fine, bcrypt embeds its own cost
 const VERIFICATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -58,7 +59,7 @@ export class AuthService {
         verification_token: null,
         verification_token_expires: null,
       });
-      console.log('✅ AUTO-VERIFIED:', email);
+      getLogger().info('Auto-verified user', { event: 'auth.auto_verified', email });
     } else {
       await sendVerificationEmail(email, rawVerificationToken, fullName);
     }
@@ -77,7 +78,7 @@ export class AuthService {
       // Email is logged deliberately -- it's what makes "this account is
       // being targeted" visible at all, and it isn't a secret the way the
       // password/token fields this milestone must never log are.
-      console.warn({ event: 'auth.failed_login', reason: 'user_not_found', email });
+      getLogger().warn('Failed login attempt', { event: 'auth.failed_login', reason: 'user_not_found', email });
       throw new UnauthorizedError('Invalid credentials');
     }
 
@@ -87,7 +88,7 @@ export class AuthService {
 
     const validPassword = await bcrypt.compare(password, user.password_hash);
     if (!validPassword) {
-      console.warn({ event: 'auth.failed_login', reason: 'invalid_password', email });
+      getLogger().warn('Failed login attempt', { event: 'auth.failed_login', reason: 'invalid_password', email });
       throw new UnauthorizedError('Invalid credentials');
     }
 
@@ -129,13 +130,13 @@ export class AuthService {
       // "suspicious reuse" without a repository-level change. This is the
       // single signal available from the service layer today; the raw
       // token, its hash, and the JWT are never included.
-      console.warn({ event: 'auth.invalid_refresh_token', reason: 'not_found_or_already_used' });
+      getLogger().warn('Invalid refresh token attempt', { event: 'auth.invalid_refresh_token', reason: 'not_found_or_already_used' });
       throw new UnauthorizedError('Invalid or expired refresh token');
     }
 
     const user = await authRepository.getUserById(stored.user_id);
     if (!user) {
-      console.warn({ event: 'auth.invalid_refresh_token', reason: 'user_not_found', userId: stored.user_id });
+      getLogger().warn('Invalid refresh token attempt', { event: 'auth.invalid_refresh_token', reason: 'user_not_found', userId: stored.user_id });
       throw new UnauthorizedError('Invalid or expired refresh token');
     }
 
