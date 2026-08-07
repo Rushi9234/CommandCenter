@@ -151,11 +151,17 @@ export class TeamsRepository {
 
       const invite = inviteResult.rows[0];
 
-      await client.query('INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3)', [
-        invite.team_id,
-        userId,
-        'member',
-      ]);
+      // Milestone 25: ON CONFLICT DO NOTHING, matching addTeamMember's
+      // existing conflict handling for the same table -- accepting an
+      // invite to a team you're already a member of (a duplicate invite,
+      // or the same invite accepted twice) is treated as a no-op rather
+      // than crashing on the team_members(team_id, user_id) unique
+      // constraint. The invite is still marked accepted either way, so it
+      // doesn't linger as "pending".
+      await client.query(
+        'INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT (team_id, user_id) DO NOTHING',
+        [invite.team_id, userId, 'member']
+      );
 
       await client.query(
         'UPDATE team_invites SET status = $1, accepted_at = CURRENT_TIMESTAMP WHERE invite_id = $2',
@@ -262,11 +268,14 @@ export class TeamsRepository {
 
       const request = requestResult.rows[0];
 
-      await client.query('INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3)', [
-        request.team_id,
-        request.user_id,
-        'member',
-      ]);
+      // Milestone 25: same ON CONFLICT DO NOTHING as acceptInvite above --
+      // approving a join request for someone already a member (e.g. they
+      // separately accepted an invite in the meantime) is a no-op instead
+      // of crashing. The request is still marked approved either way.
+      await client.query(
+        'INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT (team_id, user_id) DO NOTHING',
+        [request.team_id, request.user_id, 'member']
+      );
 
       await client.query('UPDATE join_requests SET status = $1 WHERE request_id = $2', ['approved', requestId]);
 
