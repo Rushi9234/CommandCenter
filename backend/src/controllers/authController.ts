@@ -58,13 +58,21 @@ export const verifyEmail = async (req: Request, res: Response) => {
   }
 };
 
+// Milestone 26: mirrors forgotPassword's pattern below -- errors are
+// swallowed and the response is always the same generic success message,
+// whether the email doesn't exist, is already verified, or a real
+// verification email was just sent. Previously returned distinct 400s
+// ('User not found' / 'User already verified'), which let anyone
+// unauthenticated enumerate registered/verified accounts by email.
 export const resendVerification = async (req: Request, res: Response) => {
   try {
     await authService.resendVerification(req.body.email);
-    res.json({ success: true, message: 'Verification email sent!' });
-  } catch (error: any) {
-    res.status(error.status || 400).json({ error: error.message || 'Failed to resend verification' });
+  } catch (error) {
+    // Intentionally swallowed -- see auth.service.ts: this endpoint must
+    // not reveal whether the email exists or is already verified via a
+    // differing response.
   }
+  res.json({ success: true, message: 'If that email is registered and not yet verified, a verification link has been sent.' });
 };
 
 // ---- New in Milestone 4 ----

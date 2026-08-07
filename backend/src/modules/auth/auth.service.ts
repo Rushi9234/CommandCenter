@@ -178,13 +178,16 @@ export class AuthService {
     return this.issueSession({ ...user, is_verified: true });
   }
 
+  // Milestone 26: mirrors forgotPassword's existing anti-enumeration
+  // shape exactly -- silently returns (no throw) whether the email
+  // doesn't exist or is already verified, instead of the two distinct
+  // BadRequestErrors this used to throw ('User not found' /
+  // 'User already verified'), which let anyone unauthenticated probe
+  // whether a given email had an account and whether it was verified.
   async resendVerification(email: string) {
     const user = await authRepository.getUserByEmail(email);
-    if (!user) {
-      throw new BadRequestError('User not found');
-    }
-    if (user.is_verified) {
-      throw new BadRequestError('User already verified');
+    if (!user || user.is_verified) {
+      return;
     }
 
     const rawToken = generateOpaqueToken();
