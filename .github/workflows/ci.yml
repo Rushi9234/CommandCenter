@@ -32,6 +32,17 @@ jobs:
       JWT_SECRET: ci-test-only-jwt-secret-not-used-outside-this-workflow
       AUTO_VERIFY: 'true'
       GROQ_API_KEY: ci-placeholder-key
+      # Milestone 16: single place to change the audit's failure threshold.
+      # 'high' means moderate/low findings are visible in the step's output
+      # but never fail the job -- only high/critical do. Kept as
+      # continue-on-error below anyway (see that step's comment) because
+      # this repo already has one known high and one known critical
+      # finding (both trace to bcrypt's native build tooling -- tar via
+      # @mapbox/node-pre-gyp, not this app's own runtime code, per M7's
+      # investigation) that haven't been triaged/fixed yet. Flipping
+      # continue-on-error to false is the deliberate way to start
+      # enforcing this threshold once those are resolved.
+      AUDIT_LEVEL: high
 
     steps:
       - uses: actions/checkout@v4
@@ -45,6 +56,17 @@ jobs:
       - name: Install dependencies
         working-directory: backend
         run: npm ci
+
+      - name: Dependency audit
+        working-directory: backend
+        # continue-on-error: this repo has pre-existing, known, unfixed
+        # findings (see AUDIT_LEVEL comment above) -- failing the build on
+        # those would block every PR for a decision this milestone isn't
+        # scoped to make. The step still runs and its output is visible in
+        # the job log/summary, so a NEW high/critical finding is visible
+        # immediately even though it can't yet fail CI on its own.
+        run: npm audit --audit-level=$AUDIT_LEVEL
+        continue-on-error: true
 
       - name: Apply schema to commandcenter_test
         run: psql "$DATABASE_URL" -f database/schema.sql
@@ -64,6 +86,11 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
 
+    env:
+      # See the backend job's AUDIT_LEVEL comment for why this exists and
+      # why continue-on-error is set below.
+      AUDIT_LEVEL: high
+
     steps:
       - uses: actions/checkout@v4
 
@@ -76,6 +103,11 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: npm ci
+
+      - name: Dependency audit
+        working-directory: frontend
+        run: npm audit --audit-level=$AUDIT_LEVEL
+        continue-on-error: true
 
       - name: Build
         working-directory: frontend

@@ -1,0 +1,16 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    # Opens update PRs only -- nothing here merges automatically. A human
+    # reviews and merges each one, same as any other PR; CI (.github/workflows/ci.yml)
+    # runs against it like any other change.
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
