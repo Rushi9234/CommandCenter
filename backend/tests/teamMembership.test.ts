@@ -2,7 +2,7 @@ import request from 'supertest';
 import { app } from './utils/testApp';
 import { pgPool } from '../src/utils/database';
 import { resetDatabase, closeTestPool } from './utils/db';
-import { authHeader, createTeam, registerAndLogin } from './utils/fixtures';
+import { authHeader, buildTeamWithRoles, createTeam, registerAndLogin } from './utils/fixtures';
 
 beforeEach(async () => {
   await resetDatabase();
@@ -62,6 +62,72 @@ describe('acceptInvite -- Milestone 25: no 500 when already a member', () => {
       invitee.userId,
     ]);
     expect(Number(countRes.rows[0].count)).toBe(1);
+  });
+});
+
+const addMemberReq = (token: string, teamId: string, userId: string, role?: string) =>
+  request(app).post(`/api/teams/${teamId}/members`).set(authHeader(token)).send({ userId, role });
+
+const memberRole = async (teamId: string, userId: string) => {
+  const res = await pgPool.query('SELECT role FROM team_members WHERE team_id = $1 AND user_id = $2', [teamId, userId]);
+  return res.rows[0]?.role;
+};
+
+describe('addMember -- Milestone 27: no role escalation via POST /teams/:teamId/members', () => {
+  it('rejects role: "owner" at validation, from an admin or the owner', async () => {
+    const { teamId, owner, admin } = await buildTeamWithRoles();
+    const candidate = await registerAndLogin('m27_candidate_owner');
+
+    await addMemberReq(admin.token, teamId, candidate.userId, 'owner').expect(400);
+    await addMemberReq(owner.token, teamId, candidate.userId, 'owner').expect(400);
+
+    expect(await memberRole(teamId, candidate.userId)).toBeUndefined();
+  });
+
+  it('does not let an admin change the existing owner\'s role, and does not modify it in the database', async () => {
+    const { teamId, owner, admin } = await buildTeamWithRoles();
+
+    await addMemberReq(admin.token, teamId, owner.userId, 'member').expect(403);
+
+    expect(await memberRole(teamId, owner.userId)).toBe('owner');
+  });
+
+  it('does not let an admin change another existing admin\'s role, and does not modify it in the database', async () => {
+    const { teamId, owner, admin } = await buildTeamWithRoles();
+    const secondAdmin = await registerAndLogin('m27_second_admin');
+    // Owner adds the second admin directly -- owner is exempt from the hierarchy rule.
+    await addMemberReq(owner.token, teamId, secondAdmin.userId, 'admin').expect(200);
+
+    await addMemberReq(admin.token, teamId, secondAdmin.userId, 'member').expect(403);
+
+    expect(await memberRole(teamId, secondAdmin.userId)).toBe('admin');
+  });
+
+  it('lets the owner change an existing admin\'s role (legitimate hierarchy-permitted operation)', async () => {
+    const { teamId, owner, admin } = await buildTeamWithRoles();
+
+    await addMemberReq(owner.token, teamId, admin.userId, 'member').expect(200);
+
+    expect(await memberRole(teamId, admin.userId)).toBe('member');
+  });
+
+  it('still lets an admin add a brand-new member with any permitted role (member/viewer/manager/admin)', async () => {
+    const { teamId, admin } = await buildTeamWithRoles();
+
+    for (const role of ['member', 'viewer', 'manager', 'admin']) {
+      const candidate = await registerAndLogin(`m27_new_${role}`);
+      await addMemberReq(admin.token, teamId, candidate.userId, role).expect(200);
+      expect(await memberRole(teamId, candidate.userId)).toBe(role);
+    }
+  });
+
+  it('preserves normal add-member behavior: omitting role defaults to member', async () => {
+    const { teamId, owner } = await buildTeamWithRoles();
+    const candidate = await registerAndLogin('m27_default_role');
+
+    await addMemberReq(owner.token, teamId, candidate.userId).expect(200);
+
+    expect(await memberRole(teamId, candidate.userId)).toBe('member');
   });
 });
 

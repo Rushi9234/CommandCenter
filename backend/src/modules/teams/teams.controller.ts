@@ -25,7 +25,7 @@ export const getTeamMembers = async (req: AuthRequest, res: Response) => {
 };
 
 export const addMember = async (req: AuthRequest, res: Response) => {
-  await teamsService.addMember(req.params.teamId, req.body.userId, req.body.role);
+  await teamsService.addMember(req.params.teamId, req.body.userId, req.body.role, req.teamRole!);
   ok(res, undefined, 'Member added successfully');
 };
 

@@ -34,7 +34,23 @@ export class TeamsService {
     return teamsRepository.getTeamMembers(teamId);
   }
 
-  async addMember(teamId: string, targetUserId: string, role?: string) {
+  // Milestone 27: addMemberSchema now rejects role: 'owner' at validation,
+  // but addTeamMember's ON CONFLICT ... DO UPDATE means this endpoint can
+  // also silently overwrite an *existing* member's role -- including the
+  // real owner's, or another admin's, if the target is already on the
+  // team. Applies the same hierarchy rule removeMember/updateMemberRole
+  // already enforce, and checks it before the repository call since the
+  // upsert would otherwise apply unconditionally.
+  async addMember(teamId: string, targetUserId: string, role: string | undefined, requesterRole: string) {
+    const targetRole = await teamsRepository.getMemberRole(targetUserId, teamId);
+
+    if (targetRole === 'owner') {
+      throw new ForbiddenError("The team owner's role cannot be changed");
+    }
+    if (targetRole === 'admin' && requesterRole !== 'owner') {
+      throw new ForbiddenError("Only the team owner can change an admin's role");
+    }
+
     await teamsRepository.addTeamMember(teamId, targetUserId, role || 'member');
   }
 

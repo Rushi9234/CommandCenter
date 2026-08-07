@@ -17,7 +17,11 @@ export const createTeamSchema = z.object({
 
 export const addMemberSchema = z.object({
   userId: requiredString('User ID is required'),
-  role: z.string().optional(),
+  role: z
+    .enum(['admin', 'manager', 'member', 'viewer'], {
+      message: 'Valid role is required (admin, manager, member, or viewer)',
+    })
+    .optional(),
 });
 
 export const updateMemberRoleSchema = z.object({
