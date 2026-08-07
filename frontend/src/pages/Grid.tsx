@@ -1,29 +1,36 @@
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useAuth } from '../hooks/useAuth';
+import { useApiRequest } from '../hooks/useApiRequest';
 import * as api from '../services/api';
 
 export default function Grid() {
   const { user } = useAuth();
-  const [leaderboard, setLeaderboard] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Milestone 20: adopts the shared useApiRequest hook (proof-of-pattern
+  // page) instead of a hand-written loading/data useState pair. Behavior
+  // preserved exactly: loading starts true (initialLoading), a failed
+  // load logs the same message and leaves the last-known leaderboard on
+  // screen (the hook never clears `data` on error), and the 30s poll
+  // interval is unchanged -- the hook has no polling of its own, this
+  // page still owns that.
+  const { data: leaderboardData, loading, execute: loadLeaderboard } = useApiRequest<any[]>(
+    () => api.getLeaderboard().then((response) => response.data.data),
+    { initialLoading: true }
+  );
+  const leaderboard: any[] = leaderboardData ?? [];
 
   useEffect(() => {
-    loadLeaderboard();
-    const interval = setInterval(loadLeaderboard, 30000);
+    // Deliberately [] (matching this effect's deps before this
+    // milestone), not [loadLeaderboard] -- execute()'s reference changes
+    // on every render (see useApiRequest.ts's memoization note), so
+    // including it here would re-run this effect, and reset the
+    // interval, on every render instead of once on mount.
+    const load = () => loadLeaderboard().catch((error) => console.error('Failed to load leaderboard:', error));
+    load();
+    const interval = setInterval(load, 30000);
     return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const loadLeaderboard = async () => {
-    try {
-      const response = await api.getLeaderboard();
-      setLeaderboard(response.data.data);
-    } catch (error) {
-      console.error('Failed to load leaderboard:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const getInitials = (name: string) => {
     return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
