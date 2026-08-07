@@ -24,6 +24,11 @@ export const env = {
   databaseUrl: process.env.DATABASE_URL,
   jwtSecret: process.env.JWT_SECRET,
   groqApiKey: process.env.GROQ_API_KEY,
+  // Milestone 13: which AIProvider implementation ai.service.ts's factory
+  // (modules/ai/providers/aiProviderFactory.ts) selects. 'groq' (the free
+  // default) if unset. 'none' makes zero external requests. Business
+  // logic never reads this directly -- only the factory does.
+  aiProvider: process.env.AI_PROVIDER || 'groq',
   // Milestone 7: forced false in production no matter what AUTO_VERIFY is
   // set to -- a copied/misconfigured .env should never be able to make
   // production silently skip email verification for every new account.

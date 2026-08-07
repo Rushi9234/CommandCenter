@@ -1,10 +1,11 @@
-import { env } from '../../config/env';
-import { GROQ_API_URL, GROQ_MODEL } from '../../common/constants';
 import { maskPII, AI_DISCLAIMERS, PRIVACY_CONFIG } from './privacy-config';
+import { getAIProvider } from './providers/aiProviderFactory';
 
-// Moved from services/aiService.ts. Behavior is unchanged -- only the API
-// key/URL/model went from being re-declared per file to the shared
-// config/env.ts and common/constants.ts.
+// Milestone 13 (Engineering Charter rules 2/5/13): this file no longer
+// knows Groq exists. Every function below calls callAI(), which asks
+// aiProviderFactory for whichever AIProvider is configured (AI_PROVIDER
+// env var) and calls its generateCompletion(). Swapping providers, or
+// adding a new one later, never touches this file.
 
 interface LogAnalysis {
   tasks_identified: string[];
@@ -16,23 +17,8 @@ interface LogAnalysis {
   quality_score: number;
 }
 
-const callGroq = async (messages: { role: string; content: string }[], options: { temperature?: number; max_tokens?: number } = {}) => {
-  const response = await fetch(GROQ_API_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.groqApiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: GROQ_MODEL,
-      messages,
-      temperature: options.temperature ?? 0.7,
-      max_tokens: options.max_tokens ?? 500,
-    }),
-  });
-
-  const data = (await response.json()) as any;
-  return data.choices[0].message.content as string;
+const callAI = (messages: { role: string; content: string }[], options: { temperature?: number; max_tokens?: number } = {}) => {
+  return getAIProvider().generateCompletion(messages, options);
 };
 
 export const analyzeLog = async (entryText: string, userContext: any): Promise<LogAnalysis> => {
@@ -57,7 +43,7 @@ Return ONLY valid JSON:
 Note: ${AI_DISCLAIMERS.ANALYSIS}`;
 
   try {
-    const content = await callGroq([{ role: 'user', content: prompt }], { max_tokens: 800 });
+    const content = await callAI([{ role: 'user', content: prompt }], { max_tokens: 800 });
     const jsonMatch = content.match(/\{[\s\S]*\}/);
 
     if (jsonMatch) {
@@ -91,7 +77,7 @@ ${chatHistory.slice(-3).map((m) => `${m.username}: ${m.message_text}`).join('\n'
 Advice:`;
 
   try {
-    const content = await callGroq([{ role: 'user', content: prompt }], { max_tokens: 200 });
+    const content = await callAI([{ role: 'user', content: prompt }], { max_tokens: 200 });
     return content || 'Unable to generate advice at this time.';
   } catch (error) {
     console.error('AI Mentor Error:', error);
@@ -116,7 +102,7 @@ Return ONLY valid JSON:
 }`;
 
   try {
-    const content = await callGroq([{ role: 'user', content: prompt }], { max_tokens: 1500 });
+    const content = await callAI([{ role: 'user', content: prompt }], { max_tokens: 1500 });
     const jsonMatch = content.match(/\{[\s\S]*\}/);
 
     if (jsonMatch) {
@@ -149,7 +135,7 @@ Return ONLY valid JSON:
 }`;
 
   try {
-    const content = await callGroq([{ role: 'user', content: prompt }], { temperature: 0.8, max_tokens: 300 });
+    const content = await callAI([{ role: 'user', content: prompt }], { temperature: 0.8, max_tokens: 300 });
     const jsonMatch = content.match(/\{[\s\S]*\}/);
 
     if (jsonMatch) {
@@ -180,7 +166,7 @@ Return ONLY valid JSON:
 }`;
 
   try {
-    const content = await callGroq([{ role: 'user', content: prompt }], { max_tokens: 400 });
+    const content = await callAI([{ role: 'user', content: prompt }], { max_tokens: 400 });
     const jsonMatch = content.match(/\{[\s\S]*\}/);
 
     if (jsonMatch) {
@@ -215,7 +201,7 @@ User: ${sanitizedMessage}
 Assistant: ${AI_DISCLAIMERS.SUGGESTION}`;
 
   try {
-    const content = await callGroq([{ role: 'user', content: prompt }], { max_tokens: 150 });
+    const content = await callAI([{ role: 'user', content: prompt }], { max_tokens: 150 });
     return content || 'I apologize, I could not generate a response.';
   } catch (error) {
     console.error('AI Chat Error:', error);
@@ -239,7 +225,7 @@ Return ONLY valid JSON:
 }`;
 
   try {
-    const content = await callGroq([{ role: 'user', content: prompt }], { max_tokens: 400 });
+    const content = await callAI([{ role: 'user', content: prompt }], { max_tokens: 400 });
     const jsonMatch = content.match(/\{[\s\S]*\}/);
 
     if (jsonMatch) {
@@ -273,7 +259,7 @@ Return ONLY valid JSON:
 }`;
 
   try {
-    const content = await callGroq([{ role: 'user', content: prompt }], { max_tokens: 500 });
+    const content = await callAI([{ role: 'user', content: prompt }], { max_tokens: 500 });
     const jsonMatch = content.match(/\{[\s\S]*\}/);
 
     if (jsonMatch) {

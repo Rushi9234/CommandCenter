@@ -5,5 +5,6 @@ export const DEFAULT_TEAM_SIZE = 10;
 export const DEFAULT_TEAM_TYPE = 'main';
 export const DEFAULT_MEMBER_ROLE = 'member';
 
-export const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-export const GROQ_MODEL = 'llama-3.3-70b-versatile';
+// GROQ_API_URL/GROQ_MODEL moved to modules/ai/providers/groqProvider.ts in
+// Milestone 13 -- Groq-specific values belong with the Groq provider
+// implementation, not in a file shared by unrelated modules.
