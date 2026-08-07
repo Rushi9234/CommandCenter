@@ -38,6 +38,11 @@ export const env = {
   // free default) if unset. Business logic never reads this directly --
   // only the factory does.
   emailProvider: process.env.EMAIL_PROVIDER || 'console',
+  // Milestone 17: which RateLimitProvider implementation
+  // rateLimitProviderFactory.ts's getRateLimitProvider() selects.
+  // 'express' (the free default) if unset. app.ts never reads this
+  // directly -- only the factory does.
+  rateLimitProvider: process.env.RATE_LIMIT_PROVIDER || 'express',
   // Milestone 7: forced false in production no matter what AUTO_VERIFY is
   // set to -- a copied/misconfigured .env should never be able to make
   // production silently skip email verification for every new account.

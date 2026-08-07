@@ -2,11 +2,11 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
-import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import routes from './routes';
 import { pgPool } from './utils/database';
 import { errorHandler } from './common/middleware/errorHandler';
 import { requestId } from './common/middleware/requestId';
+import { getRateLimitProvider } from './common/rateLimit/rateLimitProviderFactory';
 import { env } from './config/env';
 
 // Express app is now built and exported here rather than constructed inline
@@ -22,11 +22,12 @@ export const app = express();
 // header and every later middleware/handler can read req.requestId.
 app.use(requestId);
 
-// Milestone 7: the rate limiter below keys on req.ip. Behind a reverse
-// proxy (production), req.ip is the proxy's address unless Express is told
-// to trust one hop of X-Forwarded-For -- without this, every request looks
-// like it comes from the same IP and the per-IP+email limiter stops working
-// correctly. Left unset in development, where requests connect directly.
+// Milestone 7: the auth rate limiter (common/rateLimit/) keys on req.ip.
+// Behind a reverse proxy (production), req.ip is the proxy's address
+// unless Express is told to trust one hop of X-Forwarded-For -- without
+// this, every request looks like it comes from the same IP and the
+// per-IP+email limiter stops working correctly. Left unset in
+// development, where requests connect directly.
 if (env.isProduction) {
   app.set('trust proxy', 1);
 }
@@ -50,24 +51,11 @@ app.use(cors({ origin: env.frontendUrl, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
 
-// Milestone 7: login/register/forgot-password had no throttling at all --
-// open to brute force, credential stuffing, and account enumeration by
-// timing. Keyed on IP+email (not IP alone) so one attacker can't exhaust a
-// shared IP's budget against every account, and one heavy legitimate IP
-// (e.g. an office NAT) doesn't get throttled for every user behind it as
-// long as they're not all hammering the same email. 10 attempts per 15
-// minutes is generous enough for a real user who mistypes a password a
-// few times, tight enough to blunt automated guessing.
-const authRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: (req) => `${ipKeyGenerator(req.ip || '')}:${String(req.body?.email || '').toLowerCase()}`,
-  handler: (_req, res) => {
-    res.status(429).json({ error: 'Too many attempts. Please try again later.' });
-  },
-});
+// Milestone 17: the actual limiter configuration (threshold, window, key,
+// 429 response, and which library/store backs it) lives entirely inside
+// common/rateLimit/ -- app.ts only knows it gets back Express middleware.
+// See common/rateLimit/README.md for why this abstraction exists.
+const authRateLimiter = getRateLimitProvider().createAuthLimiter();
 
 app.use('/api/auth/login', authRateLimiter);
 app.use('/api/auth/register', authRateLimiter);
