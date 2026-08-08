@@ -29,6 +29,12 @@ export interface LeaderboardAggregateRow {
   total_logs: number;
   completed_tasks: number;
   live_streak: number;
+  // Milestone 32: raw text ('true'/'false') straight off the JSONB column,
+  // not cast to boolean -- leaderboard.service.ts treats anything other
+  // than the literal string 'false' as visible, matching the same
+  // "missing defaults to enabled" rule privacy.service.ts's ai_enabled
+  // check uses.
+  leaderboard_visible: string | null;
 }
 
 const AGGREGATE_QUERY = `
@@ -84,7 +90,8 @@ const AGGREGATE_QUERY = `
     COALESCE(l30.quality_sum_30, 0)::int AS quality_sum_30,
     COALESCE(lt.total_logs, 0)::int AS total_logs,
     COALESCE(ts.completed_tasks, 0)::int AS completed_tasks,
-    COALESCE(s.streak, 0)::int AS live_streak
+    COALESCE(s.streak, 0)::int AS live_streak,
+    u.privacy_settings->>'leaderboard_visible' AS leaderboard_visible
   FROM users u
   LEFT JOIN recent_30_stats l30 ON l30.user_id = u.user_id
   LEFT JOIN log_totals lt ON lt.user_id = u.user_id

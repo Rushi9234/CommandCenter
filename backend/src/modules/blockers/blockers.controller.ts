@@ -29,6 +29,6 @@ export const getMessages = async (req: AuthRequest, res: Response) => {
 };
 
 export const getAIMentorAdvice = async (req: AuthRequest, res: Response) => {
-  const advice = await blockersService.getAIMentorAdvice(req.params.blockerId);
+  const advice = await blockersService.getAIMentorAdvice(req.params.blockerId, req.user!.userId);
   ok(res, advice);
 };

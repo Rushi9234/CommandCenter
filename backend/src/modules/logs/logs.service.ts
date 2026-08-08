@@ -10,6 +10,7 @@ import {
 } from '../ai/ai.service';
 import { generateLogSignature } from '../../utils/crypto';
 import { BadRequestError, ForbiddenError } from '../../common/errors';
+import { privacyService, AI_DISABLED_MESSAGE } from '../privacy/privacy.service';
 
 export class LogsService {
   async createLog(userId: string, entryText: string) {
@@ -24,8 +25,22 @@ export class LogsService {
       throw new BadRequestError('Log already submitted for today');
     }
 
+    // Milestone 32: this is the "background/log-triggered" AI call the M31
+    // audit specifically flagged -- it used to run unconditionally on
+    // every log, regardless of the author's ai_enabled setting.
+    const aiEnabled = await privacyService.isAiEnabledForUser(userId);
     const userContext = { recentTasks: [], projectName: 'CommandCenter' };
-    const analysis = await analyzeLog(entryText, userContext);
+    const analysis = aiEnabled
+      ? await analyzeLog(entryText, userContext)
+      : {
+          tasks_identified: [],
+          sentiment_score: 0,
+          summary: AI_DISABLED_MESSAGE,
+          bullet_points: [],
+          achievements: [],
+          blockers_detected: [],
+          quality_score: 0,
+        };
 
     let log;
     try {
@@ -78,6 +93,11 @@ export class LogsService {
   }
 
   async getSuggestions(userId: string) {
+    const aiEnabled = await privacyService.isAiEnabledForUser(userId);
+    if (!aiEnabled) {
+      return { suggestions: [], focus_areas: [], productivity_tip: AI_DISABLED_MESSAGE };
+    }
+
     const logs = await logsRepository.getUserLogs(userId, 5);
     const tasks = await tasksRepository.getUserTasks(userId);
 
@@ -86,6 +106,11 @@ export class LogsService {
   }
 
   async getInsights(userId: string) {
+    const aiEnabled = await privacyService.isAiEnabledForUser(userId);
+    if (!aiEnabled) {
+      return { strengths: [], improvements: [], recommendations: [], overall_assessment: AI_DISABLED_MESSAGE };
+    }
+
     const logs = await logsRepository.getUserLogs(userId, 30);
     const tasks = await tasksRepository.getUserTasks(userId);
     const user = await usersRepository.getUserById(userId);
@@ -121,7 +146,17 @@ export class LogsService {
       members = [{ user_id: userId }];
     }
 
-    const standup = await generateStandup(logs, members);
+    // Milestone 32: gated on the REQUESTER's own ai_enabled -- the data
+    // fetched above (logs/members) is not itself AI-derived and stays
+    // visible regardless (same access rules as before this milestone);
+    // only the AI summarization step is skipped. Filtering AI usage of
+    // each individual team member's log content is a separate, larger
+    // per-subject-consent design this milestone deliberately doesn't take
+    // on -- see the M32 report's "residual risk" note.
+    const aiEnabled = await privacyService.isAiEnabledForUser(userId);
+    const standup = aiEnabled
+      ? await generateStandup(logs, members)
+      : { summary: AI_DISABLED_MESSAGE, highlights: [], blockers: [], team_mood: 'neutral' };
 
     return { ...standup, logs, generated_at: new Date().toISOString() };
   }

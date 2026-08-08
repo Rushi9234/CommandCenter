@@ -5,10 +5,37 @@ import { teamsRepository } from '../teams/teams.repository';
 import { projectsRepository } from '../projects/projects.repository';
 import { BadRequestError, NotFoundError } from '../../common/errors';
 
+// Milestone 32: shared response text for every AI entry point that finds
+// ai_enabled=false -- one place to change the wording instead of a
+// slightly-different string hand-written at each of the 7 call sites.
+export const AI_DISABLED_MESSAGE = 'AI features are currently disabled for your account. You can re-enable them in your privacy settings.';
+
 // Moved verbatim from privacyController.ts. No dedicated repository -- this
 // module composes the other modules' repositories for read/export purposes
 // and doesn't own any table of its own.
 export class PrivacyService {
+  // Milestone 32: single source of truth for "is AI processing allowed for
+  // this user right now" -- every AI entry point (chat, log/blocker/project
+  // analysis, mentor advice, standup) checks this before calling into
+  // ai.service.ts, so disabling ai_enabled can't be bypassed by using a
+  // different feature. Fails closed (AI blocked) if the user can't be
+  // looked up at all -- if we can't reliably read the setting, we don't
+  // assume it's fine to proceed. A user that exists but has no
+  // privacy_settings.ai_enabled key yet defaults to the same `true` the
+  // users table's own column default already encodes (schema.sql), so
+  // nothing changes for anyone who has never touched their settings.
+  async isAiEnabledForUser(userId: string): Promise<boolean> {
+    try {
+      const user = await usersRepository.getUserById(userId);
+      if (!user) {
+        return false;
+      }
+      return user.privacy_settings?.ai_enabled !== false;
+    } catch {
+      return false;
+    }
+  }
+
   // Milestone 28: this used to compute the merged settings and return them
   // without ever writing to the database -- the response claimed success
   // but a subsequent getPrivacySettings still returned the old values.

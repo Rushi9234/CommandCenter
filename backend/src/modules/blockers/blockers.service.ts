@@ -3,6 +3,7 @@ import { teamsRepository } from '../teams/teams.repository';
 import { usersRepository } from '../users/users.repository';
 import { analyzeBlocker, generateMentorAdvice } from '../ai/ai.service';
 import { NotFoundError } from '../../common/errors';
+import { privacyService, AI_DISABLED_MESSAGE } from '../privacy/privacy.service';
 
 async function generateBlockerSuggestions(title: string, description: string, type: string, attempted: string): Promise<string[]> {
   try {
@@ -36,7 +37,10 @@ async function suggestTeamHelpers(teamId: string): Promise<string[]> {
 
 export class BlockersService {
   async createBlocker(userId: string, body: any) {
-    const aiSuggestions = await generateBlockerSuggestions(body.title, body.description, body.blockerType, body.attemptedSolutions);
+    const aiEnabled = await privacyService.isAiEnabledForUser(userId);
+    const aiSuggestions = aiEnabled
+      ? await generateBlockerSuggestions(body.title, body.description, body.blockerType, body.attemptedSolutions)
+      : [];
     const similarBlockers = await findSimilarBlockers(body.teamId, body.title, body.description);
     const suggestedHelpers = await suggestTeamHelpers(body.teamId);
 
@@ -99,10 +103,15 @@ export class BlockersService {
     );
   }
 
-  async getAIMentorAdvice(blockerId: string) {
+  async getAIMentorAdvice(blockerId: string, userId: string) {
     const blocker = await blockersRepository.getBlocker(blockerId);
     if (!blocker) {
       throw new NotFoundError('Blocker not found');
+    }
+
+    const aiEnabled = await privacyService.isAiEnabledForUser(userId);
+    if (!aiEnabled) {
+      return { advice: AI_DISABLED_MESSAGE };
     }
 
     const messages = await blockersRepository.getBlockerMessages(blockerId);

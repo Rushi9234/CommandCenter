@@ -39,7 +39,7 @@ export const deleteProject = async (req: AuthRequest, res: Response) => {
 };
 
 export const analyzeProject = async (req: AuthRequest, res: Response) => {
-  const analysis = await projectsService.analyzeProject(req.body.projectName, req.body.description, req.body.requirements);
+  const analysis = await projectsService.analyzeProject(req.user!.userId, req.body.projectName, req.body.description, req.body.requirements);
   ok(res, analysis);
 };
 

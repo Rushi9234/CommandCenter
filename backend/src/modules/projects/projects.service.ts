@@ -3,6 +3,7 @@ import { tasksRepository } from './tasks.repository';
 import { usersRepository } from '../users/users.repository';
 import { analyzeProjectWithAI } from '../ai/ai.service';
 import { NotFoundError } from '../../common/errors';
+import { privacyService, AI_DISABLED_MESSAGE } from '../privacy/privacy.service';
 
 export class ProjectsService {
   async getAllPublicProjects() {
@@ -77,7 +78,18 @@ export class ProjectsService {
     await projectsRepository.deleteProject(projectId);
   }
 
-  analyzeProject(projectName: string, description: string, requirements?: string) {
+  async analyzeProject(userId: string, projectName: string, description: string, requirements?: string) {
+    const aiEnabled = await privacyService.isAiEnabledForUser(userId);
+    if (!aiEnabled) {
+      return {
+        suggested_tasks: [],
+        tech_stack: [],
+        risks: [],
+        timeline_estimate: AI_DISABLED_MESSAGE,
+        team_size_recommendation: 0,
+      };
+    }
+
     return analyzeProjectWithAI(projectName, description, requirements);
   }
 
