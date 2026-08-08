@@ -309,6 +309,127 @@ protection somewhere.*
 
 ---
 
+## 8. Generic/unbounded update schemas (`z.record(z.any())`)
+
+**Vulnerability class:** An update endpoint's request-body schema accepts
+*any* key with *any* value (`z.record(z.string(), z.any())`), so the only
+thing standing between a client and the repository's raw
+`UPDATABLE_COLUMNS` allowlist is whatever the *service* layer happens to
+special-case. Every column in that allowlist the service doesn't
+explicitly intercept is fully client-writable, with no type check, no
+range check, and no distinction between "this is a normal editable field"
+and "this is metadata the server is supposed to own."
+
+**Root cause:** The schema was written once, when the update endpoint was
+first built, as "accept whatever the repository's allowlist accepts" —
+a shortcut that made sense when the allowlist was small and every column
+on it really was client-editable. As the table grew columns for
+server-derived data (a resolution timestamp, an AI-generated suggestion
+list, a completion timestamp), those new columns landed in the
+*repository's* allowlist (they still need to be written by the server
+via the same `buildSetClause` path) but nobody went back and asked
+whether the *schema* should keep accepting them from a client body too.
+The schema and the allowlist drifted apart — the allowlist tracks "what
+this SQL statement is capable of setting," the schema should track "what
+a client is allowed to ask for," and only the second one was frozen in
+`z.any()` while the first kept growing.
+
+**Affected classes of fields, and why each is dangerous specifically:**
+- **Server-derived timestamps** (`completed_at`, `resolved_at`): freely
+  settable to any date, independent of the state transition that's
+  supposed to produce them. Lets a client fabricate history (a task that
+  "completed" in the past, a blocker "resolved" before it was ever
+  touched) with no correctness signal anywhere that anything is wrong.
+- **Server-derived identity** (`resolved_by`): whoever resolves something
+  should be the caller, not whoever the caller names. Before this class
+  of fix, `resolved_by` was *usually* set correctly (when the request
+  also flipped `status` to the resolved value) but fell through to the
+  raw client value the moment the request touched `resolved_by` without
+  also completing the transition in the same call — a conditional
+  override is not the same thing as the field being unwritable.
+- **AI/system-generated metadata** (`ai_suggestions`, `similar_blockers`,
+  `suggested_helpers`): populated once at creation by server-side logic,
+  never meant to be touched again — but present in the same
+  `UPDATABLE_COLUMNS` allowlist as genuinely editable fields, so an
+  unrestricted schema exposed them for a client to simply overwrite with
+  fabricated values.
+- **Unbounded numeric/enum fields** (`progress`, `status`, `priority`,
+  `goal_type`, `blocker_type`): no upper/lower bound, no restriction to
+  the values the rest of the application actually understands. A
+  malformed value doesn't fail loudly — it gets stored and silently
+  breaks whatever code assumed the field could only hold one of a known
+  set (aggregate math, UI color-mapping, business logic branches).
+- **Cross-reference fields already covered by [Section 2](#2-cross-reference-fields-validated-against-the-wrong-resource):**
+  `team_id`, `parent_goal_id`, `parent_team_id` need the destination-
+  resource authorization check *in addition to* the type check this
+  section is about — fixing the schema alone (adding a UUID format
+  check) is necessary but not sufficient; the two problems are related
+  but distinct, and this audit found one more instance of the
+  cross-reference gap (`teams.parent_team_id`, PUT
+  `/teams/:teamId/settings`) that had never been closed.
+
+**Server-controlled field protection:** The fix is not "reject the
+request if it contains a server-controlled field name" — it's "don't
+list it in the schema at all." Because the validation middleware
+(`common/middleware/validate.ts`) replaces `req.body` with the *parsed*
+result of `schema.safeParse(...)`, and a plain Zod object schema silently
+strips any key it doesn't recognize (verified directly against the
+installed Zod version, not assumed), a field that was never named in the
+schema simply never reaches the service or repository — no error, no
+special-case code, nothing to remember to keep doing correctly. The
+service layer then derives the real value itself, unconditionally, from
+the fields that *are* legitimate — not "override the client's value if
+it looks wrong," but "the client's value for this field never existed in
+the first place."
+
+**State consistency protection:** For every server-derived
+timestamp/identity field, the fix is symmetric: setting it when the
+triggering state transition happens, *and* clearing it when the state
+transition reverses. A goal/task marked complete gets `completed_at` set
+to now; moving it to any other status clears `completed_at` back to
+null. A blocker resolved gets `resolved_by`/`resolved_at` set to the
+actual caller and now; reopening it clears both. Fixing only the
+"set on completion" half and leaving the "clear on reopen" half undone
+would still leave a reopened item carrying a stale, misleading timestamp
+from its previous completion — a subtler version of the same
+"contradictory state" bug the client-writable version had, just harder
+to trigger.
+
+**Authorization interaction:** Hardening the schema does not replace or
+weaken the route/service-level authorization checks (role middleware,
+`canWrite*` ownership checks, the M29/M30/M35 destination-resource
+checks) — it closes a *different* gap one layer down. A request can be
+fully authorized to update a resource and still have no business setting
+`resolved_by` to someone else, or `completed_at` to an arbitrary date.
+Schema hardening and authorization are complementary, independently
+necessary checks, not substitutes for each other; both must remain
+intact and were both re-verified (not just the new one) in this
+milestone's regression pass.
+
+**Negative-test strategy:** For every hardened field, prove absence of
+effect, not just presence of an error code. A malformed/out-of-range
+value should get a 400 *and* leave the row unchanged (re-query the DB,
+don't infer from the response). A server-controlled field sent alongside
+an otherwise-valid update should NOT error the whole request — the rest
+of the update should still succeed, and the server-controlled field's
+real, derived value (not the client's attempted value) is what ends up
+in the row. An unauthorized caller's attempt should 403 *and* leave the
+row unchanged, same as an unauthorized request always should.
+
+**Reusable checklist question:** *For every `z.record`/`z.any()` update
+schema: list every column in the corresponding repository's
+`UPDATABLE_COLUMNS` allowlist. For each column, ask (a) is this
+legitimately client-editable at all, (b) what type/format/range should
+it be restricted to, (c) is it actually server-derived and should not
+appear in the schema at all, (d) does changing it require a check on
+some OTHER resource it references, and (e) does changing it require a
+COUPLED field (a timestamp, an identity) to change in the same request.
+If the allowlist and the schema were both looked at only once, at
+different times, assume they've drifted — verify column-by-column
+instead of trusting either one.*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —

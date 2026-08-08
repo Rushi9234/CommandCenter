@@ -112,3 +112,10 @@ export const teamIdFromQuery = (req: AuthRequest) => Promise.resolve((req.query.
 // teamId) since updateProjectSchema accepts the update payload verbatim --
 // this resolver matches that shape.
 export const teamIdFromBodySnakeCase = (req: AuthRequest) => Promise.resolve((req.body as any).team_id || null);
+
+// Milestone 35: PUT /teams/:teamId/settings's parent_team_id is the same
+// unchecked-cross-reference shape M29 (projects.team_id) and M30
+// (goals.parent_goal_id) already closed -- re-parenting a team under
+// another named team never validated the caller's access to that
+// destination team at all.
+export const parentTeamIdFromBody = (req: AuthRequest) => Promise.resolve((req.body as any).parent_team_id || null);

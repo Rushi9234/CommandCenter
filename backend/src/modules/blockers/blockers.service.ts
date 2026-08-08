@@ -78,9 +78,19 @@ export class BlockersService {
     );
   }
 
+  // Milestone 35: resolved_by/resolved_at are not client-writable
+  // (excluded from updateBlockerSchema) -- both are now always derived
+  // here from the status transition, not just when the client happens to
+  // also send resolved_by=self. Reopening (status set to anything other
+  // than 'resolved') clears both, so a reopened blocker never keeps a
+  // stale resolver/timestamp from a previous resolution.
   updateBlocker(blockerId: string, updates: any, userId: string) {
     if (updates.status === 'resolved') {
       updates.resolved_by = userId;
+      updates.resolved_at = new Date();
+    } else if (updates.status) {
+      updates.resolved_by = null;
+      updates.resolved_at = null;
     }
     return blockersRepository.updateBlocker(blockerId, updates);
   }

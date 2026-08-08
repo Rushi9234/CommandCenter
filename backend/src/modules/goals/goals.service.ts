@@ -62,6 +62,16 @@ export class GoalsService {
       }
     }
 
+    // Milestone 35: completed_at is not client-writable (excluded from
+    // updateGoalSchema) -- derived here instead, so a goal can never end
+    // up "completed" with no completion timestamp, or "not completed"
+    // with a stale one left over from a previous completion.
+    if (updates.status === 'completed') {
+      updates.completed_at = new Date();
+    } else if (updates.status) {
+      updates.completed_at = null;
+    }
+
     return goalsRepository.updateGoal(goalId, updates);
   }
 

@@ -146,7 +146,17 @@ export class ProjectsService {
 
   // Milestone 5: base gate (requireAccess + tasksRepository.canAccessTask)
   // moved to projects.routes.ts. Previously had no check of any kind.
+  // Milestone 35: completed_at is not client-writable (excluded from
+  // updateTaskSchema) -- derived here instead, so a task can never end up
+  // "done" with no completion timestamp, or reopened while still carrying
+  // a stale one.
   updateTask(taskId: string, updates: Record<string, any>) {
+    if (updates.status === 'done') {
+      updates.completed_at = new Date();
+    } else if (updates.status) {
+      updates.completed_at = null;
+    }
+
     return tasksRepository.updateTask(taskId, updates);
   }
 

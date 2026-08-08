@@ -2,7 +2,13 @@ import { Router } from 'express';
 import { authenticate } from '../../middleware/auth';
 import { asyncHandler } from '../../common/middleware/asyncHandler';
 import { validate } from '../../common/middleware/validate';
-import { requireTeamRole, requireTeamMembership, teamIdFromParams } from '../../common/middleware/requireTeamRole';
+import {
+  requireTeamRole,
+  requireTeamRoleIfSpecified,
+  requireTeamMembership,
+  teamIdFromParams,
+  parentTeamIdFromBody,
+} from '../../common/middleware/requireTeamRole';
 import { teamsRepository } from './teams.repository';
 import * as teamsController from './teams.controller';
 import {
@@ -72,11 +78,17 @@ router.get(
 );
 
 router.post('/teams/:teamId/leave', authenticate, asyncHandler(teamsController.leaveTeam));
+// Milestone 35: if the caller names a parent_team_id, they must actually
+// have owner/admin access to THAT team too -- no check existed before,
+// so any team's owner/admin could re-parent their team under one they
+// have no access to, just by naming that team's ID (the same "unchecked
+// cross-reference" class M29/M30 already closed for other modules).
 router.put(
   '/teams/:teamId/settings',
   authenticate,
   requireTeamRole(teamIdFromParams, ['owner', 'admin']),
   validate(updateTeamSettingsSchema),
+  requireTeamRoleIfSpecified(parentTeamIdFromBody, ['owner', 'admin']),
   asyncHandler(teamsController.updateTeamSettings)
 );
 router.delete(
