@@ -61,6 +61,19 @@ app.use('/api/auth/login', authRateLimiter);
 app.use('/api/auth/register', authRateLimiter);
 app.use('/api/auth/forgot-password', authRateLimiter);
 
+// Milestone 33: these three had no throttling at all. resend-verification
+// and reset-password have the same "infrequent, sensitive, human-
+// initiated" shape as the three routes above -- resend-verification even
+// has an email in its body, so it gets the exact same IP+email limiter;
+// reset-password has no email, so the same limiter's key naturally
+// degrades to IP-only, which is the correct behavior for blunting
+// reset-token guessing (there's no account to key on before the token is
+// verified). refresh is different -- automatic, frequent, no email in its
+// body -- so it gets its own limiter (see createRefreshLimiter's comment).
+app.use('/api/auth/resend-verification', authRateLimiter);
+app.use('/api/auth/reset-password', authRateLimiter);
+app.use('/api/auth/refresh', getRateLimitProvider().createRefreshLimiter());
+
 app.use('/api', routes);
 
 app.get('/health', async (req, res) => {

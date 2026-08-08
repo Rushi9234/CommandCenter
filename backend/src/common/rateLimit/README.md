@@ -21,18 +21,25 @@ rewrite of `app.ts`.
 This directory puts one interface (`RateLimitProvider`) between callers
 (`app.ts`, `ai.routes.ts`) and whichever concrete rate-limiting mechanism
 is active. Callers never import `express-rate-limit`, `MemoryStore`, or
-any vendor SDK -- they call `getRateLimitProvider().createAuthLimiter()`
-or `.createApiLimiter()` and get back a plain Express `RequestHandler`.
+any vendor SDK -- they call `getRateLimitProvider().createAuthLimiter()`,
+`.createApiLimiter()`, or `.createRefreshLimiter()` and get back a plain
+Express `RequestHandler`.
 
 ## Current free implementation
 
 `RATE_LIMIT_PROVIDER=express` (the default if unset) selects
-`ExpressRateLimitProvider`, which implements two limiters:
+`ExpressRateLimitProvider`, which implements three limiters:
 
 - **`createAuthLimiter()`** -- the *exact* configuration that was
   previously inline in `app.ts`: 10 requests per 15 minutes, keyed on
   IP+email via `ipKeyGenerator` (not raw `req.ip`, which mishandles
-  IPv6), applied to `/api/auth/{login,register,forgot-password}`.
+  IPv6). Applied to `/api/auth/{login,register,forgot-password}` since
+  Milestone 7, and (Milestone 33) to `/api/auth/resend-verification` and
+  `/api/auth/reset-password` too -- resend-verification has an email in
+  its body, so it gets the same IP+email key; reset-password has no
+  email, so the key naturally degrades to IP-only, which is the correct
+  behavior for blunting reset-token guessing (there's no account to key
+  on before the token is verified).
 - **`createApiLimiter()`** (Milestone 22) -- 20 requests per 5 minutes,
   keyed by authenticated user ID (`req.user.userId`) rather than IP --
   this route has already run `authenticate` by the time the limiter
@@ -43,6 +50,15 @@ or `.createApiLimiter()` and get back a plain Express `RequestHandler`.
   as a side effect of creating a resource; `/chat` is a direct,
   repeatable call into whichever `AIProvider` is active with nothing
   else limiting it).
+- **`createRefreshLimiter()`** (Milestone 33) -- 30 requests per 15
+  minutes, IP-only. `/api/auth/refresh` doesn't fit either limiter above:
+  it has no email/account identifier in its body (only a refresh token,
+  via cookie or body) to key on, and unlike login/register it's called
+  automatically and repeatedly by every active session (roughly once per
+  access-token TTL -- see `jwt.ts`'s `ACCESS_TOKEN_TTL_SECONDS`), so
+  `createAuthLimiter()`'s 10-per-15-minutes threshold (tuned for
+  infrequent human login attempts) would false-positive normal usage.
+  Applied only to `/api/auth/refresh`.
 
 Both use the same implicit in-memory store (no `store` option passed).
 Free, no new dependency, no external account.
@@ -67,7 +83,8 @@ Callers do not change either way.
 
 ## Adding a new kind of limiter later
 
-Two limiters exist today (`createAuthLimiter`, `createApiLimiter`). If a
-third kind is ever needed (e.g. a webhook limiter), add a new method to
-`RateLimitProvider` and implement it in every existing provider -- not a
-new interface, and not a method nothing calls yet.
+Three limiters exist today (`createAuthLimiter`, `createApiLimiter`,
+`createRefreshLimiter`). If a fourth kind is ever needed (e.g. a webhook
+limiter), add a new method to `RateLimitProvider` and implement it in
+every existing provider -- not a new interface, and not a method nothing
+calls yet.

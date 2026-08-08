@@ -54,4 +54,24 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
       },
     });
   }
+
+  // Milestone 33: IP-only (no email/account to key on pre-verification --
+  // the whole point is limiting guesses at a token, not a known account).
+  // 30 per 15 minutes is well above what a legitimate access-token
+  // lifecycle needs (one refresh per ~15-minute access token, per active
+  // session -- see jwt.ts's ACCESS_TOKEN_TTL_SECONDS) even for several
+  // concurrent sessions behind one shared IP, while still capping an
+  // unbounded guessing/replay loop.
+  createRefreshLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 15 * 60 * 1000,
+      max: 30,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req) => ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many attempts. Please try again later.' });
+      },
+    });
+  }
 }

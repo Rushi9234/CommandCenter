@@ -22,4 +22,15 @@ export interface RateLimitProvider {
   // fall back to an IP-based key the way the pre-authentication auth
   // limiter has to. Currently applied only to POST /api/ai/chat.
   createApiLimiter(): RequestHandler;
+
+  // Milestone 33: POST /api/auth/refresh has no email/account identifier
+  // in its body (only a refresh token, via cookie or body) and is called
+  // automatically and repeatedly by every active session -- neither
+  // createAuthLimiter's IP+email key (nothing to key an "account" on
+  // pre-verification) nor its 10-per-15-minutes threshold (tuned for
+  // infrequent human login attempts, not automatic per-session renewal)
+  // fits. A separate, IP-only, more generous limiter blunts refresh-token
+  // guessing/replay probing without false-positiving a shared office IP's
+  // worth of legitimately-refreshing sessions.
+  createRefreshLimiter(): RequestHandler;
 }

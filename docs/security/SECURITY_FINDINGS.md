@@ -152,6 +152,79 @@ bespoke fix per endpoint per milestone. Recommended, not yet built.
 
 ---
 
+## 6. Unthrottled sensitive endpoints (rate-limit coverage gaps)
+
+**Vulnerability class:** An endpoint that triggers a real side effect
+(sends an email, validates a security-sensitive token, issues new
+credentials) has no rate limiter at all, while functionally similar
+endpoints in the same module do. The gap isn't "rate limiting doesn't
+exist here" — it's "the team already built and uses a rate-limiting
+abstraction, and just didn't apply it to every endpoint that needed it."
+
+**Affected endpoint types (this project):** `POST /api/auth/resend-verification`
+(triggers a real email send), `POST /api/auth/reset-password` (validates
+a security token — the actual attack surface for token-guessing),
+`POST /api/auth/refresh` (issues new credentials from a presented token).
+All three sat unthrottled next to `login`/`register`/`forgot-password`,
+which had been rate-limited since Milestone 7.
+
+**Root cause:** Rate limiting got added to the endpoints that existed
+*when the limiter was built* (Milestone 7's three routes), and never got
+revisited as new auth-adjacent endpoints were added in later milestones.
+No structural check (a test, a lint rule, a route-registration
+convention) enforces "every route under `/api/auth/*` must pass through
+some rate limiter" — it's opt-in per route, so it's exactly as complete
+as whoever wired up the last route remembered to make it.
+
+**Exploitation/abuse scenario:** `resend-verification` — loop it with a
+known email for unlimited mail-bombing (cost/deliverability abuse), and
+because M26 already made it return an identical generic response
+regardless of account state, the response itself gives no signal to stop
+early — nothing else did either, until now. `reset-password` — loop it
+with guessed tokens; since the actual secret being brute-forced is the
+token, not a login credential, this is a directly guessable-secret attack
+with no throttle. `refresh` — loop it with guessed/stolen refresh tokens
+for credential-stuffing-style probing.
+
+**Mitigation:** Reused the *existing* `RateLimitProvider` abstraction —
+no new limiter system, no new dependency. Two of the three endpoints
+(`resend-verification`, which has an email in its body; `reset-password`,
+which doesn't) were simply added to the existing `createAuthLimiter()`
+wiring — the same IP+email key gracefully degrades to IP-only when there's
+no email field, which is *correct* here (there's no account to key on
+before a token is verified). The third (`refresh`) got its own new method
+on the same interface, because its abuse profile is genuinely different:
+it's called automatically and frequently by every legitimate session
+(roughly once per access-token TTL), so the login limiter's threshold
+(tuned for infrequent human guessing) would false-positive normal usage.
+The lesson isn't "always reuse the exact same limiter" — it's "reuse the
+*abstraction*, and pick the specific configuration each endpoint's real
+traffic pattern calls for."
+
+**Testing strategy:** For each endpoint: (1) requests under the threshold
+succeed normally, (2) the request that crosses the threshold gets a 429,
+(3) a different key (different email, or nothing distinguishing it from
+IP alone) isn't affected, (4) the 429 response is generic enough not to
+leak account existence, and — the check that actually matters most for a
+security fix, not just a rate-limit fix — (5) a 429'd request must be
+proven to have **never reached the underlying service logic**: capture
+the relevant DB state (a token hash, a revoked-at timestamp) before and
+after the rejected request and assert it's unchanged. A rate limiter that
+still lets the blocked request's side effect through is not a fix. For
+window-reset behavior, don't wait out a real 15-minute window in a test —
+build a tiny standalone app using the identical underlying library call
+with a short window instead; it validates the same mechanism without a
+slow or flaky test.
+
+**Reusable checklist question:** *List every route in a security-sensitive
+module (auth, payments, account recovery). For each one: does it send an
+email, validate a bearer/reset/invite token, or issue new credentials? If
+yes to any of those and there's no rate limiter on it, that's this class
+of bug — and check whether an existing limiter's config actually fits
+this endpoint's real traffic pattern, or whether it needs its own.*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —
