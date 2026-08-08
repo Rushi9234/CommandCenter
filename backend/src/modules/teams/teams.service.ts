@@ -235,6 +235,8 @@ export class TeamsService {
     return teamsRepository.updateTeamSettings(teamId, updates);
   }
 
+  // Milestone 37: membership is enforced by requireTeamMembership in
+  // teams.routes.ts before this ever runs, same as getTeamMembers above.
   getSubTeams(teamId: string) {
     return teamsRepository.getSubTeams(teamId);
   }

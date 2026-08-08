@@ -47,7 +47,18 @@ router.get(
   requireTeamMembership(teamIdFromParams),
   asyncHandler(teamsController.getTeamMembers)
 );
-router.get('/teams/:teamId/sub-teams', authenticate, asyncHandler(teamsController.getSubTeams));
+// Milestone 37: this route's own comment above always documented
+// "membership only, no role tier required" for BOTH /members and
+// /sub-teams -- /members got requireTeamMembership, this one never did,
+// letting any authenticated user retrieve any team's sub-team hierarchy
+// (names, descriptions, department, is_public/is_discoverable, etc.) just
+// by knowing or guessing its team_id, with no proof of membership at all.
+// getAllTeams/searchTeams's separate is_public+is_discoverable filter is
+// a different feature (browsing/discovering teams you're NOT a member
+// of) and deliberately doesn't apply here -- this endpoint answers "what
+// are THIS team's sub-teams," the same membership-gated shape as
+// /members, not "what teams can anyone discover."
+router.get('/teams/:teamId/sub-teams', authenticate, requireTeamMembership(teamIdFromParams), asyncHandler(teamsController.getSubTeams));
 
 // Team-management actions: owner or admin only. Previously addMember had no
 // check at all; the rest replace the ad-hoc isTeamOwnerOrAdmin calls that

@@ -504,6 +504,80 @@ instead of trusting either one.*
 
 ---
 
+## 9. Hierarchical/relationship resource authorization at read boundaries
+
+**Vulnerability class:** A resource that exposes *another* resource's
+metadata through a parent/child (or any owns-a/references-a)
+relationship — "give me team X's sub-teams," "give me project Y's
+tasks" — has write-side authorization (can you *create* or *modify* the
+relationship) but no read-side authorization (can you *view* it). The
+write path was hardened; the read path exposing the same relationship
+was not, and the two are easy to treat as one problem when they are
+actually two separate gates.
+
+**Root cause:** The route's own comment documented the intended rule
+correctly — "membership only, no role tier required," grouping this
+endpoint with a sibling endpoint that *does* enforce it — but the
+middleware for this specific route was never added. A sibling read
+endpoint for the exact same parent resource had the correct guard
+(`requireTeamMembership`); this one had only `authenticate`. The gap
+wasn't a missing concept, it was one route in a list of routes that
+didn't get the line of middleware its own neighbor already had.
+
+**Private vs. public/discoverable resources — these are different
+questions:** This codebase already has a "browse public resources you
+are not a member of" feature (`is_public`/`is_discoverable`, used by the
+general team-search/listing endpoints) — that feature deliberately has
+no membership requirement, by design, for a *different* query shape
+("what teams exist that I could join"). A hierarchy-specific endpoint
+("what are THIS team's sub-teams") is answering a different question —
+"show me this specific resource's internal structure" — and defaulting
+it to the discoverability rule would let anyone enumerate a private
+team's sub-team relationships just by knowing its UUID, `is_public` or
+not, since discoverability governs whether a team shows up in a listing,
+not whether its relationships can be read once you already have (or
+guessed) its ID. The correct rule for a hierarchy-read endpoint is the
+same membership rule that already gates every other read of that
+resource's internals (its member roster, in this codebase) — not the
+discovery feature's rule, and not a new rule invented for the occasion.
+
+**UUID/identifier enumeration:** Any endpoint keyed purely by a resource
+ID with no ownership/membership check is enumerable — an attacker
+doesn't need to guess a real UUID by brute force (infeasible); they only
+need ONE real ID (their own team, a team they were once a member of, one
+leaked in a URL) to start walking relationships outward from it with no
+further authorization at any hop, unless every hop re-checks membership
+independently. A parent/child relationship being valid and correctly
+authorized on the *write* side (Milestone 35's `parent_team_id`
+destination check) says nothing about whether *reading* that
+relationship is authorized — those are independent checks and both must
+exist.
+
+**Authorization at read boundaries — the fix pattern:** Add the same
+membership middleware the sibling endpoint for the same parent resource
+already uses, at the route level, so the check runs before the
+controller/service/repository ever executes — not a filter applied to
+the response afterward. The service method itself needs no change if
+the codebase's convention is "middleware is the sole gate, the service
+trusts it ran" (true here, matching the existing `getTeamMembers`
+pattern) — verify that convention holds before relying on it silently.
+
+**Reusable checklist question:** *For every endpoint that reads a
+resource's relationships to another resource (parent/child, owner/owned,
+member/team), find the sibling endpoint that reads a DIFFERENT aspect of
+the SAME parent resource (its member list, its settings, its own
+detail view). Does it have an authorization middleware this one is
+missing? If a route's own code comment states an intended rule ("X
+only"), grep for whether every route the comment covers actually has the
+middleware that enforces it — a comment describing intended behavior for
+multiple routes is not proof all of them received it. Separately: does
+this resource have an `is_public`/discoverable-style feature? If so,
+confirm that feature's relaxed rule is answering a genuinely different
+question ("what can I discover") than this endpoint ("what does this
+specific, already-identified resource contain") before reusing it here.*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —
