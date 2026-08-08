@@ -107,3 +107,8 @@ export const requireTeamRoleIfSpecified = (
 export const teamIdFromParams = (req: AuthRequest) => Promise.resolve(req.params.teamId || null);
 export const teamIdFromBody = (req: AuthRequest) => Promise.resolve((req.body as any).teamId || null);
 export const teamIdFromQuery = (req: AuthRequest) => Promise.resolve((req.query.teamId as string) || null);
+
+// projects.repository.ts's update path uses raw column names (team_id, not
+// teamId) since updateProjectSchema accepts the update payload verbatim --
+// this resolver matches that shape.
+export const teamIdFromBodySnakeCase = (req: AuthRequest) => Promise.resolve((req.body as any).team_id || null);

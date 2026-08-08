@@ -3,7 +3,7 @@ import { authenticate } from '../../middleware/auth';
 import { asyncHandler } from '../../common/middleware/asyncHandler';
 import { validate } from '../../common/middleware/validate';
 import { requireAccess } from '../../common/middleware/requireAccess';
-import { requireTeamRoleIfSpecified, teamIdFromBody } from '../../common/middleware/requireTeamRole';
+import { requireTeamRoleIfSpecified, teamIdFromBody, teamIdFromBodySnakeCase } from '../../common/middleware/requireTeamRole';
 import { projectsRepository } from './projects.repository';
 import { tasksRepository } from './tasks.repository';
 import { teamsRepository } from '../teams/teams.repository';
@@ -42,11 +42,17 @@ router.get(
   asyncHandler(projectsController.getTeamProjects)
 );
 
+// Milestone 29: canWriteProject only checks the project's CURRENT team_id --
+// it never validated a client-supplied team_id in the update body, so any
+// non-viewer member could reassign a project (and its tasks) into an
+// arbitrary team by naming that team's ID, exactly the createProject gap
+// requireTeamRoleIfSpecified was built to close above, just missed here.
 router.put(
   '/projects/:projectId',
   authenticate,
   requireAccess((req) => projectsRepository.canWriteProject(req.user!.userId, req.params.projectId), 'Access denied to this project'),
   validate(updateProjectSchema),
+  requireTeamRoleIfSpecified(teamIdFromBodySnakeCase, WRITE_ROLES),
   asyncHandler(projectsController.updateProject)
 );
 
