@@ -9,6 +9,11 @@ import { BadRequestError, NotFoundError } from '../../common/errors';
 // module composes the other modules' repositories for read/export purposes
 // and doesn't own any table of its own.
 export class PrivacyService {
+  // Milestone 28: this used to compute the merged settings and return them
+  // without ever writing to the database -- the response claimed success
+  // but a subsequent getPrivacySettings still returned the old values.
+  // updateUser already supports privacy_settings as a writable column; this
+  // just needed to actually call it.
   async updatePrivacySettings(userId: string, body: any) {
     const user = await usersRepository.getUserById(userId);
     if (!user) {
@@ -17,12 +22,15 @@ export class PrivacyService {
 
     const { ai_enabled, sentiment_tracking, leaderboard_visible, analytics_opt_in } = body;
 
-    return {
+    const merged = {
       ai_enabled: ai_enabled !== undefined ? ai_enabled : user.privacy_settings.ai_enabled,
       sentiment_tracking: sentiment_tracking !== undefined ? sentiment_tracking : user.privacy_settings.sentiment_tracking,
       leaderboard_visible: leaderboard_visible !== undefined ? leaderboard_visible : user.privacy_settings.leaderboard_visible,
       analytics_opt_in: analytics_opt_in !== undefined ? analytics_opt_in : user.privacy_settings.analytics_opt_in,
     };
+
+    const updated = await usersRepository.updateUser(userId, { privacy_settings: merged });
+    return updated.privacy_settings;
   }
 
   async getPrivacySettings(userId: string) {
