@@ -13,6 +13,12 @@ import { env } from '../../config/env';
 export interface AccessTokenPayload {
   userId: string;
   role: string;
+  // Added by jsonwebtoken itself at sign time -- not something callers set.
+  // Milestone 38: middleware/auth.ts compares this against the user's
+  // password_changed_at to reject a token issued before their most recent
+  // password reset.
+  iat?: number;
+  exp?: number;
 }
 
 export const ACCESS_TOKEN_TTL_SECONDS = 15 * 60; // 15 minutes, for the new cookie-based flow

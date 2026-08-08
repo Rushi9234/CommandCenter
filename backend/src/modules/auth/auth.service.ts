@@ -9,13 +9,22 @@ import {
   ACCESS_TOKEN_TTL_SECONDS,
   REFRESH_TOKEN_TTL_MS,
 } from './jwt';
-import { BadRequestError, UnauthorizedError, ForbiddenError } from '../../common/errors';
+import { BadRequestError, UnauthorizedError } from '../../common/errors';
 import { env } from '../../config/env';
 import { getLogger } from '../../common/logging/loggerFactory';
 
 const BCRYPT_COST = 12; // raised from 10 -- existing hashes still verify fine, bcrypt embeds its own cost
 const VERIFICATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour -- shorter-lived, more sensitive
+
+// Milestone 38: a fixed-cost bcrypt hash with no corresponding real
+// account, compared against whenever the real user lookup comes back
+// empty -- so login() always pays the same bcrypt.compare cost regardless
+// of whether the email exists, closing the timing side of the account-
+// enumeration oracle. Computed once at module load (bcrypt's own cost
+// factor is what matters for timing-safety, not this hash's specific
+// value), not per-request.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync('a-fixed-dummy-password-used-only-for-timing-safety', BCRYPT_COST);
 
 const toPublicUser = (user: any) => ({
   user_id: user.user_id,
@@ -71,24 +80,34 @@ export class AuthService {
     };
   }
 
+  // Milestone 38: previously threw a DISTINCT error (ForbiddenError,
+  // 403, "Please verify your email") for an unverified account, and
+  // short-circuited before ever calling bcrypt.compare for both a
+  // nonexistent email and an unverified one -- while a verified account
+  // (right or wrong password) always paid the full bcrypt cost. That's
+  // two independent oracles: a status/message oracle (403 only ever
+  // fires for a real, unverified account) and a timing oracle (a fast
+  // response means nonexistent-or-unverified; a slow one means verified
+  // account, regardless of whether the password was right). Every
+  // failure path now (a) runs bcrypt.compare exactly once, against the
+  // real hash if the account exists or a fixed dummy hash of the same
+  // cost otherwise, and (b) throws the identical error. The real reason
+  // is still logged server-side (unchanged, security-monitoring value),
+  // just never reflected in the response. resendVerification (Milestone
+  // 26, already anti-enumeration) remains the self-service path for a
+  // real user who doesn't realize they're unverified.
   async login(email: string, password: string) {
     const user = await authRepository.getUserByEmail(email);
-    if (!user) {
-      // Milestone 11: security-relevant, structured, no password included.
-      // Email is logged deliberately -- it's what makes "this account is
-      // being targeted" visible at all, and it isn't a secret the way the
-      // password/token fields this milestone must never log are.
-      getLogger().warn('Failed login attempt', { event: 'auth.failed_login', reason: 'user_not_found', email });
-      throw new UnauthorizedError('Invalid credentials');
-    }
 
-    if (!user.is_verified) {
-      throw new ForbiddenError('Please verify your email before logging in');
-    }
+    const hashToCompare = user?.password_hash || DUMMY_PASSWORD_HASH;
+    const validPassword = await bcrypt.compare(password, hashToCompare);
 
-    const validPassword = await bcrypt.compare(password, user.password_hash);
-    if (!validPassword) {
-      getLogger().warn('Failed login attempt', { event: 'auth.failed_login', reason: 'invalid_password', email });
+    if (!user || !user.is_verified || !validPassword) {
+      getLogger().warn('Failed login attempt', {
+        event: 'auth.failed_login',
+        reason: !user ? 'user_not_found' : !user.is_verified ? 'not_verified' : 'invalid_password',
+        email,
+      });
       throw new UnauthorizedError('Invalid credentials');
     }
 
@@ -217,6 +236,13 @@ export class AuthService {
     await sendPasswordResetEmail(email, rawToken, user.full_name);
   }
 
+  // Milestone 38: the password update and the refresh-token revocation
+  // are now one atomic operation (authRepository.resetPasswordAndRevokeSessions)
+  // instead of two separate statements -- see that method's comment for
+  // the failure scenario this closes. password_changed_at is set in the
+  // same statement as password_hash, which is what lets
+  // middleware/auth.ts reject a JWT (legacy bearer or short-lived access
+  // token) issued before this reset, not just a refresh token.
   async resetPassword(rawToken: string, newPassword: string) {
     const user = await authRepository.getUserByPasswordResetTokenHash(hashToken(rawToken));
     if (!user) {
@@ -224,16 +250,7 @@ export class AuthService {
     }
 
     const passwordHash = await bcrypt.hash(newPassword, BCRYPT_COST);
-    await authRepository.updateUser(user.user_id, {
-      password_hash: passwordHash,
-      password_reset_token_hash: null,
-      password_reset_expires: null,
-    });
-
-    // Force re-login everywhere -- a password reset almost always follows
-    // a suspected compromise, so any existing session (stolen or not)
-    // stops working immediately.
-    await authRepository.revokeAllRefreshTokensForUser(user.user_id);
+    await authRepository.resetPasswordAndRevokeSessions(user.user_id, passwordHash, new Date());
   }
 }
 

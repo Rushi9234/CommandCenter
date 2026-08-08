@@ -578,6 +578,113 @@ specific, already-identified resource contain") before reusing it here.*
 
 ---
 
+## 10. Authentication/session security model
+
+Unlike the sections above (each one a single vulnerability class), this
+section documents the *whole* credential lifecycle as a system, because
+the individual pieces (JWTs, refresh tokens, password reset) only make
+sense evaluated together — a fix to one that ignores how the others
+behave is how the M31 finding in this section existed for as long as it
+did.
+
+**Credential lifecycle (as of Milestone 38):**
+
+| Token | Format | Lifetime | Transport | Verified how | Revoked by logout? | Revoked by password reset? |
+|---|---|---|---|---|---|---|
+| Legacy bearer JWT | signed JWT (`{userId, role, iat, exp}`) | 7 days | `Authorization: Bearer` header | `jwt.verify` + `password_changed_at` check (M38) | No (stateless, expires on its own) | Yes, as of M38 (`iat` predates the reset) |
+| Short-lived access JWT | signed JWT (same payload shape) | 15 minutes | `access_token` httpOnly cookie | Same as above | No (stateless, expires on its own) | Yes, as of M38 |
+| Refresh token | opaque random value, only its SHA-256 hash stored | 30 days | `refresh_token` httpOnly cookie (scoped to `/api/auth`), or request body | DB row lookup (`revoked_at IS NULL AND expires_at > now`) | Yes (single-token revoke) | Yes (all-tokens revoke, unchanged since before M38) |
+| Email verification token | opaque random value, hash stored | 24 hours | one-time link | DB row lookup + expiry | N/A (single-use, cleared after verification) | N/A |
+| Password reset token | opaque random value, hash stored | 1 hour | one-time link | DB row lookup + expiry | N/A (single-use, cleared after reset) | N/A |
+
+**JWT/session revocation model — the gap and the fix:** Both JWT types
+are otherwise pure bearer tokens — `middleware/auth.ts`'s `authenticate()`
+used to do nothing but `jwt.verify` and trust the result for the token's
+entire remaining lifetime, with zero server-side state check. That's a
+deliberate, reasonable tradeoff for *most* JWT use (no DB hit per
+request) right up until the moment you need to revoke one before it
+naturally expires — which is exactly what "a password reset means every
+existing session should end" requires, and a pure bearer token
+architecturally cannot do on its own.
+
+The fix (a per-user `password_changed_at` timestamp, compared against
+the JWT's own `iat` claim) is the standard, minimal way to add
+revocation to an otherwise-stateless token without a full session store
+or a blocklist: one nullable column, no change to how tokens are signed,
+and exactly one narrow (single-column, primary-key) DB lookup added to
+the one place — `authenticate()` — that already gates every protected
+route. It intentionally does NOT invalidate anything for a user who has
+never reset their password (`password_changed_at` stays `NULL`), so
+shipping this fix doesn't force a logout on every existing session the
+moment the migration runs — only future resets gain the new guarantee.
+
+**Refresh-token rotation — unchanged, re-verified:** Rotation (new
+token issued, old one revoked in the same call), reuse detection
+(a revoked/expired token's hash simply doesn't match `getValidRefreshToken`'s
+`WHERE` clause, so replay after rotation is rejected the same way an
+expired token is), and expiry were already correct before this
+milestone and were not touched — re-verified with regression tests, not
+assumed.
+
+**Account enumeration + timing-oracle prevention (login):** Before this
+milestone, `login()` short-circuited (no `bcrypt.compare` call) for both
+a nonexistent email and an existing-but-unverified one, while a verified
+account's password check always ran the full bcrypt cost — meaning a
+fast response revealed "nonexistent or unverified" and a slow one
+revealed "verified account" regardless of whether the password was even
+right, and unverified accounts additionally got a distinct 403 +
+message no other case produced. The fix: `bcrypt.compare` now runs
+*exactly once* on every login attempt, against the real password hash if
+the account exists or a fixed-cost dummy hash otherwise — so the
+computational cost paid is the same regardless of which branch is taken
+— and every failure case (nonexistent, unverified, wrong password)
+throws the identical error (401, `"Invalid credentials"`). The real
+reason is still logged server-side (unchanged monitoring value); it
+never reaches the response. `resendVerification` (Milestone 26, already
+anti-enumeration) remains the legitimate self-service path for a real
+user who doesn't know they're unverified — normalizing login's failure
+response doesn't remove their way to recover, it just stops that
+information leaking to someone probing a *different* account.
+
+**Password-reset atomicity:** The password update and the refresh-token
+revocation used to be two separate statements with no transaction
+between them — if the second failed after the first had already
+committed (a transient error, a dropped connection), the new password
+would take effect but old sessions (before M38: refresh tokens only;
+as of M38: also any not-yet-expired JWT) would survive the reset meant
+to end them. Both statements (now including the `password_changed_at`
+update) run inside one `withTransaction` block — proven with a test that
+forces a failure between two statements in the same pattern and confirms
+the first one's effect rolls back, not just that the happy path works
+once.
+
+**Reusable security checklist:**
+- *For any bearer/stateless token: if this token needs to be revocable
+  before its natural expiry for even one legitimate reason (password
+  reset, "log out everywhere," account suspension), does the
+  verification path check ANY server-side state at all, or does
+  `verify()` alone decide? If the latter, that token cannot currently be
+  revoked early — decide whether that's acceptable, and if not, add the
+  smallest state check that fixes it (a version/timestamp comparison,
+  not necessarily a full session store).*
+- *For any login-style endpoint with multiple distinct failure reasons
+  (account doesn't exist, account not yet verified/active, wrong
+  credential): do any of those reasons (a) return a different
+  status/message, or (b) take a measurably different amount of
+  computation? Either one is an oracle. Fix status/message by making
+  every failure path throw the same error; fix timing by making every
+  path pay the same fixed cost (a dummy comparison against a
+  precomputed value with the same cost factor as the real one).*
+- *For any multi-statement "this operation should end existing sessions"
+  flow: if statement 2 fails after statement 1 already committed, does
+  the system end up in a state where the visible effect (password
+  changed) happened but the security effect (sessions ended) didn't? If
+  yes, wrap both in a transaction — but verify the failure scenario is
+  real (two statements, no transaction, a plausible failure point
+  between them) before claiming one is needed.*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —

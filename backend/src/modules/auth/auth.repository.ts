@@ -1,4 +1,4 @@
-import { query, queryOne, buildSetClause } from '../../db/client';
+import { query, queryOne, buildSetClause, withTransaction } from '../../db/client';
 
 const AUTH_UPDATABLE_COLUMNS = [
   'is_verified',
@@ -7,6 +7,7 @@ const AUTH_UPDATABLE_COLUMNS = [
   'password_hash',
   'password_reset_token_hash',
   'password_reset_expires',
+  'password_changed_at',
 ];
 
 export class AuthRepository {
@@ -72,6 +73,45 @@ export class AuthRepository {
         AND password_reset_expires > CURRENT_TIMESTAMP
     `;
     return queryOne<any>(text, [tokenHash]);
+  }
+
+  // Milestone 38: the one extra query middleware/auth.ts's authenticate()
+  // now runs on every authenticated request -- deliberately narrow (one
+  // column, primary-key lookup) rather than fetching the whole user row.
+  async getPasswordChangedAt(userId: string): Promise<Date | null> {
+    const result = await queryOne<{ password_changed_at: Date | null }>(
+      'SELECT password_changed_at FROM users WHERE user_id = $1',
+      [userId]
+    );
+    return result?.password_changed_at ?? null;
+  }
+
+  // Milestone 38: the password update and the refresh-token revocation
+  // that follows it used to be two separate statements with no
+  // transaction between them -- if the revocation failed after the
+  // password change had already committed (a transient DB error, a
+  // dropped connection), the new password would take effect but the
+  // attacker's stolen refresh token (and, before this milestone, any
+  // already-issued JWT) would remain valid, exactly the "compromised
+  // session survives the reset meant to end it" scenario resetPassword
+  // exists to prevent. Both statements now commit or roll back together.
+  async resetPasswordAndRevokeSessions(userId: string, passwordHash: string, passwordChangedAt: Date): Promise<void> {
+    await withTransaction(async (client) => {
+      await client.query(
+        `UPDATE users
+         SET password_hash = $1,
+             password_reset_token_hash = NULL,
+             password_reset_expires = NULL,
+             password_changed_at = $2,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = $3`,
+        [passwordHash, passwordChangedAt, userId]
+      );
+      await client.query(
+        `UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND revoked_at IS NULL`,
+        [userId]
+      );
+    });
   }
 
   // ---- Refresh tokens ----

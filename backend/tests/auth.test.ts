@@ -154,8 +154,11 @@ describe('Email verification gate', () => {
       // auto-verify even though AUTO_VERIFY=true is set in the environment.
       expect(regRes.body.data.is_verified).toBe(false);
 
-      const loginRes = await prodRequest(prodApp).post('/api/auth/login').send({ email: user.email, password: user.password }).expect(403);
-      expect(loginRes.body.error).toMatch(/verify your email/i);
+      // Milestone 38: login no longer reveals verification state via a
+      // distinct status/message -- an unverified account now gets the
+      // exact same 401 "Invalid credentials" as every other login failure.
+      const loginRes = await prodRequest(prodApp).post('/api/auth/login').send({ email: user.email, password: user.password }).expect(401);
+      expect(loginRes.body.error).toBe('Invalid credentials');
     } finally {
       await prodPool.end();
       process.env.NODE_ENV = originalNodeEnv;

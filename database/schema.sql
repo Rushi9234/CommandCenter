@@ -18,6 +18,11 @@ CREATE TABLE users (
     verification_token_expires TIMESTAMP,
     password_reset_token_hash VARCHAR(255),
     password_reset_expires TIMESTAMP,
+    -- Added by migration 1786217161622_add-users-password-changed-at.sql
+    -- (Milestone 38). NULL until the first resetPassword() call for this
+    -- user; authenticate() uses it to reject a JWT issued before the most
+    -- recent password reset.
+    password_changed_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
