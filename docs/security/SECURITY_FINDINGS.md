@@ -225,6 +225,90 @@ this endpoint's real traffic pattern, or whether it needs its own.*
 
 ---
 
+## 7. AI/expensive-provider endpoint cost & DoS protection
+
+**Vulnerability class:** An endpoint that calls out to a paid or
+compute-heavy external provider (an LLM, an image-generation API, any
+per-call-billed service) has no rate limit, while a *different* endpoint
+calling the exact same provider does. The unprotected endpoint isn't
+obviously "AI-shaped" from its name (`/projects/analyze` doesn't sound
+like an AI feature the way `/ai/chat` does), which is exactly why it gets
+missed when someone rate-limits "the AI feature."
+
+**Root cause:** Rate limiting got attached to the one endpoint whose name
+and purpose screamed "this calls an AI provider directly" (M22's
+`/api/ai/chat`), not to every code path that actually does. `analyzeLog`,
+`analyzeBlocker`, `generateMentorAdvice`, `generateLogSuggestions`,
+`generateProductivityInsights`, `generateStandup`, and
+`analyzeProjectWithAI` all funnel through the same `ai.service.ts` →
+`callAI()` → `getAIProvider().generateCompletion()` chain M22's chat
+limiter was built for — but most of those only ever run as a side effect
+of creating/reading a normal resource (a log, a blocker), which already
+has its own natural rate limit (you can only create so many logs).
+`/projects/analyze` was the one exception: like chat, it's a bare,
+repeatable, no-side-effect call into the AI provider with nothing else
+gating its frequency.
+
+**Abuse scenario:** Loop `POST /projects/analyze` with a valid session —
+each call is a full LLM completion request with no cap, functionally
+identical to hammering `/api/ai/chat` before M22, just under a different
+route name that doesn't obviously read as "the AI endpoint."
+
+**Mitigation:** Reused `createApiLimiter()` (the same method, not a copy
+of it) at this second call site. Because `createApiLimiter()` constructs
+a brand-new `rateLimit()` instance (its own closure-captured store) every
+time it's called, wiring it independently into `projects.routes.ts` gives
+this route its own separate 20-per-5-minutes budget — it does not share
+or drain the chat endpoint's budget, and vice versa. No new limiter
+method was needed here (contrast with Milestone 33's `refresh`, which
+*did* need its own method because its legitimate traffic pattern
+genuinely differs from login's) — the right question each time is "does
+this endpoint's abuse profile match an existing limiter's design intent,"
+not "is this endpoint in the same module as one that already has a
+limiter."
+
+**Rate-limit placement:** After `authenticate` (so the per-user key has
+`req.user` available, and so authenticate's own CSRF check for
+cookie-authenticated requests has already run) and before `validate`/the
+controller (so a request that's already over budget is rejected before
+it can reach the AI provider — verified by asserting the provider mock's
+call count stops incrementing exactly at the threshold, not just that a
+429 comes back).
+
+**Interaction with privacy controls:** The Milestone 32 `ai_enabled`
+check lives inside the *service* layer (`projectsService.analyzeProject`),
+strictly downstream of the rate limiter. This ordering matters both ways:
+a user who has disabled AI never reaches the provider regardless of how
+far under their rate-limit budget they are (privacy wins even when
+quota is available), and a user who is over their rate limit is rejected
+before the privacy check or the service ever runs at all (the limiter is
+the outermost gate). Neither control can be used to route around the
+other.
+
+**Testing strategy:** Mock the provider (`jest.spyOn(GroqProvider.prototype,
+'generateCompletion')`) — never let tests make a real paid call. Assert,
+for the same endpoint: (1) a request under the limit both succeeds *and*
+increments the provider call count by exactly one — status alone doesn't
+prove the provider ran; (2) the request that crosses the threshold gets a
+429 *and* the provider call count does not increment past where it was;
+(3) a different user's budget and a different route's budget (chat vs.
+analyze) are both unaffected; (4) `ai_enabled=false` blocks the provider
+call even on the very first request, well inside the rate-limit budget;
+(5) unauthenticated and CSRF-invalid requests are rejected before the
+limiter or the provider is ever reached.
+
+**Reusable checklist question:** *Grep for every call site of your AI/
+expensive-provider client function (not just the routes with "ai" in the
+name). For each call site: does it run as a side effect of creating a
+resource that already has its own natural rate limit, or is it a bare,
+repeatable, no-side-effect call a client can loop directly? Every
+endpoint in the second category needs its own rate-limit wiring — reusing
+an existing limiter *method* where the abuse profile genuinely matches,
+not inventing a new one just because the module already has some
+protection somewhere.*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —

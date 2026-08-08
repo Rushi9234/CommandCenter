@@ -8,6 +8,7 @@ import { authHeader, registerAndLogin, register, login, buildUser, extractCookie
 import { ExpressRateLimitProvider } from '../src/common/rateLimit/expressRateLimitProvider';
 import { getRateLimitProvider, resetRateLimitProviderCache } from '../src/common/rateLimit/rateLimitProviderFactory';
 import { hashToken, generateOpaqueToken } from '../src/modules/auth/jwt';
+import { GroqProvider } from '../src/modules/ai/providers/groqProvider';
 
 beforeEach(async () => {
   await resetDatabase();
@@ -341,5 +342,112 @@ describe('Milestone 33 -- refresh rate limiter (new, IP-only, more generous than
 
     const row = await pgPool.query('SELECT revoked_at FROM refresh_tokens WHERE token_hash = $1', [hashToken(secondValidToken)]);
     expect(row.rows[0].revoked_at).toBeNull();
+  });
+});
+
+describe('Milestone 34 -- POST /projects/analyze rate limiter (reuses createApiLimiter, same shape as /api/ai/chat)', () => {
+  let generateCompletionSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    generateCompletionSpy = jest.spyOn(GroqProvider.prototype, 'generateCompletion');
+  });
+
+  afterEach(() => {
+    generateCompletionSpy.mockRestore();
+  });
+
+  const analyze = (token: string, description = 'D') =>
+    request(app).post('/api/projects/analyze').set(authHeader(token)).send({ projectName: 'P', description });
+
+  it('allows a request under the threshold and actually invokes the AI provider', async () => {
+    generateCompletionSpy.mockResolvedValue('{}');
+    const { token } = await registerAndLogin('m34_analyze_normal');
+
+    const res = await analyze(token);
+
+    expect(res.status).not.toBe(429);
+    expect(generateCompletionSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('429s after exceeding the threshold, and a rejected request never reaches the AI provider', async () => {
+    generateCompletionSpy.mockResolvedValue('{}');
+    const { token } = await registerAndLogin('m34_analyze_limit');
+
+    for (let i = 0; i < 20; i++) {
+      const res = await analyze(token, `D${i}`);
+      expect(res.status).not.toBe(429);
+    }
+    expect(generateCompletionSpy).toHaveBeenCalledTimes(20);
+
+    const overLimit = await analyze(token, 'over the limit');
+    expect(overLimit.status).toBe(429);
+    // The provider call count must stay at 20 -- the 21st request never reached it.
+    expect(generateCompletionSpy).toHaveBeenCalledTimes(20);
+  });
+
+  it('is keyed per user (not shared across users), and is a separate budget from /api/ai/chat', async () => {
+    generateCompletionSpy.mockResolvedValue('{}');
+    const userA = await registerAndLogin('m34_analyze_isolation_a');
+    const userB = await registerAndLogin('m34_analyze_isolation_b');
+
+    for (let i = 0; i < 20; i++) {
+      await analyze(userA.token, `D${i}`);
+    }
+    const userALimited = await analyze(userA.token, 'over');
+    expect(userALimited.status).toBe(429);
+
+    // A different user is unaffected -- per-user key, not per-IP.
+    const userBRes = await analyze(userB.token);
+    expect(userBRes.status).not.toBe(429);
+
+    // userA's own /api/ai/chat budget is untouched -- createApiLimiter()
+    // is called independently per route, so each gets its own instance.
+    const chatRes = await request(app).post('/api/ai/chat').set(authHeader(userA.token)).send({ message: 'hi' });
+    expect(chatRes.status).not.toBe(429);
+  });
+
+  it('ai_enabled=false prevents the AI provider from being called, even well under the rate limit', async () => {
+    const { token } = await registerAndLogin('m34_analyze_privacy');
+    await request(app).put('/api/privacy/settings').set(authHeader(token)).send({ ai_enabled: false }).expect(200);
+
+    const res = await analyze(token);
+
+    expect(res.status).not.toBe(429);
+    expect(generateCompletionSpy).not.toHaveBeenCalled();
+    expect(res.body.data.suggested_tasks).toEqual([]);
+  });
+
+  it('rejects unauthenticated requests before the rate limiter or the AI provider is ever reached', async () => {
+    const res = await request(app).post('/api/projects/analyze').send({ projectName: 'P', description: 'D' });
+
+    expect(res.status).toBe(401);
+    expect(generateCompletionSpy).not.toHaveBeenCalled();
+  });
+
+  it('enforces CSRF for cookie-authenticated requests, and a correctly-matched CSRF header still works under the limit', async () => {
+    generateCompletionSpy.mockResolvedValue('{}');
+    const user = buildUser('m34_analyze_csrf');
+    await register(user).expect(201);
+    const loginRes = await login(user.email, user.password).expect(200);
+
+    const accessToken = extractCookie(loginRes, 'access_token');
+    const csrfToken = extractCookie(loginRes, 'csrf_token');
+    expect(accessToken).toBeDefined();
+    expect(csrfToken).toBeDefined();
+
+    const withoutCsrfHeader = await request(app)
+      .post('/api/projects/analyze')
+      .set('Cookie', [`access_token=${accessToken}`])
+      .send({ projectName: 'P', description: 'D' });
+    expect(withoutCsrfHeader.status).toBe(403);
+    expect(generateCompletionSpy).not.toHaveBeenCalled();
+
+    const withCsrfHeader = await request(app)
+      .post('/api/projects/analyze')
+      .set('Cookie', [`access_token=${accessToken}`, `csrf_token=${csrfToken}`])
+      .set('X-CSRF-Token', csrfToken as string)
+      .send({ projectName: 'P', description: 'D' });
+    expect(withCsrfHeader.status).not.toBe(403);
+    expect(withCsrfHeader.status).not.toBe(429);
   });
 });

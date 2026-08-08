@@ -4,6 +4,7 @@ import { asyncHandler } from '../../common/middleware/asyncHandler';
 import { validate } from '../../common/middleware/validate';
 import { requireAccess } from '../../common/middleware/requireAccess';
 import { requireTeamRoleIfSpecified, teamIdFromBody, teamIdFromBodySnakeCase } from '../../common/middleware/requireTeamRole';
+import { getRateLimitProvider } from '../../common/rateLimit/rateLimitProviderFactory';
 import { projectsRepository } from './projects.repository';
 import { tasksRepository } from './tasks.repository';
 import { teamsRepository } from '../teams/teams.repository';
@@ -64,7 +65,22 @@ router.delete(
   asyncHandler(projectsController.deleteProject)
 );
 
-router.post('/projects/analyze', authenticate, validate(analyzeProjectSchema), asyncHandler(projectsController.analyzeProject));
+// Milestone 34: no natural brake of its own, same shape M22 identified for
+// POST /api/ai/chat -- a direct, repeatable, authenticated call into
+// whichever AIProvider is active, unlike project/task/blocker creation
+// where an AI call only ever runs as a side effect of creating a
+// resource. Reuses createApiLimiter() exactly as chat does (placed after
+// authenticate so the per-user key has req.user, before validate/the
+// controller so an over-limit request never reaches the AI provider);
+// called here independently of ai.routes.ts's own call, so this route
+// gets its own separate budget, not shared with chat's.
+router.post(
+  '/projects/analyze',
+  authenticate,
+  getRateLimitProvider().createApiLimiter(),
+  validate(analyzeProjectSchema),
+  asyncHandler(projectsController.analyzeProject)
+);
 
 router.post(
   '/projects/:projectId/tasks',
