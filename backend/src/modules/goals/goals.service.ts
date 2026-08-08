@@ -1,4 +1,5 @@
 import { goalsRepository } from './goals.repository';
+import { ForbiddenError } from '../../common/errors';
 
 async function buildGoalTree(parentId: string, allGoals: any[]): Promise<any[]> {
   const children = allGoals.filter((g) => g.parent_goal_id === parentId);
@@ -47,7 +48,20 @@ export class GoalsService {
     );
   }
 
-  updateGoal(goalId: string, updates: Record<string, any>) {
+  // Milestone 30: canWriteGoal (checked at the route level) only verifies
+  // access to the goal being updated -- it never validated a client-
+  // supplied parent_goal_id, so any writer could re-parent their goal
+  // under one belonging to a team they have no access to. Reuses
+  // canWriteGoal against the *destination* parent, same rule the caller
+  // already had to satisfy for the goal itself.
+  async updateGoal(userId: string, goalId: string, updates: Record<string, any>) {
+    if (updates.parent_goal_id) {
+      const canWriteParent = await goalsRepository.canWriteGoal(userId, updates.parent_goal_id);
+      if (!canWriteParent) {
+        throw new ForbiddenError('Access denied to the parent goal');
+      }
+    }
+
     return goalsRepository.updateGoal(goalId, updates);
   }
 

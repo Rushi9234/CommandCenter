@@ -85,14 +85,21 @@ export class GoalsRepository {
     return query(text, [goalId]);
   }
 
+  // Milestone 30: the recursion used to follow parent_goal_id links with no
+  // regard for team boundaries -- a cross-team parent_goal_id (however it
+  // got there) would silently fold a foreign team's goal into this team's
+  // aggregate. Comparing g.team_id to gt.team_id at each step (starting
+  // from the root's own team_id) keeps every step of the walk within the
+  // same team; IS NOT DISTINCT FROM treats two NULLs (personal, teamless
+  // goals) as matching, unlike a plain `=`.
   async calculateGoalProgress(goalId: string) {
     const text = `
       WITH RECURSIVE goal_tree AS (
-        SELECT goal_id, progress, status FROM goals WHERE goal_id = $1
+        SELECT goal_id, progress, status, team_id FROM goals WHERE goal_id = $1
         UNION ALL
-        SELECT g.goal_id, g.progress, g.status
+        SELECT g.goal_id, g.progress, g.status, g.team_id
         FROM goals g
-        INNER JOIN goal_tree gt ON g.parent_goal_id = gt.goal_id
+        INNER JOIN goal_tree gt ON g.parent_goal_id = gt.goal_id AND g.team_id IS NOT DISTINCT FROM gt.team_id
       )
       SELECT
         COUNT(*) as total_goals,

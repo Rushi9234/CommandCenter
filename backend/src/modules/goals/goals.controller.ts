@@ -20,7 +20,7 @@ export const getGoalHierarchy = async (req: AuthRequest, res: Response) => {
 };
 
 export const updateGoal = async (req: AuthRequest, res: Response) => {
-  const goal = await goalsService.updateGoal(req.params.goalId, req.body);
+  const goal = await goalsService.updateGoal(req.user!.userId, req.params.goalId, req.body);
   ok(res, goal, 'Goal updated successfully');
 };
 
