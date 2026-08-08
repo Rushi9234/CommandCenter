@@ -39,19 +39,28 @@ export class TeamsService {
   // also silently overwrite an *existing* member's role -- including the
   // real owner's, or another admin's, if the target is already on the
   // team. Applies the same hierarchy rule removeMember/updateMemberRole
-  // already enforce, and checks it before the repository call since the
-  // upsert would otherwise apply unconditionally.
+  // already enforce.
+  //
+  // Milestone 36: the hierarchy check used to be a separate getMemberRole
+  // read followed by a separate write, with a TOCTOU gap between them --
+  // a concurrent role change on the target could land in that gap and
+  // make this decision on stale data. addTeamMemberIfAuthorized folds the
+  // check into the same atomic statement that performs the write; if it
+  // reports no row changed, a plain (now-current) read is used only to
+  // pick the right error message, never to gate anything.
   async addMember(teamId: string, targetUserId: string, role: string | undefined, requesterRole: string) {
-    const targetRole = await teamsRepository.getMemberRole(targetUserId, teamId);
+    const result = await teamsRepository.addTeamMemberIfAuthorized(teamId, targetUserId, role || 'member', requesterRole);
+    if (result) {
+      return;
+    }
 
+    const targetRole = await teamsRepository.getMemberRole(targetUserId, teamId);
     if (targetRole === 'owner') {
       throw new ForbiddenError("The team owner's role cannot be changed");
     }
-    if (targetRole === 'admin' && requesterRole !== 'owner') {
+    if (targetRole === 'admin') {
       throw new ForbiddenError("Only the team owner can change an admin's role");
     }
-
-    await teamsRepository.addTeamMember(teamId, targetUserId, role || 'member');
   }
 
   // Milestone 5: the base "is the caller owner/admin at all" gate moved to
@@ -60,30 +69,43 @@ export class TeamsService {
   // owner or another admin -- only the owner can. Nothing enforced this
   // before; any admin could remove any other admin, including demoting the
   // team down to zero admins.
+  //
+  // Milestone 36: same TOCTOU fix as addMember above -- removeTeamMemberIfAuthorized
+  // re-checks the target's role as part of the same atomic DELETE, closing
+  // the gap between the old separate read and the old separate delete.
   async removeMember(teamId: string, targetUserId: string, requesterRole: string) {
-    const targetRole = await teamsRepository.getMemberRole(targetUserId, teamId);
+    const removed = await teamsRepository.removeTeamMemberIfAuthorized(teamId, targetUserId, requesterRole);
+    if (removed) {
+      return;
+    }
 
+    const targetRole = await teamsRepository.getMemberRole(targetUserId, teamId);
     if (targetRole === 'owner') {
       throw new ForbiddenError('The team owner cannot be removed');
     }
-    if (targetRole === 'admin' && requesterRole !== 'owner') {
+    if (targetRole === 'admin') {
       throw new ForbiddenError('Only the team owner can remove an admin');
     }
-
-    await teamsRepository.removeTeamMember(teamId, targetUserId);
+    // Neither -- target simply isn't a member (matches the pre-Milestone-36
+    // behavior of a no-op delete on a nonexistent row: succeed silently).
   }
 
+  // Milestone 36: same TOCTOU fix as removeMember/addMember above.
   async updateMemberRole(teamId: string, targetUserId: string, role: string, requesterRole: string) {
-    const targetRole = await teamsRepository.getMemberRole(targetUserId, teamId);
+    const result = await teamsRepository.updateMemberRoleIfAuthorized(teamId, targetUserId, role, requesterRole);
+    if (result) {
+      return;
+    }
 
+    const targetRole = await teamsRepository.getMemberRole(targetUserId, teamId);
     if (targetRole === 'owner') {
       throw new ForbiddenError("The team owner's role cannot be changed");
     }
-    if (targetRole === 'admin' && requesterRole !== 'owner') {
+    if (targetRole === 'admin') {
       throw new ForbiddenError("Only the team owner can change an admin's role");
     }
-
-    await teamsRepository.updateMemberRole(teamId, targetUserId, role);
+    // Neither -- target simply isn't a member (matches pre-Milestone-36
+    // behavior: a no-op update on a nonexistent row succeeds silently).
   }
 
   getAllUsers() {

@@ -96,6 +96,31 @@ export class TeamsRepository {
     return queryOne(text, [teamId, userId, role]);
   }
 
+  // Milestone 36: same TOCTOU class as removeTeamMemberIfAuthorized --
+  // teams.service.ts's addMember (Milestone 27) reads the target's
+  // existing role, decides in JS, then calls the plain upsert above with
+  // no lock/transaction between the two, so a concurrent role change on
+  // an existing member could land in that gap. Postgres supports a WHERE
+  // clause on ON CONFLICT ... DO UPDATE -- when it evaluates false, the
+  // conflicting row is left completely untouched (no update, and the
+  // INSERT doesn't happen either, since the conflict already exists), and
+  // RETURNING yields no row, exactly like a blocked DELETE/UPDATE above.
+  // Only reachable for an EXISTING member; a brand-new insert has no
+  // target role to protect and always proceeds.
+  async addTeamMemberIfAuthorized(teamId: string, targetUserId: string, role: string, requesterRole: string) {
+    const text = `
+      INSERT INTO team_members (team_id, user_id, role)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (team_id, user_id) DO UPDATE SET
+        role = EXCLUDED.role,
+        joined_at = CURRENT_TIMESTAMP
+      WHERE team_members.role != 'owner'
+        AND (team_members.role != 'admin' OR $4 = 'owner')
+      RETURNING role
+    `;
+    return queryOne<any>(text, [teamId, targetUserId, role, requesterRole]);
+  }
+
   async getTeamMembers(teamId: string) {
     const text = `
       SELECT
@@ -115,6 +140,33 @@ export class TeamsRepository {
   async removeTeamMember(teamId: string, userId: string) {
     const text = 'DELETE FROM team_members WHERE team_id = $1 AND user_id = $2';
     return query(text, [teamId, userId]);
+  }
+
+  // Milestone 36: closes the TOCTOU race in teams.service.ts's removeMember
+  // -- the old code did a separate getMemberRole() read, decided in JS,
+  // then called plain removeTeamMember() with no lock or transaction
+  // between the two, so a concurrent role change on the same target could
+  // land between the read and the delete and make the authorization
+  // decision act on stale data (e.g. an admin's delete of a just-promoted
+  // admin could still go through if the promotion committed after the
+  // read but before the delete). The WHERE clause here re-checks the
+  // target's role as part of the SAME atomic statement Postgres uses to
+  // find and lock the row it's deleting -- no other transaction can slip
+  // a role change in between "check" and "act" because there is no gap;
+  // they're the same statement. Returns the row that was deleted (or null
+  // if nothing was, either because the target isn't a member at all, or
+  // because the authorization condition blocked it -- the caller
+  // distinguishes those with a plain read, used only to shape the error
+  // message, never to gate the mutation itself).
+  async removeTeamMemberIfAuthorized(teamId: string, targetUserId: string, requesterRole: string) {
+    const text = `
+      DELETE FROM team_members
+      WHERE team_id = $1 AND user_id = $2
+        AND role != 'owner'
+        AND (role != 'admin' OR $3 = 'owner')
+      RETURNING role
+    `;
+    return queryOne<any>(text, [teamId, targetUserId, requesterRole]);
   }
 
   async createInvite(teamId: string, email: string, invitedBy: string) {
@@ -221,6 +273,24 @@ export class TeamsRepository {
       RETURNING *
     `;
     return queryOne(text, [role, teamId, userId]);
+  }
+
+  // Milestone 36: same fix as removeTeamMemberIfAuthorized, applied to the
+  // role-change path -- the target's current role is re-checked as part
+  // of the same atomic UPDATE that performs the change, closing the same
+  // TOCTOU window (a concurrent promotion/demotion of the target can no
+  // longer land between the old separate read and the old separate
+  // write).
+  async updateMemberRoleIfAuthorized(teamId: string, targetUserId: string, newRole: string, requesterRole: string) {
+    const text = `
+      UPDATE team_members
+      SET role = $4
+      WHERE team_id = $1 AND user_id = $2
+        AND role != 'owner'
+        AND (role != 'admin' OR $3 = 'owner')
+      RETURNING role
+    `;
+    return queryOne<any>(text, [teamId, targetUserId, requesterRole, newRole]);
   }
 
   async updateMemberPermissions(teamId: string, userId: string, permissions: any) {

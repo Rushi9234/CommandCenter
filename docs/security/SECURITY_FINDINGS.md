@@ -108,26 +108,100 @@ display?*
 
 ---
 
-## 4. TOCTOU in check-then-act authorization
+## 4. TOCTOU in check-then-act authorization (stale authorization decision)
 
 **Pattern:** A hierarchy or ownership check (`getRole` / `getMemberRole`)
 is a separate read from the write that follows it, with no transaction or
 row lock between them. Two concurrent requests can both pass the check
-against the same pre-mutation state before either write commits.
+against the same pre-mutation state before either write commits — the
+authorization *decision* was correct for the state it observed, but that
+state was stale by the time the *mutation* actually executed.
 
-**Status:** Identified (Milestone 31), not yet fixed as of this writing —
-tracked as a real, reachable finding (`removeMember`/`updateMemberRole` in
-`teams.service.ts`), not a resolved lesson. Recorded here so the fix
-pattern is known when it's scheduled: wrap the read + write in a
-transaction (or use `SELECT ... FOR UPDATE`) so the hierarchy check and the
-mutation it gates observe a consistent snapshot.
+**Status: fixed (Milestone 36).** Identified in Milestone 31
+(`removeMember`/`updateMemberRole` in `teams.service.ts`; the same shape
+was also found in `addMember` during the M36 audit and fixed alongside
+the other two, since it shares the identical read-then-write gap and the
+identical security invariant).
+
+**Database-level atomicity — the fix pattern:** Collapse the "read
+current state, decide in application code, write" sequence into a
+single SQL statement whose `WHERE` clause encodes the authorization
+condition directly, instead of a separate `SELECT` followed by a separate
+`UPDATE`/`DELETE`. Concretely, for `removeMember`:
+
+```sql
+-- Before (two statements, a gap in between):
+SELECT role FROM team_members WHERE team_id = $1 AND user_id = $2;
+-- ...decide in JS...
+DELETE FROM team_members WHERE team_id = $1 AND user_id = $2;
+
+-- After (one statement, no gap):
+DELETE FROM team_members
+WHERE team_id = $1 AND user_id = $2
+  AND role != 'owner'
+  AND (role != 'admin' OR $3 = 'owner')  -- $3 = requester's role
+RETURNING role;
+```
+
+This works without an explicit `BEGIN`/`COMMIT` or `SELECT ... FOR
+UPDATE` because Postgres already takes an implicit row lock as part of
+finding and mutating the rows a single `UPDATE`/`DELETE` statement
+matches — there is no window between "check" and "act" because they are
+literally the same statement. A concurrent transaction that changes the
+same row is either fully committed before this statement's `WHERE` is
+evaluated (so the check sees the new state) or blocks until this
+statement finishes (so it, in turn, sees this statement's result) —
+either ordering is safe. The same technique extends to an upsert: Postgres
+supports a `WHERE` clause on `ON CONFLICT ... DO UPDATE`, so `addMember`'s
+upsert path got the identical guard with no separate statement at all
+(`addTeamMemberIfAuthorized`, `teams.repository.ts`).
+
+**Distinguishing "blocked by the authorization condition" from "target
+doesn't exist":** Both cases return zero affected rows from the
+conditional statement, and the caller needs different behavior for each
+(a specific `ForbiddenError` message vs. a silent no-op, matching prior
+behavior for "target isn't a member"). The fix uses a follow-up plain
+read (`getMemberRole`) *only* to select the right error message — never
+to gate the mutation, which already happened atomically in the
+conditional statement above. A stale read at that point can produce a
+slightly imprecise error message in a vanishingly rare edge case; it
+cannot reopen the security hole, because the mutation already committed
+or was already blocked before that read ever runs.
+
+**Concurrency testing strategy:** A fix that closes a TOCTOU race removes
+the very race window a test would otherwise exploit to prove the bug
+existed — there's no longer a gap in application code to inject a delay
+into. Two complementary strategies were used instead:
+1. **Deterministic barrier via a held transaction lock** — open a raw
+   `pgPool.connect()` client, `BEGIN`, run the conflicting `UPDATE`
+   *without committing*, then call the atomic repository method under
+   test. Postgres physically blocks that call until the held transaction
+   commits or rolls back — this is a guaranteed lock-wait, not a timing
+   hope. Committing then lets the blocked statement proceed and
+   re-evaluate its `WHERE` against the now-current (committed) state,
+   which a correct fix must reject. A short delay before committing only
+   ensures the blocked query has reached Postgres before the lock is
+   released; it is not what makes the test's assertion valid — the lock
+   itself is.
+2. **Realistic concurrent HTTP requests via `Promise.all`** — fire both
+   real requests at once and assert the invariant holds *regardless of
+   which one Postgres actually serialized first*, by checking the final
+   database state and branching the assertion on it, rather than
+   asserting one specific ordering must occur. A true race has more than
+   one valid outcome; the test must accept every valid one and reject
+   every invalid one, not assume a single expected order.
 
 **Reusable checklist question:** *For every `check-then-act` authorization
-pattern (read a role/state, branch, then mutate), could two concurrent
-requests both pass the read before either mutation commits? If so, is
-there a DB-level constraint (unique index, as used for M24/M25) that makes
-the outcome safe regardless of ordering — or does it need an explicit
-transaction/lock?*
+pattern (read a role/state, branch in application code, then mutate),
+could two concurrent requests both pass the read before either mutation
+commits? If so: can the check be folded into the mutating statement's
+`WHERE` clause (or an `ON CONFLICT ... DO UPDATE ... WHERE` guard for an
+upsert) so the database enforces it atomically? If a bare DB constraint
+(unique index, as used for M24/M25) already makes the outcome safe
+regardless of ordering, that's sufficient and no additional guard is
+needed — reach for the conditional-statement pattern only when the
+invariant is genuinely about *who* is allowed to act, not just about
+preventing a duplicate.*
 
 ---
 
