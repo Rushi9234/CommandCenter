@@ -193,31 +193,42 @@ export class TeamsRepository {
     return query<any>(text, [email]);
   }
 
+  // Milestone 39: the invite's pending-ness used to be read by a plain
+  // SELECT with no status filter, relying entirely on the SERVICE layer's
+  // earlier (non-transactional) assertInviteBelongsToCaller check -- a
+  // real gap, since a concurrent removeMember/leaveTeam revoking this
+  // SAME invite (see invalidatePendingInvites) could commit in the window
+  // between that earlier check and this transaction, and the old code
+  // would still accept it anyway. The status transition ('pending' ->
+  // 'accepted') is now the same atomic conditional-UPDATE pattern
+  // Milestone 36 established: if it affects zero rows, the invite is no
+  // longer pending (already used, or just revoked by a removal), and
+  // membership is never inserted.
   async acceptInvite(inviteId: string, userId: string) {
     return withTransaction(async (client) => {
-      const inviteResult = await client.query('SELECT * FROM team_invites WHERE invite_id = $1', [inviteId]);
+      const updateResult = await client.query(
+        `UPDATE team_invites
+         SET status = 'accepted', accepted_at = CURRENT_TIMESTAMP
+         WHERE invite_id = $1 AND status = 'pending'
+         RETURNING *`,
+        [inviteId]
+      );
 
-      if (inviteResult.rows.length === 0) {
+      if (updateResult.rows.length === 0) {
         return null;
       }
 
-      const invite = inviteResult.rows[0];
+      const invite = updateResult.rows[0];
 
       // Milestone 25: ON CONFLICT DO NOTHING, matching addTeamMember's
       // existing conflict handling for the same table -- accepting an
       // invite to a team you're already a member of (a duplicate invite,
       // or the same invite accepted twice) is treated as a no-op rather
       // than crashing on the team_members(team_id, user_id) unique
-      // constraint. The invite is still marked accepted either way, so it
-      // doesn't linger as "pending".
+      // constraint.
       await client.query(
         'INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT (team_id, user_id) DO NOTHING',
         [invite.team_id, userId, 'member']
-      );
-
-      await client.query(
-        'UPDATE team_invites SET status = $1, accepted_at = CURRENT_TIMESTAMP WHERE invite_id = $2',
-        ['accepted', inviteId]
       );
 
       return invite;
@@ -232,6 +243,25 @@ export class TeamsRepository {
       RETURNING *
     `;
     return queryOne(text, [inviteId]);
+  }
+
+  // Milestone 39: closes the stale-invite gap -- a still-pending invite
+  // issued before this user left/was removed would otherwise remain
+  // usable forever (acceptInvite never re-checks whether the team still
+  // wants them), letting the invited person unilaterally restore their
+  // own membership later with no NEW owner/admin decision at all. Called
+  // from removeMember/leaveTeam right after membership actually ends.
+  // Only touches still-pending invites for this exact team+email --
+  // already-accepted/rejected ones are untouched (acceptInvite's own
+  // caller-side check, getUserInvites' status='pending' filter, already
+  // makes those unreachable regardless).
+  async invalidatePendingInvites(teamId: string, email: string) {
+    const text = `
+      UPDATE team_invites
+      SET status = 'revoked'
+      WHERE team_id = $1 AND email = $2 AND status = 'pending'
+    `;
+    return query(text, [teamId, email]);
   }
 
   async searchTeams(searchQuery: string) {

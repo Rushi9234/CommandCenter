@@ -685,6 +685,158 @@ once.
 
 ---
 
+## 11. Resource-reference fields validated for shape but not for membership, and privileged-action staleness
+
+**Vulnerability class:** A field that references another resource by ID
+(a task's `owner`/`reviewer`/`contributors`/`dependencies`) was validated
+for *format* (Milestone 35: must be a well-formed UUID) but never for
+*membership* — whether the referenced user actually belongs to the same
+project/team, or the referenced task actually exists in the same project.
+This is a sibling of [Section 2](#2-cross-reference-fields-validated-against-the-wrong-resource)
+(which covers a field that points at a *different top-level resource*,
+e.g. `team_id`) but distinct from it: here the field points at a
+*member/sub-resource* of the very resource being written, so it's easy to
+assume "the caller can write this task, therefore any ID they put in it is
+fine" — the caller's own authorization says nothing about whether the
+*referenced* ID is a legitimate participant.
+
+**Root cause:** `updateTaskSchema`/`createTaskSchema` (M35) closed the
+"is this a UUID at all" gap but stopped there — no query ever asked "is
+this UUID a real user, and is that user actually on this project's team?"
+or "is this UUID a real task, and is it in the same project?" A
+well-formed but otherwise arbitrary UUID (a random value, another team's
+real user, another project's real task) was accepted identically to a
+legitimate one.
+
+**Fix pattern — reuse the existing access predicate, don't invent a new
+one:** `projectsRepository.canAccessProject(userId, projectId)` already
+answers "is this user a legitimate participant in this project" for the
+*caller's own* access gate. The same predicate, called with the
+*referenced* user's ID instead of the caller's, answers the identical
+question for `owner`/`reviewer`/`contributors` — a nonexistent or
+random UUID can never match its join, so existence and membership close
+in one check with no new authorization concept. Deliberately
+`canAccessProject` (any role, including viewer), not `canWriteProject` —
+being *referenced* as an owner/reviewer/contributor is a membership fact,
+not a write-permission fact, and even a viewer can legitimately be a
+project's stated point of contact in this product's model. For
+`dependencies`, a new `tasksRepository.tasksExistInProject(taskIds,
+projectId)` proves existence and same-project-scoping for every dependency
+ID in one query (`ANY($1) AND project_id = $2`); a task depending on
+itself is rejected by a direct ID-equality check (only reachable on
+update, since a task has no ID yet at creation).
+
+**Database vs. application-level integrity — the decision, not just the
+fix:** `owner`/`reviewer` are real FK columns (`UUID REFERENCES
+users(user_id)`), so a completely nonexistent user ID was already
+impossible at the DB level — the missing check was *membership*, which a
+plain FK constraint cannot express (FKs prove existence, not "is a member
+of this specific project's team"). `contributors`/`dependencies` are
+JSONB arrays with no FK support at all short of a normalized
+junction-table redesign, which this milestone deliberately did not do —
+the fix is application-level validation for all four fields, consistently,
+rather than a mixed model where two fields get a DB-level partial
+guarantee and two don't. **The decision to stay application-level, not
+migrate to junction tables, was made explicitly** — a schema migration
+was not "needed," it was considered and rejected because application-
+level validation already closes the actual security gap (unauthorized
+cross-team/cross-project reference) without the churn of a data-model
+change.
+
+**Privileged invite/join-request authorization — re-verified, not
+new:** Every invite/join-request mutation (`inviteMember`,
+`approveJoinRequest`, `rejectJoinRequest`, `addMember`) was already gated
+by `requireTeamRole`/`requireTeamMembership` middleware from prior
+milestones (M5, M27, M36) checked against the *target team ID in the
+URL* — re-audited this milestone with an explicit matrix (viewer/member/
+manager rejected, owner/admin allowed, non-member rejected, an admin of a
+*different* team rejected when the target team ID differs from their
+own) and confirmed no gap; the new tests in this section exist to prove
+the matrix holds, not because a hole was found in it.
+
+**Stale invite staleness — a real, asymmetric gap between invites and
+join-requests:** A team invite is accepted unilaterally by the *invited
+person* — no fresh admin/owner decision gates the moment of acceptance,
+only the moment of issuance. If that person is later removed (or leaves)
+and a prior invite to their email is still `pending`, nothing previously
+stopped them from accepting that old invite and silently regaining
+membership with zero live authorization decision behind the second entry.
+A join *request*'s approval, by contrast, is always a fresh, live
+admin/owner action at the moment of approval — approving an "old" request
+carries the exact same authorization weight as a brand-new `addMember`
+call an admin could issue at will anytime — so join-requests were
+deliberately left unchanged; treating both cases identically would have
+fixed a problem invites have and join-requests don't.
+
+**Fix:** Whenever a user's membership on a team ends (`removeMember`,
+`leaveTeam`), any still-`pending` invite issued to their email for that
+*same* team is proactively moved to a new `revoked` status (no `CHECK`
+constraint exists on `team_invites.status`, confirmed by inspecting the
+schema directly — introducing the new value required no migration).
+`acceptInvite`'s own check (`assertInviteBelongsToCaller`, which reads
+only `status = 'pending'` invites) then naturally rejects the now-revoked
+invite before the accept logic ever runs.
+
+**Concurrency — the atomic-conditional pattern (Section 4) applied to a
+new case:** `acceptInvite` used to `SELECT` the invite with no status
+filter, then separately `UPDATE` its status and `INSERT` the membership —
+a TOCTOU gap in which a concurrent `removeMember`/`leaveTeam` could revoke
+the invite in between the read and the write, letting a stale invite still
+silently restore membership. Fixed with the same pattern as Section 4:
+one atomic `UPDATE team_invites SET status = 'accepted' WHERE invite_id =
+$1 AND status = 'pending' RETURNING *` inside `withTransaction`, and the
+membership `INSERT ... ON CONFLICT DO NOTHING` only proceeds if that
+returned a row. Zero rows affected (already accepted, or revoked in the
+interim) is treated as a real error (`BadRequestError`), not a silent
+no-op, since — unlike removeMember's "target already isn't a member"
+case — there is no prior legitimate state this could be conflated with.
+Proven deterministically with the same held-transaction-lock technique as
+Section 4 (calling the repository method directly, since the
+service-layer `assertInviteBelongsToCaller` pre-check already catches the
+common HTTP-level case first and would mask the repository-level atomicity
+otherwise). Concurrent duplicate `addMember` calls for the same user were
+re-verified safe under the *pre-existing* `team_members(team_id, user_id)`
+unique constraint + `ON CONFLICT DO NOTHING` (Milestone 24/25) — no new
+code was needed there, only a confirming regression test.
+
+**A narrow, deliberately-accepted residual:** `validateTaskReferences`
+(check referenced users/tasks are legitimate, then write) has its own
+small TOCTOU window — a referenced user could theoretically be removed
+from the team in the instant between the check and the `INSERT`/`UPDATE`.
+This is real but was deliberately left unfixed: the practical impact is a
+transient data-integrity nicety (a task briefly references a
+just-removed member), not an authorization bypass, and closing it would
+require locking machinery disproportionate to the risk. Recorded here
+explicitly as a reviewed, accepted residual — not silently ignored and
+not over-engineered.
+
+**Negative-test strategy:** For every rejected reference (nonexistent
+user, non-member user, cross-project/cross-team task, self-dependency),
+assert the 400 *and* that no task/row was created or changed — re-query
+the DB, don't infer from the response. For every rejected privileged
+action (viewer/member/manager on invite/approve, non-member, wrong-team
+admin), assert the 403 *and* the final membership/invite state is exactly
+what it was before the attempt. For stale-invite tests, assert the DB row
+itself transitions to `revoked` (not just that a later accept attempt
+fails) and that no membership row was silently inserted.
+
+**Reusable checklist question:** *For every field that references
+another resource by ID, ask two separate questions, not one: (a) does
+this ID exist at all (format + existence), and (b) is the referenced
+resource a legitimate participant in the SAME scope as the resource being
+written (same project, same team) — existence alone is not membership.
+For fields naming a sub-resource's participant (an assignee, a reviewer,
+a dependency), reuse the existing any-role access predicate for that
+scope rather than inventing a new membership rule. Separately, for any
+privileged action a *non-admin* party can trigger unilaterally (accepting
+an invite, redeeming a token) rather than an admin approving in the
+moment: if the underlying relationship the action grants can be revoked
+by some other action, does revocation actually invalidate this one too,
+or can the non-admin party still redeem a now-stale grant with no fresh
+authorization decision behind it?*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —

@@ -1,7 +1,7 @@
 import { teamsRepository } from './teams.repository';
 import { usersRepository } from '../users/users.repository';
 import { sendTeamInviteEmail } from '../../services/emailService';
-import { ForbiddenError, NotFoundError } from '../../common/errors';
+import { ForbiddenError, NotFoundError, BadRequestError } from '../../common/errors';
 
 export class TeamsService {
   createTeam(userId: string, body: any) {
@@ -76,6 +76,7 @@ export class TeamsService {
   async removeMember(teamId: string, targetUserId: string, requesterRole: string) {
     const removed = await teamsRepository.removeTeamMemberIfAuthorized(teamId, targetUserId, requesterRole);
     if (removed) {
+      await this.invalidateStaleInvites(teamId, targetUserId);
       return;
     }
 
@@ -170,7 +171,16 @@ export class TeamsService {
 
   async acceptInvite(inviteId: string, userId: string) {
     await this.assertInviteBelongsToCaller(inviteId, userId);
-    await teamsRepository.acceptInvite(inviteId, userId);
+    const accepted = await teamsRepository.acceptInvite(inviteId, userId);
+    if (!accepted) {
+      // Milestone 39: the invite was pending when assertInviteBelongsToCaller
+      // checked (moments ago), but the atomic conditional-UPDATE in
+      // acceptInvite found it no longer pending -- already used, or
+      // revoked by an in-between removeMember/leaveTeam. Either way,
+      // membership was never inserted; this is a real error, not a
+      // silent no-op.
+      throw new BadRequestError('This invitation is no longer valid');
+    }
   }
 
   async rejectInvite(inviteId: string, userId: string) {
@@ -228,6 +238,20 @@ export class TeamsService {
       throw new ForbiddenError('The team owner cannot leave the team');
     }
     await teamsRepository.removeTeamMember(teamId, userId);
+    await this.invalidateStaleInvites(teamId, userId);
+  }
+
+  // Milestone 39: shared by removeMember/leaveTeam -- whenever a user's
+  // membership on this team ends, any still-pending invite issued to
+  // their email for the SAME team is revoked too, so they can't silently
+  // walk back in through an old invite link with no fresh owner/admin
+  // approval. See teamsRepository.invalidatePendingInvites for the exact
+  // scenario this closes.
+  private async invalidateStaleInvites(teamId: string, userId: string) {
+    const user = await usersRepository.getUserById(userId);
+    if (user) {
+      await teamsRepository.invalidatePendingInvites(teamId, user.email);
+    }
   }
 
   // Milestone 5: base gate moved to requireTeamRole.

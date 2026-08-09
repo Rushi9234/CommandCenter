@@ -88,6 +88,24 @@ export class TasksRepository {
     return query(text, [taskId]);
   }
 
+  // Milestone 39: dependencies are inherently a same-project concept -- a
+  // task "blocked by" a task in a different project doesn't mean anything
+  // in this product model, and the old code never checked that a
+  // dependency ID even existed at all, let alone belonged to the same
+  // project (same team, by construction, since a project has exactly one
+  // team_id). One query proves both existence and project-scoping for
+  // every dependency ID at once.
+  async tasksExistInProject(taskIds: string[], projectId: string): Promise<boolean> {
+    if (taskIds.length === 0) {
+      return true;
+    }
+    const result = await query<{ count: string }>('SELECT COUNT(*) AS count FROM tasks WHERE task_id = ANY($1) AND project_id = $2', [
+      taskIds,
+      projectId,
+    ]);
+    return Number(result[0].count) === taskIds.length;
+  }
+
   async getUserTasks(userId: string) {
     const text = `
       SELECT t.* FROM tasks t

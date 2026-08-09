@@ -2,7 +2,7 @@ import { projectsRepository } from './projects.repository';
 import { tasksRepository } from './tasks.repository';
 import { usersRepository } from '../users/users.repository';
 import { analyzeProjectWithAI } from '../ai/ai.service';
-import { NotFoundError } from '../../common/errors';
+import { NotFoundError, BadRequestError } from '../../common/errors';
 import { privacyService, AI_DISABLED_MESSAGE } from '../privacy/privacy.service';
 
 export class ProjectsService {
@@ -93,9 +93,43 @@ export class ProjectsService {
     return analyzeProjectWithAI(projectName, description, requirements);
   }
 
+  // Milestone 39: owner/reviewer/contributors/dependencies had no
+  // validation beyond UUID *shape* (Milestone 35) -- any well-formed UUID
+  // was accepted regardless of whether it belonged to a real user, a
+  // team member of this project, or (for dependencies) a task in this
+  // same project at all. Reuses canAccessProject exactly as it already
+  // gates the caller's own access to the project -- the same rule now
+  // also gates who can be REFERENCED by it, rather than inventing a
+  // separate membership model. A nonexistent/random UUID can never match
+  // canAccessProject's own existence-implying join, so this closes
+  // existence and membership in the one check.
+  private async validateTaskReferences(projectId: string, updates: Record<string, any>, currentTaskId?: string) {
+    const referencedUserIds = [updates.owner, updates.reviewer, ...(updates.contributors || [])].filter(Boolean);
+
+    for (const targetUserId of referencedUserIds) {
+      const isMember = await projectsRepository.canAccessProject(targetUserId, projectId);
+      if (!isMember) {
+        throw new BadRequestError('owner/reviewer/contributors must be members of this project\'s team');
+      }
+    }
+
+    if (updates.dependencies && updates.dependencies.length > 0) {
+      if (currentTaskId && updates.dependencies.includes(currentTaskId)) {
+        throw new BadRequestError('A task cannot depend on itself');
+      }
+
+      const allInProject = await tasksRepository.tasksExistInProject(updates.dependencies, projectId);
+      if (!allInProject) {
+        throw new BadRequestError('dependencies must reference existing tasks in the same project');
+      }
+    }
+  }
+
   // Milestone 5: base gate (requireAccess + canAccessProject) moved to
   // projects.routes.ts.
-  createTask(projectId: string, body: any, userId: string) {
+  async createTask(projectId: string, body: any, userId: string) {
+    await this.validateTaskReferences(projectId, body);
+
     return tasksRepository.createTask({
       project_id: projectId,
       title: body.title,
@@ -150,7 +184,18 @@ export class ProjectsService {
   // updateTaskSchema) -- derived here instead, so a task can never end up
   // "done" with no completion timestamp, or reopened while still carrying
   // a stale one.
-  updateTask(taskId: string, updates: Record<string, any>) {
+  // Milestone 39: same reference validation as createTask, applied to
+  // whichever of owner/reviewer/contributors/dependencies the update
+  // actually touches -- the task's own project_id has to be looked up
+  // first since, unlike createTask, the route only carries a taskId.
+  async updateTask(taskId: string, updates: Record<string, any>) {
+    const task = await tasksRepository.getTask(taskId);
+    if (!task) {
+      throw new NotFoundError('Task not found');
+    }
+
+    await this.validateTaskReferences(task.project_id, updates, taskId);
+
     if (updates.status === 'done') {
       updates.completed_at = new Date();
     } else if (updates.status) {
