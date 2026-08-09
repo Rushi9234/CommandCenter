@@ -15,6 +15,18 @@ const TEAM_SETTINGS_UPDATABLE_COLUMNS = [
 // request methods). deleteTeam was dropped -- grep confirmed zero callers
 // anywhere in the app, so it was dead code.
 export class TeamsRepository {
+  // Milestone 40: the team INSERT and the owner-membership INSERT used to
+  // be two separate statements with no transaction between them -- if the
+  // first committed and the second then threw (a transient connection
+  // drop, or previously an uncaught 23503/22P02 on a malformed
+  // created_by/parent_team_id), the result was an orphaned team: a row in
+  // `teams` with zero rows in `team_members`, inaccessible to anyone
+  // (every route's authorization check requires a `team_members` row to
+  // exist at all -- see getMemberRole), and with no way for the caller to
+  // retry cleanly since the team already "exists." Both statements now
+  // commit or roll back together, matching the same withTransaction
+  // pattern already used for acceptInvite/approveJoinRequest/password
+  // reset.
   async createTeam(teamData: {
     team_name: string;
     description?: string;
@@ -26,38 +38,47 @@ export class TeamsRepository {
     department?: string;
     team_type?: string;
   }) {
-    const text = `
-      INSERT INTO teams (
-        team_name, description, created_by, is_public, is_discoverable,
-        max_team_size, parent_team_id, department, team_type
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      RETURNING *
-    `;
+    return withTransaction(async (client) => {
+      const teamResult = await client.query(
+        `INSERT INTO teams (
+          team_name, description, created_by, is_public, is_discoverable,
+          max_team_size, parent_team_id, department, team_type
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING *`,
+        [
+          teamData.team_name,
+          teamData.description || null,
+          teamData.created_by,
+          teamData.is_public !== false,
+          teamData.is_discoverable !== false,
+          teamData.max_team_size || 10,
+          teamData.parent_team_id || null,
+          teamData.department || null,
+          teamData.team_type || 'main',
+        ]
+      );
 
-    const params = [
-      teamData.team_name,
-      teamData.description || null,
-      teamData.created_by,
-      teamData.is_public !== false,
-      teamData.is_discoverable !== false,
-      teamData.max_team_size || 10,
-      teamData.parent_team_id || null,
-      teamData.department || null,
-      teamData.team_type || 'main',
-    ];
+      const team = teamResult.rows[0];
+      if (!team) {
+        return team;
+      }
 
-    const team = await queryOne<any>(text, params);
-
-    if (team) {
       // Milestone 5: the creator is the owner, not an admin -- the two are
       // now distinct roles with different authority (see requireTeamRole
       // usages across every module's routes). Previously this assigned
       // 'admin', which meant no team ever actually had an owner.
-      await this.addTeamMember(team.team_id, teamData.created_by, 'owner');
-    }
+      await client.query(
+        `INSERT INTO team_members (team_id, user_id, role)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (team_id, user_id) DO UPDATE SET
+           role = EXCLUDED.role,
+           joined_at = CURRENT_TIMESTAMP`,
+        [team.team_id, teamData.created_by, 'owner']
+      );
 
-    return team;
+      return team;
+    });
   }
 
   async getTeam(teamId: string) {
@@ -82,18 +103,6 @@ export class TeamsRepository {
       ORDER BY t.created_at DESC
     `;
     return query(text, [userId]);
-  }
-
-  async addTeamMember(teamId: string, userId: string, role: string = 'member') {
-    const text = `
-      INSERT INTO team_members (team_id, user_id, role)
-      VALUES ($1, $2, $3)
-      ON CONFLICT (team_id, user_id) DO UPDATE SET
-        role = EXCLUDED.role,
-        joined_at = CURRENT_TIMESTAMP
-      RETURNING *
-    `;
-    return queryOne(text, [teamId, userId, role]);
   }
 
   // Milestone 36: same TOCTOU class as removeTeamMemberIfAuthorized --
@@ -169,10 +178,67 @@ export class TeamsRepository {
     return queryOne<any>(text, [teamId, targetUserId, requesterRole]);
   }
 
+  // Milestone 40: teams.service.ts's removeMember used to call
+  // removeTeamMemberIfAuthorized (above) and THEN, as a separate,
+  // non-transactional follow-up call, invalidatePendingInvites -- if the
+  // second statement failed after the first had already committed (a
+  // transient connection drop), a departing member's still-pending invite
+  // would silently survive, reopening a narrow slice of the exact
+  // staleness gap Milestone 39 closed for the common path. Folds both into
+  // one transaction: the delete is still the same atomic, authorization-
+  // gated conditional statement (unchanged from above), and the invite
+  // revocation only runs at all if that delete actually removed a row.
+  async removeMemberAndInvalidateInvites(teamId: string, targetUserId: string, requesterRole: string, targetEmail: string) {
+    return withTransaction(async (client) => {
+      const deleteResult = await client.query(
+        `DELETE FROM team_members
+         WHERE team_id = $1 AND user_id = $2
+           AND role != 'owner'
+           AND (role != 'admin' OR $3 = 'owner')
+         RETURNING role`,
+        [teamId, targetUserId, requesterRole]
+      );
+
+      if (deleteResult.rows.length === 0) {
+        return null;
+      }
+
+      await client.query(
+        `UPDATE team_invites SET status = 'revoked' WHERE team_id = $1 AND email = $2 AND status = 'pending'`,
+        [teamId, targetEmail]
+      );
+
+      return deleteResult.rows[0];
+    });
+  }
+
+  // Milestone 40: same fix as removeMemberAndInvalidateInvites above,
+  // applied to leaveTeam's shape (an unconditional delete -- the caller
+  // removing themselves needs no hierarchy re-check, unlike removeMember).
+  async leaveTeamAndInvalidateInvites(teamId: string, userId: string, userEmail: string): Promise<void> {
+    await withTransaction(async (client) => {
+      await client.query('DELETE FROM team_members WHERE team_id = $1 AND user_id = $2', [teamId, userId]);
+      await client.query(
+        `UPDATE team_invites SET status = 'revoked' WHERE team_id = $1 AND email = $2 AND status = 'pending'`,
+        [teamId, userEmail]
+      );
+    });
+  }
+
+  // Milestone 40: a partial unique index on (team_id, email) WHERE
+  // status = 'pending' (see migrations/) now backs this -- previously a
+  // caller could invite the same email to the same team any number of
+  // times, each call silently inserting another row getUserInvites would
+  // return alongside the others. ON CONFLICT DO NOTHING makes a repeat
+  // call while a prior invite is still pending a no-op at the database
+  // level (RETURNING yields no row); the service layer (teams.service.ts)
+  // turns that into a clean 409 instead of a duplicate email being sent
+  // and a duplicate row appearing in the recipient's invite list.
   async createInvite(teamId: string, email: string, invitedBy: string) {
     const text = `
       INSERT INTO team_invites (team_id, email, invited_by)
       VALUES ($1, $2, $3)
+      ON CONFLICT (team_id, email) WHERE status = 'pending' DO NOTHING
       RETURNING *
     `;
     return queryOne<any>(text, [teamId, email, invitedBy]);
@@ -245,25 +311,6 @@ export class TeamsRepository {
     return queryOne(text, [inviteId]);
   }
 
-  // Milestone 39: closes the stale-invite gap -- a still-pending invite
-  // issued before this user left/was removed would otherwise remain
-  // usable forever (acceptInvite never re-checks whether the team still
-  // wants them), letting the invited person unilaterally restore their
-  // own membership later with no NEW owner/admin decision at all. Called
-  // from removeMember/leaveTeam right after membership actually ends.
-  // Only touches still-pending invites for this exact team+email --
-  // already-accepted/rejected ones are untouched (acceptInvite's own
-  // caller-side check, getUserInvites' status='pending' filter, already
-  // makes those unreachable regardless).
-  async invalidatePendingInvites(teamId: string, email: string) {
-    const text = `
-      UPDATE team_invites
-      SET status = 'revoked'
-      WHERE team_id = $1 AND email = $2 AND status = 'pending'
-    `;
-    return query(text, [teamId, email]);
-  }
-
   async searchTeams(searchQuery: string) {
     const text = `
       SELECT * FROM teams
@@ -333,13 +380,19 @@ export class TeamsRepository {
     return queryOne(text, [JSON.stringify(permissions), teamId, userId]);
   }
 
+  // Milestone 40: same fix as createInvite above -- a partial unique index
+  // on (team_id, user_id) WHERE status = 'pending' now backs this, and a
+  // repeat join request while a prior one is still pending is a no-op
+  // (RETURNING yields no row) instead of another row admins would see
+  // duplicated in getTeamJoinRequests.
   async createJoinRequest(teamId: string, userId: string) {
     const text = `
       INSERT INTO join_requests (team_id, user_id)
       VALUES ($1, $2)
+      ON CONFLICT (team_id, user_id) WHERE status = 'pending' DO NOTHING
       RETURNING *
     `;
-    return queryOne(text, [teamId, userId]);
+    return queryOne<any>(text, [teamId, userId]);
   }
 
   // Milestone 5: approve/reject-join-request only had :requestId in the

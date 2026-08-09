@@ -6,8 +6,8 @@ import { requiredString } from '../../common/dto-helpers';
 // nothing that was previously accepted is now rejected.
 
 export const createTeamSchema = z.object({
-  teamName: requiredString('Team name is required'),
-  description: z.string().optional(),
+  teamName: requiredString('Team name is required', 1, 255),
+  description: z.string().max(5000).optional(),
   isPublic: z.boolean().optional(),
   maxTeamSize: z.union([z.number(), z.string()]).optional(),
   parentTeamId: z.string().optional(),

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authenticate } from '../../middleware/auth';
 import { asyncHandler } from '../../common/middleware/asyncHandler';
-import { validate } from '../../common/middleware/validate';
+import { validate, validateUuidParams } from '../../common/middleware/validate';
 import { requireAccess } from '../../common/middleware/requireAccess';
 import { requireTeamRoleIfSpecified, teamIdFromBody, teamIdFromBodySnakeCase } from '../../common/middleware/requireTeamRole';
 import { getRateLimitProvider } from '../../common/rateLimit/rateLimitProviderFactory';
@@ -21,7 +21,12 @@ const WRITE_ROLES = ['owner', 'admin', 'manager', 'member'];
 const router = Router();
 
 router.get('/projects/public', authenticate, asyncHandler(projectsController.getAllPublicProjects));
-router.get('/projects/:projectId/details', authenticate, asyncHandler(projectsController.getProjectDetails));
+router.get(
+  '/projects/:projectId/details',
+  authenticate,
+  validateUuidParams('projectId'),
+  asyncHandler(projectsController.getProjectDetails)
+);
 
 // If the caller names a teamId, they must actually belong to it -- no check
 // existed before, so any authenticated user could insert a project into a
@@ -39,6 +44,7 @@ router.get('/projects/my', authenticate, asyncHandler(projectsController.getMyPr
 router.get(
   '/teams/:teamId/projects',
   authenticate,
+  validateUuidParams('teamId'),
   requireAccess((req) => teamsRepository.canAccessTeam(req.user!.userId, req.params.teamId), 'Access denied to this team'),
   asyncHandler(projectsController.getTeamProjects)
 );
@@ -51,6 +57,7 @@ router.get(
 router.put(
   '/projects/:projectId',
   authenticate,
+  validateUuidParams('projectId'),
   requireAccess((req) => projectsRepository.canWriteProject(req.user!.userId, req.params.projectId), 'Access denied to this project'),
   validate(updateProjectSchema),
   requireTeamRoleIfSpecified(teamIdFromBodySnakeCase, WRITE_ROLES),
@@ -61,6 +68,7 @@ router.put(
 router.delete(
   '/projects/:projectId',
   authenticate,
+  validateUuidParams('projectId'),
   requireAccess((req) => projectsRepository.isProjectCreator(req.user!.userId, req.params.projectId), 'Only project creator can delete'),
   asyncHandler(projectsController.deleteProject)
 );
@@ -85,6 +93,7 @@ router.post(
 router.post(
   '/projects/:projectId/tasks',
   authenticate,
+  validateUuidParams('projectId'),
   requireAccess((req) => projectsRepository.canWriteProject(req.user!.userId, req.params.projectId), 'Access denied to this project'),
   validate(createTaskSchema),
   asyncHandler(projectsController.createTask)
@@ -93,6 +102,7 @@ router.post(
 router.get(
   '/projects/:projectId/tasks',
   authenticate,
+  validateUuidParams('projectId'),
   requireAccess((req) => projectsRepository.canAccessProject(req.user!.userId, req.params.projectId), 'Access denied to this project'),
   asyncHandler(projectsController.getProjectTasks)
 );
@@ -102,6 +112,7 @@ router.get(
 router.put(
   '/tasks/:taskId',
   authenticate,
+  validateUuidParams('taskId'),
   requireAccess((req) => tasksRepository.canWriteTask(req.user!.userId, req.params.taskId), 'Access denied to this task'),
   validate(updateTaskSchema),
   asyncHandler(projectsController.updateTask)
@@ -109,6 +120,7 @@ router.put(
 router.delete(
   '/tasks/:taskId',
   authenticate,
+  validateUuidParams('taskId'),
   requireAccess((req) => tasksRepository.canWriteTask(req.user!.userId, req.params.taskId), 'Access denied to this task'),
   asyncHandler(projectsController.deleteTask)
 );

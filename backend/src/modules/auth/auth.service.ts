@@ -43,6 +43,23 @@ export class AuthService {
       throw new BadRequestError('Email or username already exists');
     }
 
+    // Milestone 40: this pre-check used to only cover email -- username
+    // carries its own UNIQUE constraint too, so a duplicate username with
+    // a brand-new email previously reached createUser's INSERT unchecked
+    // and threw a raw, uncaught 23505 (a plain, always-reproducible bug,
+    // not a race). A genuine concurrent race (two requests for the same
+    // email/username both passing this check before either INSERT
+    // commits) is still possible and is NOT fixed here with a lock/
+    // transaction -- errorHandler.ts's Milestone 40 Postgres-error
+    // translation is the deliberate backstop for that narrow remaining
+    // window, turning the second INSERT's 23505 into a safe 409 instead of
+    // a 500, exactly as it does for every other untranslated constraint
+    // violation.
+    const existingByUsername = await authRepository.getUserByUsername(username);
+    if (existingByUsername) {
+      throw new BadRequestError('Email or username already exists');
+    }
+
     const passwordHash = await bcrypt.hash(password, BCRYPT_COST);
 
     const rawVerificationToken = generateOpaqueToken();

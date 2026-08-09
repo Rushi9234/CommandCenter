@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authenticate } from '../../middleware/auth';
 import { asyncHandler } from '../../common/middleware/asyncHandler';
-import { validate } from '../../common/middleware/validate';
+import { validate, validateUuidParams } from '../../common/middleware/validate';
 import { requireAccess } from '../../common/middleware/requireAccess';
 import { logsRepository } from './logs.repository';
 import * as logsController from './logs.controller';
@@ -20,6 +20,7 @@ router.get('/logs/standup', authenticate, asyncHandler(logsController.getStandup
 router.put(
   '/logs/:logId',
   authenticate,
+  validateUuidParams('logId'),
   requireAccess((req) => logsRepository.canWriteLog(req.user!.userId, req.params.logId), 'Access denied to this log'),
   validate(logEntrySchema),
   asyncHandler(logsController.updateLog)

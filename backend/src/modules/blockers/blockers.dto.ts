@@ -1,19 +1,24 @@
 import { z } from 'zod';
 import { requiredString } from '../../common/dto-helpers';
 
+// Milestone 40: affectedTasks/affected_tasks had no length cap in either
+// schema (matches the same unbounded-array shape closed for tasks'
+// contributors/dependencies in projects.dto.ts).
+const MAX_AFFECTED_TASKS_ARRAY_LENGTH = 50;
+
 export const createBlockerSchema = z.object({
   teamId: requiredString('Title and team ID are required'),
-  title: requiredString('Title and team ID are required'),
-  description: z.string().optional(),
+  title: requiredString('Title and team ID are required', 1, 255),
+  description: z.string().max(5000).optional(),
   blockerType: z.string().optional(),
-  urgency: z.string().optional(),
-  impact: z.string().optional(),
-  affectedTasks: z.array(z.string()).optional(),
-  attemptedSolutions: z.string().optional(),
+  urgency: z.string().max(50).optional(),
+  impact: z.string().max(50).optional(),
+  affectedTasks: z.array(z.string()).max(MAX_AFFECTED_TASKS_ARRAY_LENGTH).optional(),
+  attemptedSolutions: z.string().max(5000).optional(),
 });
 
 export const sendMessageSchema = z.object({
-  messageText: requiredString('Message text is required'),
+  messageText: requiredString('Message text is required', 1, 5000),
 });
 
 // Milestone 35: was z.record(z.any()) -- any body key reached
@@ -40,7 +45,7 @@ export const updateBlockerSchema = z
     urgency: z.string().max(50),
     impact: z.string().max(50),
     severity: z.enum(['low', 'medium', 'high']),
-    affected_tasks: z.array(z.string().uuid()),
+    affected_tasks: z.array(z.string().uuid()).max(MAX_AFFECTED_TASKS_ARRAY_LENGTH),
     attempted_solutions: z.string().max(5000),
     status: z.enum(['open', 'resolved']),
   })

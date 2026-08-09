@@ -43,12 +43,19 @@ describe('acceptInvite -- Milestone 25: no 500 when already a member', () => {
     const invitee = await registerAndLogin('m25_invitee_b');
     const teamId = await createTeam(owner.token, 'M25 Team B');
 
-    // Two separate invites for the same email -- inviteMember has no
-    // dedup check, so this is already possible today without any race.
+    // Milestone 40: team_invites now carries a partial unique index on
+    // (team_id, email) WHERE status = 'pending' -- two invites to the
+    // same email can no longer BOTH be pending at once (a duplicate
+    // second call now gets a clean 409, see databaseIntegrityHardening.test.ts).
+    // This test's actual point -- accepting an invite while already a
+    // member must not 500 -- still needs two invites to the SAME team+
+    // email, just no longer both pending at the same time: the first is
+    // accepted (which flips its own status away from 'pending') before
+    // the second is ever created, so the second invite's own creation is
+    // never blocked by the new constraint.
     const firstInvite = await invite(owner.token, teamId, invitee.user.email).expect(200);
-    const secondInvite = await invite(owner.token, teamId, invitee.user.email).expect(200);
-
     await acceptInvite(invitee.token, firstInvite.body.data.invite_id).expect(200);
+    const secondInvite = await invite(owner.token, teamId, invitee.user.email).expect(200);
 
     // Before Milestone 25, this second acceptance crashed with a raw
     // unique-violation 500 (team_members(team_id, user_id) already

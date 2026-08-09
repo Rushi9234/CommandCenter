@@ -2,27 +2,40 @@ import { z } from 'zod';
 import { requiredString } from '../../common/dto-helpers';
 
 export const createProjectSchema = z.object({
-  projectName: requiredString('Project name is required'),
-  description: z.string().optional(),
+  projectName: requiredString('Project name is required', 1, 255),
+  description: z.string().max(5000).optional(),
   teamId: z.string().optional(),
   priority: z.string().optional(),
   deadline: z.string().optional(),
   isPublic: z.boolean().optional(),
 });
 
+// Milestone 40: description/requirements feed straight into the AI
+// provider prompt (ai.service.ts's analyzeProjectWithAI) with no length
+// bound at all -- unlike logEntrySchema.entryText (logs.dto.ts), which has
+// carried a .max(5000) since it was first written. Bounded to the same
+// limit for consistency; the 100kb express.json() body-parser default was
+// the only thing capping this before.
 export const analyzeProjectSchema = z.object({
   projectName: requiredString('Project name and description are required'),
-  description: requiredString('Project name and description are required'),
-  requirements: z.string().optional(),
+  description: requiredString('Project name and description are required', 1, 5000),
+  requirements: z.string().max(5000).optional(),
 });
 
+// Milestone 40: contributors/dependencies had no length cap -- a caller
+// could submit an array of thousands of UUIDs, which tasksExistInProject
+// (tasks.repository.ts) would run through `ANY($1)` against on every
+// create/update. 50 comfortably covers any legitimate team/task size in
+// this product's model while closing the unbounded-array shape.
+const MAX_TASK_REFERENCE_ARRAY_LENGTH = 50;
+
 export const createTaskSchema = z.object({
-  title: requiredString('Task title is required'),
-  description: z.string().optional(),
+  title: requiredString('Task title is required', 1, 255),
+  description: z.string().max(5000).optional(),
   owner: z.string().optional(),
-  contributors: z.array(z.string()).optional(),
+  contributors: z.array(z.string()).max(MAX_TASK_REFERENCE_ARRAY_LENGTH).optional(),
   reviewer: z.string().optional(),
-  dependencies: z.array(z.string()).optional(),
+  dependencies: z.array(z.string()).max(MAX_TASK_REFERENCE_ARRAY_LENGTH).optional(),
   priority: z.string().optional(),
 });
 
@@ -61,9 +74,9 @@ export const updateTaskSchema = z
     title: z.string().min(1).max(255),
     description: z.string().max(5000),
     owner: z.string().uuid().nullable(),
-    contributors: z.array(z.string().uuid()),
+    contributors: z.array(z.string().uuid()).max(MAX_TASK_REFERENCE_ARRAY_LENGTH),
     reviewer: z.string().uuid().nullable(),
-    dependencies: z.array(z.string().uuid()),
+    dependencies: z.array(z.string().uuid()).max(MAX_TASK_REFERENCE_ARRAY_LENGTH),
     status: z.enum(['todo', 'in_progress', 'review', 'done']),
     priority: z.enum(['low', 'medium', 'high']),
   })

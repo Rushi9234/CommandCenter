@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authenticate } from '../../middleware/auth';
 import { asyncHandler } from '../../common/middleware/asyncHandler';
-import { validate } from '../../common/middleware/validate';
+import { validate, validateUuidParams } from '../../common/middleware/validate';
 import { requireAccess } from '../../common/middleware/requireAccess';
 import { requireTeamRoleIfSpecified, teamIdFromBody, teamIdFromQuery } from '../../common/middleware/requireTeamRole';
 import { goalsRepository } from './goals.repository';
@@ -40,12 +40,14 @@ router.get(
 router.get(
   '/goals/:goalId/progress',
   authenticate,
+  validateUuidParams('goalId'),
   requireAccess((req) => goalsRepository.canAccessGoal(req.user!.userId, req.params.goalId), 'Access denied to this goal'),
   asyncHandler(goalsController.getGoalProgress)
 );
 router.put(
   '/goals/:goalId',
   authenticate,
+  validateUuidParams('goalId'),
   requireAccess((req) => goalsRepository.canWriteGoal(req.user!.userId, req.params.goalId), 'Access denied to this goal'),
   validate(updateGoalSchema),
   asyncHandler(goalsController.updateGoal)
@@ -53,6 +55,7 @@ router.put(
 router.delete(
   '/goals/:goalId',
   authenticate,
+  validateUuidParams('goalId'),
   requireAccess((req) => goalsRepository.canWriteGoal(req.user!.userId, req.params.goalId), 'Access denied to this goal'),
   asyncHandler(goalsController.deleteGoal)
 );

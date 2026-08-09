@@ -1,5 +1,5 @@
 import { NextFunction, Request, Response } from 'express';
-import { ZodSchema } from 'zod';
+import { z, ZodSchema } from 'zod';
 import { BadRequestError } from '../errors';
 
 type Source = 'body' | 'query' | 'params';
@@ -22,4 +22,22 @@ export const validate = (schema: ZodSchema, source: Source = 'body') => {
     (req as any)[source] = result.data;
     next();
   };
+};
+
+// Milestone 40: every route with a `:teamId`/`:projectId`/`:goalId`/etc.
+// param passed it straight into a repository query with no validation at
+// all -- a malformed value (not UUID-shaped) reached Postgres and threw
+// 22P02, uncaught by anything upstream, all the way to the global error
+// handler as a generic 500 instead of the clean 400 a malformed client
+// input should produce. Reuses the exact same `validate` machinery
+// already used for body/query, just aimed at 'params' -- one small,
+// reusable middleware instead of a bespoke per-route check, and it runs
+// BEFORE any of the route's other middleware (requireTeamRole,
+// requireAccess, etc.), so a malformed ID never reaches a DB call at all.
+export const validateUuidParams = (...paramNames: string[]) => {
+  const shape: Record<string, ZodSchema> = {};
+  for (const name of paramNames) {
+    shape[name] = z.string().uuid(`Invalid ${name}`);
+  }
+  return validate(z.object(shape), 'params');
 };

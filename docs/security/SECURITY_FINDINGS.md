@@ -837,6 +837,199 @@ authorization decision behind it?*
 
 ---
 
+## 12. Untranslated database errors, unvalidated route-param UUIDs, and non-atomic multi-statement writes
+
+**Vulnerability class:** Three related but distinct gaps, all sharing the
+same symptom (an expected, nameable client mistake or transient failure
+producing a generic 500 instead of a clean 4xx, or a multi-statement write
+leaving inconsistent state behind):
+1. A repository INSERT/UPDATE/DELETE that can throw a specific, known
+   Postgres error code (unique violation, FK violation, invalid input
+   syntax) had no translation anywhere between it and the global error
+   handler.
+2. A route param used directly in a DB query (`:teamId`, `:goalId`,
+   `:taskId`, etc.) had no format validation at all — only body fields
+   ever got a Zod check.
+3. A service method that runs two or more sequential mutating statements
+   with no transaction between them, where the second statement failing
+   after the first committed leaves a real, reachable inconsistent state.
+
+**Root cause (database errors):** `errorHandler.ts` (Milestone 11) has
+always safely redacted anything that wasn't a hand-thrown `AppError` down
+to a generic `{ error: 'Internal server error' }` 500 — correct for
+preventing a leak, but it meant every *expected* constraint violation
+(a duplicate that raced past an application-level pre-check, a delete
+blocked by a still-referencing child row, a malformed UUID reaching a
+query with no earlier validation) surfaced identically to a genuinely
+unexpected server failure, with no clean 4xx and no way for a client to
+tell "you made a mistake" apart from "something broke." Each repository
+method would have needed its own try/catch to translate this, repeated at
+every call site, forever.
+
+**Root cause (route-param UUIDs):** `validate()` (Milestone 5) was always
+capable of validating `req.params` (it takes a `source` argument), but
+every actual call site only ever passed `'body'` or `'query'` — no route
+in the app validated its own path params before using them in a query.
+Every `:teamId`/`:projectId`/`:goalId`/`:blockerId`/`:taskId`/`:logId`/
+`:requestId`/`:inviteId`/`:userId` flowed straight from the URL into a
+repository call.
+
+**Root cause (createTeam/removeMember/leaveTeam atomicity):**
+`createTeam` ran the team INSERT and the owner-membership INSERT as two
+separate statements with no transaction, inherited unchanged from the
+original controller-era code; `removeMember`/`leaveTeam`'s stale-invite
+revocation (Milestone 39) was added as a second, separate call *after*
+the membership mutation rather than folded into the same atomic
+operation, since Milestone 39 was scoped to closing the staleness gap
+itself, not to re-auditing atomicity of the code that called it.
+
+**Fix pattern — database error translation:** A single, narrow
+code → `AppError` table added directly inside `errorHandler.ts`
+(`translatePgError`), consulted only for errors that aren't already an
+`AppError`. Deliberately narrow — only the three codes this project has
+a confirmed, reachable case for (`23505` unique violation → `ConflictError`,
+`23503` FK violation → `ConflictError`, `22P02` invalid UUID syntax →
+`BadRequestError`) are translated; anything else (or no `.code` at all)
+still falls through to the generic 500 unchanged. This is the *one* place
+every thrown error already funnels through, so it closes the whole class
+at once instead of needing a bespoke try/catch at every repository call
+site — the same "fix it at the one choke point, not at N call sites"
+reasoning as [Section 6](#6-unthrottled-sensitive-endpoints-rate-limit-coverage-gaps)'s
+reused-abstraction principle, just applied to error handling instead of
+rate limiting. The message returned to the client is always the
+hand-written, generic `AppError` message — never the raw Postgres error's
+own `.message`, which can embed the table/column/constraint name; the
+original error's code and message are still logged server-side for
+debugging, exactly as an untranslated error already was.
+
+**Fix pattern — route-param UUID validation:** A new `validateUuidParams(
+...paramNames)` helper in `validate.ts`, built on the *existing*
+`validate()` machinery pointed at `'params'` instead of `'body'`/`'query'`
+— no new validation concept, just the same one aimed at a source it had
+never been used against. Applied as the first middleware after
+`authenticate` on every route with a UUID path param (before
+`requireTeamRole`/`requireAccess`/any other DB-touching middleware), so a
+malformed ID is rejected with a clean 400 before any query runs at all —
+closing the gap at the earliest possible point, not relying on the
+database-error-translation fix above as the only backstop (that fix still
+covers a route this pass missed, or a UUID arriving some other way, but
+route params should never need to reach the database to be validated).
+
+**Fix pattern — deleteGoal FK violation, specifically:** Deliberately
+*not* changed to `ON DELETE CASCADE` and *not* given an app-level
+pre-check-then-delete — "reject a delete that would orphan children" is
+the correct product invariant (the same shape as `removeMember`/
+`leaveTeam` refusing to violate the owner-hierarchy invariant), so the
+existing `RESTRICT`-by-default foreign key is left exactly as it was; the
+fix is entirely the generic database-error-translation layer turning its
+`23503` into a clean 409 instead of a 500. No new code was added to
+`goals.repository.ts`/`goals.service.ts` beyond a comment — this is the
+translation layer doing its job, not a special case.
+
+**Fix pattern — createTeam atomicity:** The team INSERT and the owner-
+membership INSERT now run inside one `withTransaction` block (same
+mechanism as `acceptInvite`/`approveJoinRequest`/password reset) — if the
+second statement fails after the first committed, both roll back
+together, so a team can never exist with zero members. Proven with the
+same technique Milestone 38 established for password-reset atomicity:
+reproduce the exact statement sequence inside a raw `withTransaction`
+call, throw between the two statements, and assert the first one's effect
+was rolled back — this proves the *mechanism* directly rather than trying
+to force a real network failure mid-transaction.
+
+**Fix pattern — removeMember/leaveTeam atomicity:** New repository
+methods (`removeMemberAndInvalidateInvites`, `leaveTeamAndInvalidateInvites`)
+fold the membership-ending mutation and the stale-invite revocation
+(Milestone 39) into one transaction each, closing the narrow window where
+a transient failure between the two separate calls would leave a
+departing member's invite still `pending` and silently re-usable — a
+smaller instance of the exact staleness gap Milestone 39 closed for the
+common path, just reachable only on a genuine partial failure rather than
+every time.
+
+**Duplicate invite/join-request — investigated, and genuinely fixed (not
+deferred):** Unlike the FK-violation case above, this one warranted an
+actual schema change. Before writing a migration, the live dev and test
+databases were queried directly for existing duplicate pending rows
+(zero found in either) — the same "verify before constraining" discipline
+Milestone 24's `daily_logs` unique-constraint migration established,
+reused here rather than assumed. A partial unique index — `(team_id,
+email) WHERE status = 'pending'` for `team_invites`, `(team_id, user_id)
+WHERE status = 'pending'` for `join_requests` — allows unlimited
+*historical* (accepted/rejected/revoked) rows to repeat (a legitimate
+product case: leave and be re-invited later) while permitting at most one
+*open* invite/request at a time. `createInvite`/`createJoinRequest` now
+use `ON CONFLICT ... DO NOTHING`, matching the exact `ON CONFLICT`-on-a-
+partial-unique-index pattern; the service layer turns a "no row returned"
+result into a clean `ConflictError` (409) instead of a silent no-op that
+would otherwise look like success while sending no email or leaving the
+caller unsure whether their request registered.
+
+**authController.ts error redaction — a related, independently-found
+gap:** While auditing every path an unexpected error could reach the
+client through (Phase 9 of this milestone's audit, not the database-error
+work above), three legacy controller methods (`verifyEmail`, `refresh`,
+`resetPassword`) were found to have their own local `try/catch` that
+returned `error.message` unconditionally — bypassing `errorHandler.ts`'s
+redaction entirely for any error without a `.status` (i.e. anything
+*not* a hand-thrown `AppError`). Every other controller in the codebase
+uses `asyncHandler` + `next(err)` with no local catch, or (like `register`/
+`login`) already gated the message correctly (`error.status ? error.message
+: 'safe fallback'`) — these three were simply missed when that pattern was
+established. Fixed by applying the identical gate.
+
+**Input-boundary hardening — array lengths and AI text lengths:**
+`contributors`/`dependencies` (tasks) and `affected_tasks` (blockers) had
+UUID-*format* validation (Milestone 35/39) but no length cap — a client
+could submit an array of thousands of entries, which `tasksExistInProject`
+runs through `ANY($1)` on every create/update. Capped at 50 (comfortably
+above any legitimate team/task size in this product's model). Free-text
+fields that feed directly into an AI provider prompt with no bound at all
+(`analyzeProjectSchema.description`/`.requirements`, `chatSchema.message`/
+`.context`) are now capped at 5000, matching the bound `logEntrySchema.entryText`
+already established. **Deliberately NOT done:** pagination on unbounded
+list endpoints (`getUserTeams`, `getUserProjects`, `getTeamMembers`, etc.)
+— a real gap, but a materially larger, cross-cutting change (every list
+endpoint, plus its frontend caller) than this milestone's scope; recorded
+as a deferred finding, not silently dropped.
+
+**`permissions: z.any()` — re-verified, still deferred:** Re-checked
+against current code (not assumed from Milestone 35's original review):
+no code path anywhere reads a specific key out of this JSON blob for an
+authorization decision, so there is still no real shape to constrain it
+to. Separately verified (new test, this milestone) that even with a
+fully unconstrained body, `updateMemberPermissions` cannot be used to
+escalate privilege — `permissions` is its own JSONB column, entirely
+independent of `team_members.role`; sending `{ role: 'owner' }` *inside*
+the permissions object has no effect on the actual role column. The
+deferral is about "no established schema to validate against," not "this
+field is a live authorization bypass."
+
+**Reusable checklist question:** *(a) For every repository method that
+runs an INSERT/UPDATE/DELETE: could it throw a unique violation, FK
+violation, or invalid-input-syntax error that's currently uncaught? If a
+project-wide error handler already exists, translate the small, known set
+of codes there once rather than per call site. (b) For every route
+parameter used in a DB query: is it validated for format BEFORE any
+handler runs, the same way body/query fields already are — not just
+relying on the database itself to reject a bad value? (c) For every
+service method with 2+ sequential mutating statements: if statement 2
+fails after statement 1 commits, is there a reachable state a client or
+admin would see as broken (an orphaned parent, a silently-unrevoked
+grant)? If yes, wrap them in the project's existing transaction helper —
+but prove the failure window is real before adding one. (d) Before adding
+ANY unique constraint: query the actual data for existing duplicates
+first, and scope the constraint as narrowly as the real invariant allows
+(a partial index on the "still open" state, not the whole table) so
+legitimate historical repeats aren't blocked. (e) For every controller
+method: does it have its own local catch that could echo an error's raw
+`.message` for a case with no `.status` — bypassing the global handler's
+redaction? A codebase-wide grep for `catch` in controllers, checked
+against the global handler's own redaction rule, catches this in one
+pass.*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —

@@ -54,7 +54,13 @@ export const verifyEmail = async (req: Request, res: Response) => {
       data: { user: session.user, token: session.token },
     });
   } catch (error: any) {
-    res.status(error.status || 400).json({ error: error.message || 'Verification failed' });
+    // Milestone 40: was `error.message || 'Verification failed'` -- an
+    // unexpected (non-AppError) failure has no `.status` but still has a
+    // `.message`, so it was echoed straight to the client, bypassing the
+    // global error handler's redaction (errorHandler.ts never does this).
+    // Same gated pattern register/login already use: only a KNOWN
+    // (status-carrying) error's own message is safe to show.
+    res.status(error.status || 400).json({ error: error.status ? error.message : 'Verification failed' });
   }
 };
 
@@ -102,8 +108,10 @@ export const refresh = async (req: Request, res: Response) => {
       data: { accessToken: session.accessToken, expiresIn: ACCESS_TOKEN_TTL_SECONDS },
     });
   } catch (error: any) {
+    // Milestone 40: same fix as verifyEmail/resetPassword below -- an
+    // unexpected error's raw `.message` must never reach the client.
     clearSessionCookies(res);
-    res.status(error.status || 401).json({ error: error.message || 'Failed to refresh token' });
+    res.status(error.status || 401).json({ error: error.status ? error.message : 'Failed to refresh token' });
   }
 };
 
@@ -138,6 +146,7 @@ export const resetPassword = async (req: Request, res: Response) => {
     await authService.resetPassword(req.body.token, req.body.newPassword);
     res.json({ success: true, message: 'Password reset successfully. Please log in again.' });
   } catch (error: any) {
-    res.status(error.status || 400).json({ error: error.message || 'Failed to reset password' });
+    // Milestone 40: same fix as verifyEmail/refresh above.
+    res.status(error.status || 400).json({ error: error.status ? error.message : 'Failed to reset password' });
   }
 };

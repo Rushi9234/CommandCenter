@@ -31,6 +31,17 @@ export class AuthRepository {
     return queryOne<any>('SELECT * FROM users WHERE email = $1', [email]);
   }
 
+  // Milestone 40: register()'s pre-check only ever looked up email, never
+  // username -- both columns carry their own UNIQUE constraint
+  // (database/schema.sql), so a duplicate USERNAME with a brand-new email
+  // was never caught by application code at all and hit the raw 23505
+  // unique-violation straight from createUser's INSERT, previously
+  // uncaught -> generic 500 (not a race, a plain, always-reproducible
+  // bug). See auth.service.ts's register() for the actual check.
+  async getUserByUsername(username: string) {
+    return queryOne<any>('SELECT * FROM users WHERE username = $1', [username]);
+  }
+
   async getUserById(userId: string) {
     return queryOne<any>('SELECT * FROM users WHERE user_id = $1', [userId]);
   }

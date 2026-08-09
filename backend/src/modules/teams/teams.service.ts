@@ -1,7 +1,7 @@
 import { teamsRepository } from './teams.repository';
 import { usersRepository } from '../users/users.repository';
 import { sendTeamInviteEmail } from '../../services/emailService';
-import { ForbiddenError, NotFoundError, BadRequestError } from '../../common/errors';
+import { ForbiddenError, NotFoundError, BadRequestError, ConflictError } from '../../common/errors';
 
 export class TeamsService {
   createTeam(userId: string, body: any) {
@@ -73,10 +73,21 @@ export class TeamsService {
   // Milestone 36: same TOCTOU fix as addMember above -- removeTeamMemberIfAuthorized
   // re-checks the target's role as part of the same atomic DELETE, closing
   // the gap between the old separate read and the old separate delete.
+  // Milestone 40: the removal delete and the stale-invite revocation now
+  // run in one transaction (teamsRepository.removeMemberAndInvalidateInvites)
+  // instead of two separate calls -- see that method's comment for the
+  // partial-failure window this closes. The target's email is looked up
+  // first (a plain read, no side effect) only so it's available to pass
+  // into the transaction; when the target user row itself doesn't exist
+  // (a stale/foreign ID), there's no email to revoke invites for and the
+  // plain conditional delete alone is both correct and sufficient, same
+  // as it was before this milestone.
   async removeMember(teamId: string, targetUserId: string, requesterRole: string) {
-    const removed = await teamsRepository.removeTeamMemberIfAuthorized(teamId, targetUserId, requesterRole);
+    const targetUser = await usersRepository.getUserById(targetUserId);
+    const removed = targetUser
+      ? await teamsRepository.removeMemberAndInvalidateInvites(teamId, targetUserId, requesterRole, targetUser.email)
+      : await teamsRepository.removeTeamMemberIfAuthorized(teamId, targetUserId, requesterRole);
     if (removed) {
-      await this.invalidateStaleInvites(teamId, targetUserId);
       return;
     }
 
@@ -124,8 +135,18 @@ export class TeamsService {
       throw new NotFoundError('Team not found');
     }
 
-    const inviter = await usersRepository.getUserById(userId);
     const invite = await teamsRepository.createInvite(teamId, email, userId);
+    if (!invite) {
+      // Milestone 40: createInvite's ON CONFLICT DO NOTHING (backed by the
+      // new partial unique index) returns no row when a pending invite for
+      // this exact team+email already exists -- surfaced as a clean 409
+      // rather than silently no-op-ing (which would otherwise look like
+      // success while sending no email) or letting a duplicate row and a
+      // duplicate email both go out.
+      throw new ConflictError('An invite is already pending for this email on this team');
+    }
+
+    const inviter = await usersRepository.getUserById(userId);
     await sendTeamInviteEmail(email, team.team_name, inviter?.full_name || 'Team Member');
 
     return invite;
@@ -204,8 +225,16 @@ export class TeamsService {
     );
   }
 
-  requestJoin(teamId: string, userId: string) {
-    return teamsRepository.createJoinRequest(teamId, userId);
+  // Milestone 40: same fix as inviteMember above -- createJoinRequest's
+  // ON CONFLICT DO NOTHING returns no row when this caller already has a
+  // pending join request for this team, surfaced as a clean 409 instead
+  // of a silent no-op or a duplicate row an admin would see twice.
+  async requestJoin(teamId: string, userId: string) {
+    const joinRequest = await teamsRepository.createJoinRequest(teamId, userId);
+    if (!joinRequest) {
+      throw new ConflictError('A join request is already pending for this team');
+    }
+    return joinRequest;
   }
 
   async getJoinRequests(teamId: string) {
@@ -232,25 +261,19 @@ export class TeamsService {
     await teamsRepository.rejectJoinRequest(requestId);
   }
 
+  // Milestone 40: same atomicity fix as removeMember above -- the leave
+  // delete and the stale-invite revocation are now one transaction
+  // (teamsRepository.leaveTeamAndInvalidateInvites).
   async leaveTeam(teamId: string, userId: string) {
     const role = await teamsRepository.getMemberRole(userId, teamId);
     if (role === 'owner') {
       throw new ForbiddenError('The team owner cannot leave the team');
     }
-    await teamsRepository.removeTeamMember(teamId, userId);
-    await this.invalidateStaleInvites(teamId, userId);
-  }
-
-  // Milestone 39: shared by removeMember/leaveTeam -- whenever a user's
-  // membership on this team ends, any still-pending invite issued to
-  // their email for the SAME team is revoked too, so they can't silently
-  // walk back in through an old invite link with no fresh owner/admin
-  // approval. See teamsRepository.invalidatePendingInvites for the exact
-  // scenario this closes.
-  private async invalidateStaleInvites(teamId: string, userId: string) {
     const user = await usersRepository.getUserById(userId);
     if (user) {
-      await teamsRepository.invalidatePendingInvites(teamId, user.email);
+      await teamsRepository.leaveTeamAndInvalidateInvites(teamId, userId, user.email);
+    } else {
+      await teamsRepository.removeTeamMember(teamId, userId);
     }
   }
 

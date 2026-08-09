@@ -183,6 +183,13 @@ CREATE TABLE join_requests (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Milestone 40 (backend/migrations/1786251838274_add-pending-invite-join-request-unique-index.sql):
+-- partial unique indexes so at most one PENDING invite/join-request can
+-- exist per (team, email)/(team, user) at a time -- historical
+-- accepted/rejected/revoked rows are unconstrained and can repeat.
+CREATE UNIQUE INDEX idx_team_invites_pending_unique ON team_invites (team_id, email) WHERE status = 'pending';
+CREATE UNIQUE INDEX idx_join_requests_pending_unique ON join_requests (team_id, user_id) WHERE status = 'pending';
+
 -- Indexes for performance
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_users_username ON users(username);

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authenticate } from '../../middleware/auth';
 import { asyncHandler } from '../../common/middleware/asyncHandler';
-import { validate } from '../../common/middleware/validate';
+import { validate, validateUuidParams } from '../../common/middleware/validate';
 import { requireAccess } from '../../common/middleware/requireAccess';
 import { requireTeamRole, teamIdFromBody } from '../../common/middleware/requireTeamRole';
 import { blockersRepository } from './blockers.repository';
@@ -31,6 +31,7 @@ router.post(
 router.get(
   '/teams/:teamId/blockers',
   authenticate,
+  validateUuidParams('teamId'),
   requireAccess((req) => teamsRepository.canAccessTeam(req.user!.userId, req.params.teamId), 'Access denied to this team'),
   asyncHandler(blockersController.getTeamBlockers)
 );
@@ -41,6 +42,7 @@ router.get(
 router.put(
   '/blockers/:blockerId',
   authenticate,
+  validateUuidParams('blockerId'),
   requireAccess((req) => blockersRepository.canWriteBlocker(req.user!.userId, req.params.blockerId), 'Access denied to this blocker'),
   validate(updateBlockerSchema),
   asyncHandler(blockersController.updateBlocker)
@@ -48,6 +50,7 @@ router.put(
 router.post(
   '/blockers/:blockerId/messages',
   authenticate,
+  validateUuidParams('blockerId'),
   requireAccess((req) => blockersRepository.canWriteBlocker(req.user!.userId, req.params.blockerId), 'Access denied to this blocker'),
   validate(sendMessageSchema),
   asyncHandler(blockersController.sendMessage)
@@ -55,12 +58,14 @@ router.post(
 router.get(
   '/blockers/:blockerId/messages',
   authenticate,
+  validateUuidParams('blockerId'),
   requireAccess((req) => blockersRepository.canAccessBlocker(req.user!.userId, req.params.blockerId), 'Access denied to this blocker'),
   asyncHandler(blockersController.getMessages)
 );
 router.get(
   '/blockers/:blockerId/ai-advice',
   authenticate,
+  validateUuidParams('blockerId'),
   requireAccess((req) => blockersRepository.canAccessBlocker(req.user!.userId, req.params.blockerId), 'Access denied to this blocker'),
   asyncHandler(blockersController.getAIMentorAdvice)
 );

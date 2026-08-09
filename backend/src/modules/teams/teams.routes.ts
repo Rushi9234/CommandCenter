@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authenticate } from '../../middleware/auth';
 import { asyncHandler } from '../../common/middleware/asyncHandler';
-import { validate } from '../../common/middleware/validate';
+import { validate, validateUuidParams } from '../../common/middleware/validate';
 import {
   requireTeamRole,
   requireTeamRoleIfSpecified,
@@ -44,6 +44,7 @@ router.get('/teams/departments', authenticate, asyncHandler(teamsController.getD
 router.get(
   '/teams/:teamId/members',
   authenticate,
+  validateUuidParams('teamId'),
   requireTeamMembership(teamIdFromParams),
   asyncHandler(teamsController.getTeamMembers)
 );
@@ -58,7 +59,13 @@ router.get(
 // of) and deliberately doesn't apply here -- this endpoint answers "what
 // are THIS team's sub-teams," the same membership-gated shape as
 // /members, not "what teams can anyone discover."
-router.get('/teams/:teamId/sub-teams', authenticate, requireTeamMembership(teamIdFromParams), asyncHandler(teamsController.getSubTeams));
+router.get(
+  '/teams/:teamId/sub-teams',
+  authenticate,
+  validateUuidParams('teamId'),
+  requireTeamMembership(teamIdFromParams),
+  asyncHandler(teamsController.getSubTeams)
+);
 
 // Team-management actions: owner or admin only. Previously addMember had no
 // check at all; the rest replace the ad-hoc isTeamOwnerOrAdmin calls that
@@ -66,6 +73,7 @@ router.get('/teams/:teamId/sub-teams', authenticate, requireTeamMembership(teamI
 router.post(
   '/teams/:teamId/members',
   authenticate,
+  validateUuidParams('teamId'),
   requireTeamRole(teamIdFromParams, ['owner', 'admin']),
   validate(addMemberSchema),
   asyncHandler(teamsController.addMember)
@@ -73,22 +81,24 @@ router.post(
 router.post(
   '/teams/:teamId/invite',
   authenticate,
+  validateUuidParams('teamId'),
   requireTeamRole(teamIdFromParams, ['owner', 'admin']),
   validate(inviteMemberSchema),
   asyncHandler(teamsController.inviteMember)
 );
-router.post('/teams/:teamId/join', authenticate, asyncHandler(teamsController.requestJoin));
+router.post('/teams/:teamId/join', authenticate, validateUuidParams('teamId'), asyncHandler(teamsController.requestJoin));
 
 // Previously unprotected -- any authenticated user could view any team's
 // pending join requests or approve/reject them.
 router.get(
   '/teams/:teamId/join-requests',
   authenticate,
+  validateUuidParams('teamId'),
   requireTeamRole(teamIdFromParams, ['owner', 'admin']),
   asyncHandler(teamsController.getJoinRequests)
 );
 
-router.post('/teams/:teamId/leave', authenticate, asyncHandler(teamsController.leaveTeam));
+router.post('/teams/:teamId/leave', authenticate, validateUuidParams('teamId'), asyncHandler(teamsController.leaveTeam));
 // Milestone 35: if the caller names a parent_team_id, they must actually
 // have owner/admin access to THAT team too -- no check existed before,
 // so any team's owner/admin could re-parent their team under one they
@@ -97,6 +107,7 @@ router.post('/teams/:teamId/leave', authenticate, asyncHandler(teamsController.l
 router.put(
   '/teams/:teamId/settings',
   authenticate,
+  validateUuidParams('teamId'),
   requireTeamRole(teamIdFromParams, ['owner', 'admin']),
   validate(updateTeamSettingsSchema),
   requireTeamRoleIfSpecified(parentTeamIdFromBody, ['owner', 'admin']),
@@ -105,12 +116,14 @@ router.put(
 router.delete(
   '/teams/:teamId/members/:userId',
   authenticate,
+  validateUuidParams('teamId', 'userId'),
   requireTeamRole(teamIdFromParams, ['owner', 'admin']),
   asyncHandler(teamsController.removeMember)
 );
 router.put(
   '/teams/:teamId/members/:userId/role',
   authenticate,
+  validateUuidParams('teamId', 'userId'),
   requireTeamRole(teamIdFromParams, ['owner', 'admin']),
   validate(updateMemberRoleSchema),
   asyncHandler(teamsController.updateMemberRole)
@@ -118,6 +131,7 @@ router.put(
 router.put(
   '/teams/:teamId/members/:userId/permissions',
   authenticate,
+  validateUuidParams('teamId', 'userId'),
   requireTeamRole(teamIdFromParams, ['owner', 'admin']),
   validate(updateMemberPermissionsSchema),
   asyncHandler(teamsController.updateMemberPermissions)
@@ -128,18 +142,20 @@ router.put(
 router.post(
   '/join-requests/:requestId/approve',
   authenticate,
+  validateUuidParams('requestId'),
   requireTeamRole(teamIdFromJoinRequest, ['owner', 'admin']),
   asyncHandler(teamsController.approveJoinRequest)
 );
 router.post(
   '/join-requests/:requestId/reject',
   authenticate,
+  validateUuidParams('requestId'),
   requireTeamRole(teamIdFromJoinRequest, ['owner', 'admin']),
   asyncHandler(teamsController.rejectJoinRequest)
 );
 
 router.get('/invites/my', authenticate, asyncHandler(teamsController.getMyInvites));
-router.post('/invites/:inviteId/accept', authenticate, asyncHandler(teamsController.acceptInvite));
-router.post('/invites/:inviteId/reject', authenticate, asyncHandler(teamsController.rejectInvite));
+router.post('/invites/:inviteId/accept', authenticate, validateUuidParams('inviteId'), asyncHandler(teamsController.acceptInvite));
+router.post('/invites/:inviteId/reject', authenticate, validateUuidParams('inviteId'), asyncHandler(teamsController.rejectInvite));
 
 export default router;

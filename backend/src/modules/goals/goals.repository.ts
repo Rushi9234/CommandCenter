@@ -80,6 +80,21 @@ export class GoalsRepository {
     return queryOne(text, [goalId, ...built.values]);
   }
 
+  // Milestone 40: parent_goal_id (schema.sql) has no ON DELETE clause, so
+  // it defaults to RESTRICT -- deleting a goal that still has child goals
+  // (rows whose parent_goal_id points at it) throws a raw Postgres 23503
+  // foreign-key-violation. This was previously uncaught here and in
+  // goals.service.ts's deleteGoal, reaching the client as a generic 500.
+  // Deliberately NOT changed to CASCADE or to a pre-check-then-delete --
+  // "reject a delete that would orphan children" is the correct product
+  // behavior (matches how removeMember/leaveTeam already refuse to act
+  // when it would violate an invariant), so the fix is letting the
+  // database's own constraint keep doing exactly that, and translating
+  // the resulting 23503 into a clean 409 instead of a 500. See
+  // errorHandler.ts's Milestone 40 Postgres-error translation table --
+  // this is the same single choke point every other untranslated
+  // constraint violation in the app now goes through, not a special case
+  // added here.
   async deleteGoal(goalId: string) {
     const text = 'DELETE FROM goals WHERE goal_id = $1';
     return query(text, [goalId]);
