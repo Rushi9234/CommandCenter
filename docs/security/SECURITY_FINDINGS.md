@@ -1405,6 +1405,116 @@ prompted the audit?*
 
 ---
 
+## 16. Milestone 44 — fresh authorization/state-machine/transaction audit: three deferred findings resolved, no new findings
+
+**Context:** M41/M42/M43 each deferred a specific finding rather than fix
+it speculatively, in keeping with this project's own established
+discipline ("fix only confirmed issues"). M44 was a dedicated pass to
+either confirm each is genuinely unreachable (with concrete evidence) or
+find the specific exploit path that changes the assessment — plus a
+fresh, full-repository re-scan across authorization targets, state
+machines, capacity-style TOCTOU, and AI/rate-limit bypass paths. **No
+code changes resulted from this milestone** — every investigation
+concluded with either "already correctly mitigated" or "confirmed not
+exploitable, with a specific reason." This is itself a legitimate
+milestone outcome (the same shape as M31's audit-only pass) — an audit
+that finds nothing actionable is not a wasted audit, it's evidence the
+prior thirteen hardening milestones actually worked.
+
+**Finding 1 — 404-vs-403 enumeration inconsistency (deferred since M41):
+re-confirmed NOT exploitable.** `requireTeamRole`/`requireTeamMembership`
+(`common/middleware/requireTeamRole.ts`) return 404 for a nonexistent
+team vs. 403 for an existing-but-unauthorized one; `requireAccess`
+(`common/middleware/requireAccess.ts`) collapses both into a flat 403.
+This inconsistency is real and unchanged, but every primary key in
+`database/schema.sql` is `UUID PRIMARY KEY DEFAULT gen_random_uuid()` —
+random v4 UUIDs, ~122 bits of entropy, never sequential and never derived
+from any guessable input. To exploit the 404-vs-403 distinction, a caller
+needs a *candidate* ID to submit in the first place; the only realistic
+way to have one is to already possess a real ID (former membership, a
+leaked link), at which point the existence signal reveals nothing they
+didn't already know. **The invariant that makes this safe: ID
+unguessability, not response-code normalization.** Left unchanged
+deliberately — normalizing it would touch every `requireTeamRole`/
+`requireTeamMembership` call site in the app for a distinction that
+cannot be exploited given the actual ID space.
+
+**Finding 2 — `removeMemberAndInvalidateInvites`/`leaveTeamAndInvalidateInvites`
+email-read-then-transaction window (deferred since M40): re-confirmed
+NOT reachable.** The claimed race requires a user's email to change
+between the read and the transaction. A repository-wide search for any
+code path that can write `users.email` — every `UPDATABLE_COLUMNS`
+allowlist (`users.repository.ts`, `auth.repository.ts`), every route
+file — found **none**; `email` is not a client-settable column anywhere
+in the application, and no profile-edit/admin-edit/account-merge feature
+exists. **The invariant that makes this safe: the precondition for the
+race (an email that can change) has no code path to trigger it at all.**
+This is not "low probability," it is currently impossible given the
+product's actual feature set — re-confirm this conclusion if an
+email-change feature is ever added, since that would be the moment this
+residual becomes real.
+
+**Finding 3 — `max_team_size` bounded but unenforced (deferred since
+M42): re-confirmed as decorative metadata, deliberately not fixed.**
+`max_team_size` is written once at team creation (`teams.repository.ts`)
+and **never read** by `addMember`/`acceptInvite`/`approveJoinRequest` or
+any other membership-creation path — no capacity check exists anywhere.
+The frontend (`Teams.tsx`) collects the value on the create form and
+never displays it again (no "X/Y members" indicator, no capacity gate).
+This is, functionally, a second live instance of [Section 1](#1-persisted-but-unenforced-settings)'s
+exact vulnerability class ("a setting round-trips correctly but nothing
+in the codebase enforces it") — except here there is no evidence *any*
+enforcement was ever intended: no code comment, no partial
+implementation, no UI hint anywhere across 43 milestones of this
+project's history. **Deliberately NOT implemented as a real capacity
+limit this milestone** — doing so now would mean inventing new product
+behavior with no basis in the existing design, the same reasoning
+already applied to `permissions: z.any()` (§12) and `blockers.affected_tasks`
+before its M43 fix (which *did* have an established sibling pattern to
+match; this field has none). If team capacity is ever meant to become a
+real constraint, the correct fix is an atomic conditional INSERT —
+`INSERT INTO team_members ... SELECT ... WHERE (SELECT COUNT(*) FROM
+team_members WHERE team_id = $1) < (SELECT max_team_size FROM teams
+WHERE team_id = $1)` or equivalent — never a `COUNT(*)` read followed by
+a separate conditional `INSERT`, which would reopen exactly the TOCTOU
+class M36/M39/M40 spent several milestones closing elsewhere. Recorded
+here as the fix pattern to use *if and when* this becomes a real
+requirement, not implemented speculatively now.
+
+**Fresh full-repo re-scans (authorization-target-vs-mutation-target,
+state-machine, capacity-TOCTOU, AI/rate-limit bypass) — no new findings.**
+Every mutating route's authorization check resolves the same ID the
+controller/service actually mutates (no route found where `req.params`
+authorizes one resource while a different `req.body` ID is what gets
+written). `updateMemberPermissions` re-confirmed inert — no code path
+anywhere reads `team_members.permissions` for an authorization decision
+(re-verified after M40 and M42's prior confirmations, still true). Every
+status-transition method for every stateful resource (`users.is_verified`,
+`refresh_tokens.revoked_at`, verification/reset token lookups,
+team_invites/join_requests post-M43) either has no un-transition path at
+all or is already correctly guarded. No capacity-style `COUNT(*)`-then-
+`INSERT` pattern exists anywhere outside the (unenforced, see Finding 3)
+`max_team_size` field. Every AI-provider function (`generateMentorAdvice`,
+`generateLogSuggestions`, `generateProductivityInsights`, `generateStandup`,
+`analyzeProjectWithAI`, the `/api/ai/chat` handler) has exactly one
+service caller, one controller caller, and one already-rate-limited
+route — no alternate/unrated path exists.
+
+**Reusable checklist question:** *When a finding is deferred rather than
+fixed, what specific, falsifiable condition would need to become true
+for it to turn into a real exploit (a new endpoint, a changed invariant,
+a new caller)? Write that condition down explicitly (not just "low
+severity") so a future audit doesn't need to re-derive it from scratch —
+and re-check that exact condition, not the finding's general shape, the
+next time the relevant code area changes. For any persisted setting/field
+with an obvious real-world meaning (a "max size," a "limit," a
+"capacity"): does ANYTHING in the codebase actually enforce it, or does
+it just round-trip? A field name implying a constraint is not evidence
+the constraint exists — verify by reading every write path AND grepping
+for every read of the same column.*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —
