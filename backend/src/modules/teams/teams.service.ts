@@ -120,10 +120,6 @@ export class TeamsService {
     // behavior: a no-op update on a nonexistent row succeeds silently).
   }
 
-  getAllUsers() {
-    return usersRepository.getAllUsers();
-  }
-
   // Milestone 5: the base "is the caller owner/admin" gate moved to
   // requireTeamRole. Membership lookup for that gate already proves the
   // caller is an admin/owner, so the manual re-check that used to live

@@ -5,12 +5,12 @@ import { validate, validateUuidParams } from '../../common/middleware/validate';
 import { requireAccess } from '../../common/middleware/requireAccess';
 import { logsRepository } from './logs.repository';
 import * as logsController from './logs.controller';
-import { logEntrySchema } from './logs.dto';
+import { logEntrySchema, getMyLogsQuerySchema } from './logs.dto';
 
 const router = Router();
 
 router.post('/logs', authenticate, validate(logEntrySchema), asyncHandler(logsController.createLog));
-router.get('/logs/my', authenticate, asyncHandler(logsController.getMyLogs));
+router.get('/logs/my', authenticate, validate(getMyLogsQuerySchema, 'query'), asyncHandler(logsController.getMyLogs));
 router.get('/logs/suggestions', authenticate, asyncHandler(logsController.getSuggestions));
 router.get('/logs/insights', authenticate, asyncHandler(logsController.getInsights));
 router.get('/logs/standup', authenticate, asyncHandler(logsController.getStandup));

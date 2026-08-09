@@ -1030,6 +1030,154 @@ pass.*
 
 ---
 
+## 13. Read-side authorization, cross-team data exposure, and collection scope
+
+**Vulnerability class:** A collection/list endpoint returns rows from a
+table with no `WHERE` clause scoping the result to the caller's own
+teams/resources — every other read endpoint in the codebase is scoped to
+"my teams," "this team's members," "this project's tasks," etc., but one
+endpoint (`GET /users`) had no scoping concept applied to it at all,
+making it the one place a plain `authenticate`-only check quietly stood
+in for a real authorization boundary.
+
+**Root cause:** `GET /users`'s repository method (`usersRepository.getAllUsers`)
+was a straight `SELECT ... FROM users` with no join back to `team_members`
+— written once, early, and never revisited as every *other* collection
+endpoint in the app grew its own team/ownership scoping over milestones
+5–39. It has **zero frontend consumer** (confirmed by grep across
+`frontend/src` — `api.ts`'s `getAllUsers` is defined but never called by
+any page/component), so the gap was never surfaced by exercising the UI.
+
+**Distinguishing a real gap from a deliberately global feature:**
+`GET /leaderboard` (audited the same way this milestone) is **also**
+global/org-wide — no team scoping, no team_id in the response — but this
+is a *confirmed, deliberate* design, not an oversight: `leaderboard.service.ts`'s
+own comment documents that `team_id` has been `undefined` since the
+original implementation ("`getAllUsers()` never selected `users.team_id`"),
+and the frontend (`Grid.tsx`, `ExecutiveBrief.tsx`) computes the caller's
+*rank* by finding their position in the **full, unpaginated, all-teams**
+array — a company-wide leaderboard is the actual product feature, not a
+data-exposure bug. The two endpoints looked identical from the outside
+(global, authenticate-only, no team filter) but required opposite
+conclusions once traced to their actual product intent and frontend
+usage — the lesson isn't "global = bad," it's "trace to the real product
+intent before concluding either way."
+
+**Fields exposed, and why this matters even with a safe column list:**
+`GET /users`'s column list was already a hand-written allowlist (`user_id,
+username, full_name, email, role, impact_score, streak_count, total_logs`)
+— no credential/token column was ever at risk. The actual exposure was
+**`email`, organization-wide**, to any authenticated user regardless of
+team membership — a real PII leak under this app's own team-based privacy
+model (every other resource requires shared team membership to be
+visible), just via a safe-looking column list rather than a raw-row
+spread. This is the same lesson as [Section 5](#5-raw-database-errors-reaching-the-client-as-generic-500s)'s
+sibling classes: a column allowlist prevents the *credential-leak* shape
+of bug, but says nothing about whether the *rows themselves* are scoped
+correctly.
+
+**Fix pattern:** Scoped `getAllUsers` to "shares at least one team with
+the caller" — the exact same invariant every other list endpoint already
+uses, not a new authorization concept:
+```sql
+SELECT DISTINCT u.user_id, u.username, u.full_name, u.email, u.role,
+       u.impact_score, u.streak_count, u.total_logs, u.created_at
+FROM users u
+INNER JOIN team_members tm ON u.user_id = tm.user_id
+WHERE tm.team_id IN (SELECT team_id FROM team_members WHERE user_id = $1)
+ORDER BY u.created_at DESC
+```
+A caller with no team at all now sees zero users (not even themselves,
+since the join has nothing to match) — correct, since "share a team with"
+is vacuously false with no teams to share. `created_at` is required in
+the `SELECT` list by Postgres's `SELECT DISTINCT ... ORDER BY` rule but
+was never part of the original response shape — stripped in the service
+layer before the response is built, so the client-visible contract is
+unchanged for every field that already existed.
+
+**Alternate-route check:** `teamsService.getAllUsers()` called the exact
+same `usersRepository.getAllUsers()` but had **zero route/controller
+wiring anywhere** (confirmed by grep) — dead code, not a live bypass.
+Removed rather than updated in place, since keeping an unused duplicate
+of a just-fixed method around is how the next author accidentally
+reintroduces the same bug by "fixing" the wrong one.
+
+**`GET /logs/my`'s `?limit=` — a related but distinct input-validation
+gap, not an authorization gap:** The only place in the codebase where a
+client-supplied query parameter reached a real SQL `LIMIT` was `parseInt(req.query.limit)
+|| 30` — no upper bound, and a negative value (`parseInt('-1')` = `-1`,
+truthy, so the `|| 30` fallback never triggers) reached Postgres directly,
+which rejects a negative `LIMIT` and previously surfaced as an
+untranslated 500 (would now be caught as a generic 500 still, since `LIMIT`
+syntax errors aren't one of Milestone 40's three translated codes). Not a
+cross-user exposure (`WHERE user_id = $1` elsewhere in the same query
+already scopes it to the caller's own logs) — purely an unbounded/
+unvalidated-input gap. Fixed with a Zod query schema (`getMyLogsQuerySchema`,
+`z.coerce.number().int().min(1).max(100).optional().default(30)`), applied
+via the same `validate(schema, 'query')` middleware every other validated
+query param already uses.
+
+**Reviewed and confirmed NOT vulnerabilities (documented per this
+milestone's own instruction not to silently drop a reviewed-but-rejected
+finding):**
+- **`GET /leaderboard`'s global scope** — deliberate, as detailed above.
+  Also confirmed: hidden (`leaderboard_visible=false`) users cannot leak
+  via rank/position/count (removed from the array entirely before
+  sorting, not replaced with a placeholder — a gap in the sequence
+  carries no signal), and the `leaderboard_visible` field itself is
+  stripped from every returned row (pre-existing M32 behavior,
+  re-verified). Adding pagination here would break the frontend's
+  existing full-array rank computation (`Grid.tsx`/`ExecutiveBrief.tsx`) —
+  not attempted.
+- **`GET /projects/:projectId/details`'s `access_denied: true` partial-
+  disclosure pattern** — a caller with no access to a real project still
+  gets `200` with `{project_name, status, priority, is_public,
+  access_denied: true, message: 'Request access from team admin...'}`.
+  Confirmed deliberate (the message text itself instructs the recipient
+  to request access) and low-sensitivity (no field disclosed is
+  itself private data) — this is the only endpoint in the codebase with
+  this exact shape; every other `requireAccess`-gated endpoint returns a
+  flat 403 with no data. Left as-is — a genuine, singular product design
+  choice, not a bug to normalize away.
+- **404-vs-403 inconsistency between `requireTeamRole`/`requireTeamMembership`
+  (404 `'Team not found'` for a nonexistent ID, 403 `'Not a member'` for
+  an existing one) and `requireAccess`-gated routes (flat 403 for both
+  cases, no existence signal)** — a real, evidence-based inconsistency in
+  the codebase's enumeration posture, but low severity (team/resource IDs
+  are random UUIDs, not sequential or guessable) and normalizing it would
+  touch the 404 branch of every `requireTeamRole`/`requireTeamMembership`
+  call site with no demonstrated abuse case. Documented rather than fixed
+  this milestone — a candidate for a future pass if `requireTeamRole` is
+  ever touched for another reason.
+- **`GET /teams`/`GET /teams/search`/`GET /projects/public` (discovery
+  features, `is_public AND is_discoverable`)** — unbounded like `GET /users`
+  was, but this is the *intended* shape of a "browse public resources"
+  feature (see [Section 9](#9-hierarchicalrelationship-resource-authorization-at-read-boundaries)'s
+  discovery-vs-hierarchy distinction) — not paginated this milestone since
+  no demonstrated scale problem exists and pagination was explicitly
+  scoped to "confirmed" issues, not applied preemptively everywhere an
+  endpoint happens to be unbounded.
+
+**Reusable checklist question:** *For every collection/list endpoint,
+name the invariant that bounds its result set ("my own teams," "this
+team's members," "public+discoverable resources") — if the only answer
+is "whatever `authenticate` lets through," that's this class of bug. A
+safe, hand-written column allowlist (no credential/token fields) is
+necessary but NOT sufficient — the rows themselves must also be scoped;
+check both independently. Before concluding a global (non-team-scoped)
+endpoint is a bug, trace its actual frontend usage and any code comments
+describing its history — a genuinely global feature (a company-wide
+leaderboard, a public directory) looks identical to an oversight from the
+route/controller alone, and the two require opposite fixes. For any
+client-controlled numeric query parameter reaching a SQL `LIMIT`/`OFFSET`,
+confirm it's validated (reject negative/NaN, cap a maximum) via the same
+schema-validation middleware already used for body params — an
+unvalidated number reaching raw SQL is an availability/error-boundary
+gap even when the query itself is already correctly scoped to the
+caller.*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —

@@ -9,7 +9,7 @@ export const createLog = async (req: AuthRequest, res: Response) => {
 };
 
 export const getMyLogs = async (req: AuthRequest, res: Response) => {
-  const limit = parseInt(req.query.limit as string) || 30;
+  const limit = (req.query as any).limit as number;
   const logs = await logsService.getUserLogs(req.user!.userId, limit);
   ok(res, logs);
 };
