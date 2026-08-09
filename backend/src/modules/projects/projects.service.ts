@@ -143,39 +143,52 @@ export class ProjectsService {
     });
   }
 
+  // Milestone 42: used to fetch each task's owner/reviewer/contributors/
+  // dependencies with its own per-ID SELECT inside a per-task Promise.all
+  // -- for a project with N tasks (nothing caps N) each carrying up to 50
+  // contributors + 50 dependencies (M40's per-task cap), that's up to
+  // ~102N DB round trips for one GET. Any team member with ordinary write
+  // access could create many tasks and turn every subsequent read of the
+  // list into an increasingly expensive query, with no cap on N to stop
+  // it. Replaced with exactly two bulk ANY($1) queries (all referenced
+  // users, all referenced tasks) regardless of how many tasks/references
+  // exist, then joined in memory -- same output shape, O(1) round trips
+  // instead of O(N).
   async getProjectTasks(projectId: string) {
     const tasks = await tasksRepository.getProjectTasks(projectId);
 
-    return Promise.all(
-      tasks.map(async (task: any) => {
-        const ownerUser = task.owner ? await usersRepository.getUserById(task.owner) : null;
-        const contributorUsers = await Promise.all(
-          task.contributors.map(async (id: string) => {
-            const user = await usersRepository.getUserById(id);
-            return user ? { user_id: user.user_id, username: user.username, full_name: user.full_name } : null;
-          })
-        );
-        const reviewerUser = task.reviewer ? await usersRepository.getUserById(task.reviewer) : null;
-        const dependencyTasks = await Promise.all(
-          task.dependencies.map(async (id: string) => {
-            const depTask = await tasksRepository.getTask(id);
-            return depTask ? { task_id: depTask.task_id, title: depTask.title, status: depTask.status } : null;
-          })
-        );
+    const userIds = new Set<string>();
+    const dependencyIds = new Set<string>();
+    for (const task of tasks) {
+      if (task.owner) userIds.add(task.owner);
+      if (task.reviewer) userIds.add(task.reviewer);
+      for (const id of task.contributors) userIds.add(id);
+      for (const id of task.dependencies) dependencyIds.add(id);
+    }
 
-        return {
-          ...task,
-          owner_user: ownerUser
-            ? { user_id: ownerUser.user_id, username: ownerUser.username, full_name: ownerUser.full_name }
-            : null,
-          contributor_users: contributorUsers.filter((u) => u !== null),
-          reviewer_user: reviewerUser
-            ? { user_id: reviewerUser.user_id, username: reviewerUser.username, full_name: reviewerUser.full_name }
-            : null,
-          dependency_tasks: dependencyTasks.filter((t) => t !== null),
-        };
-      })
-    );
+    const [users, dependencyTasks] = await Promise.all([
+      usersRepository.getUsersByIds(Array.from(userIds)),
+      tasksRepository.getTasksByIds(Array.from(dependencyIds)),
+    ]);
+
+    const userById = new Map(users.map((u: any) => [u.user_id, u]));
+    const taskById = new Map(dependencyTasks.map((t: any) => [t.task_id, t]));
+
+    const toPublicUser = (id: string | null) => {
+      const user = id ? userById.get(id) : null;
+      return user ? { user_id: user.user_id, username: user.username, full_name: user.full_name } : null;
+    };
+
+    return tasks.map((task: any) => ({
+      ...task,
+      owner_user: toPublicUser(task.owner),
+      contributor_users: task.contributors.map(toPublicUser).filter((u: any) => u !== null),
+      reviewer_user: toPublicUser(task.reviewer),
+      dependency_tasks: task.dependencies
+        .map((id: string) => taskById.get(id))
+        .filter((t: any) => t !== undefined)
+        .map((t: any) => ({ task_id: t.task_id, title: t.title, status: t.status })),
+    }));
   }
 
   // Milestone 5: base gate (requireAccess + tasksRepository.canAccessTask)

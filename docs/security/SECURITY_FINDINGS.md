@@ -1178,6 +1178,128 @@ caller.*
 
 ---
 
+## 14. Missing destination-authorization on CREATE paths, unrated repeatable AI reads, and N+1 query amplification
+
+**Vulnerability class 1 — the M29/M30/M35 cross-reference-authorization
+class, recurring a fourth and fifth time, specifically on CREATE (not
+UPDATE) paths:** `POST /teams` and `POST /goals` each accept a client-
+supplied reference to a destination resource (`parentTeamId`/
+`parentGoalId`) that gets linked at creation time, with no check that the
+caller has any access to that destination — while the *update* path for
+the exact same field (`PUT /teams/:teamId/settings`'s `parent_team_id`,
+`PUT /goals/:goalId`'s `parent_goal_id`) already had the correct
+destination-authorization check, added in M35 and M30 respectively.
+
+**Root cause:** Every prior instance of this class (§2: M29 `projects.team_id`,
+M30 `goals.parent_goal_id`, M35 `teams.parent_team_id`) was found and
+fixed on an *update* endpoint. The audits that found and fixed those
+never re-checked whether the *sibling create* endpoint for the same field
+had the same gap — and it did, twice, because "does creating X with a
+reference to Y need to check access to Y" is exactly as easy to miss the
+first time a field is added as "does updating X to reference Y." The
+create and update code paths are usually written and reviewed separately
+(often different milestones entirely), so a fix applied to one doesn't
+propagate to the other without a deliberate cross-check.
+
+**Attack scenario:** An authenticated user with zero relationship to
+`Team A` calls `POST /teams` with `{ teamName: "Evil", parentTeamId:
+<Team A's UUID> }` — the new team is created and linked as a child of
+Team A with no authorization check at all. Team A's actual owner/admin
+now has an unwanted, attacker-controlled sub-team hierarchy entry (visible
+via `GET /teams/:teamId/sub-teams`, M37-protected reads notwithstanding —
+the read protection says nothing about who could *create* the link in the
+first place). Same shape for `POST /goals`'s `parentGoalId` against a
+goal in a team the caller has no write access to.
+
+**Confirmed live, not theoretical:** the frontend's `createTeam()` API
+call and the Goals page's create-goal form both already pass these
+exact fields through to the backend — this is a reachable bug through the
+existing UI, not a dead capability nobody could trigger.
+
+**Fix pattern:** Identical to the already-established M29/M30/M35 pattern
+— `requireTeamRoleIfSpecified`/`canWriteGoal` applied to the destination
+reference, at creation time, not just on update. For `POST /teams`, this
+required a **new, distinct resolver** (`parentTeamIdFromCreateBody`) —
+the existing `parentTeamIdFromBody` resolver reads `req.body.parent_team_id`
+(snake_case, matching `updateTeamSettingsSchema`'s raw-column-name
+convention), but `createTeamSchema` uses camelCase `parentTeamId`; reusing
+the wrong resolver would have looked like protection while silently
+resolving to `null` on every request. Always verify a shared resolver's
+field-name assumption actually matches the schema of the route reusing it
+— a resolver's own field name is not self-documenting from its usage
+site alone. For `POST /goals`, the destination check was added directly
+in `goalsService.createGoal`, reusing `canWriteGoal` exactly as
+`updateGoal` already does.
+
+**Vulnerability class 2 — a GET endpoint calling an AI provider has no
+natural request cap, unlike its sibling creation endpoints:**
+`GET /blockers/:blockerId/ai-advice`, `GET /logs/suggestions`,
+`GET /logs/insights`, and `GET /logs/standup` each call the AI provider
+fresh on every request, gated only by the caller's own `ai_enabled`
+privacy setting — no rate limiter at all, despite M22/M34 already
+establishing that "a direct, repeatable, no-side-effect AI call" needs
+one.
+
+**Root cause:** M22/M34's own reasoning for *not* rate-limiting most AI
+call sites was "these only run as a side effect of creating a resource,
+which already has its own natural rate limit (you can only create so
+many logs/blockers)." That reasoning is correct for the CREATE-triggered
+AI calls (`analyzeBlocker` inside `createBlocker`, log-creation's own
+analysis) — but these four are GET-triggered *reads* of the same kind of
+AI output, and re-reading an existing resource's advice/suggestions has
+no such natural cap; a caller can loop any of them indefinitely against
+one already-existing blocker/their own log history.
+
+**Fix pattern:** Reused `createApiLimiter()` — the exact same method, not
+a new one — wired independently at each of the four call sites (each gets
+its own separate 20-per-5-minute budget, matching M34's established
+"independent wiring, not a shared budget" principle). No new rate-limit
+infrastructure needed; the abstraction already fit.
+
+**Vulnerability class 3 — N+1 query amplification with no cap on the
+amplifying dimension:** `GET /projects/:projectId/tasks` fetched each
+task's `owner`/`reviewer`/`contributors`/`dependencies` with its own
+per-ID `SELECT` inside a per-task `Promise.all` — for a project with `N`
+tasks, each carrying up to 50 contributors + 50 dependencies (M40's
+per-task cap), that's up to ~102`N` round trips for a single read, with
+**nothing capping `N`** (how many tasks a project can have). Any team
+member with ordinary write access could create many tasks and turn every
+subsequent read of that project's task list — by *any* team member,
+including a low-privilege viewer just loading the page — into an
+increasingly expensive query.
+
+**Distinguishing this from "add pagination":** The fix is NOT limiting
+how many tasks are returned (that would change the response's actual
+content, a product-visible behavior change with no upside) — it's
+collapsing the *access pattern* from O(N) round trips to O(1), regardless
+of N. Two bulk `WHERE id = ANY($1)` queries (new `usersRepository.getUsersByIds`,
+`tasksRepository.getTasksByIds`) replace the entire per-task fan-out; the
+results are joined in memory via a `Map`, producing the identical output
+shape as before. This is the general lesson for N+1 amplification: when
+the *number of rows returned* is legitimate and correct, but the *number
+of queries required to build them* scales with an attacker-influenceable
+count, batch the fan-out rather than capping the output.
+
+**Reusable checklist question:** *(a) Whenever a cross-reference-
+authorization check is added to an UPDATE endpoint for some field, grep
+for a sibling CREATE endpoint accepting the same field — the two are
+almost always written and reviewed separately, so a fix to one doesn't
+imply the other got it. When reusing a resolver/helper across routes,
+verify its field-name assumption (camelCase vs. snake_case, nested vs.
+flat) actually matches the calling route's own schema, don't assume
+"same field, same resolver" is safe. (b) For every endpoint that calls an
+AI/expensive-provider client: is it a CREATE whose natural resource-
+creation cap already bounds it, or a READ with no such cap? A rate limit
+justified for the create side does not automatically cover a read side
+that returns the same kind of AI output on demand. (c) For every
+`Promise.all(...map(...))` doing a per-item DB call: is the item count
+bounded by a real, un-influenceable invariant, or could a legitimate
+writer inflate it and turn every future reader's request into an
+amplified cost? If the per-item work is genuinely needed, batch it into
+O(1) queries rather than capping the output or leaving it O(N).*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —

@@ -117,5 +117,14 @@ export const teamIdFromBodySnakeCase = (req: AuthRequest) => Promise.resolve((re
 // unchecked-cross-reference shape M29 (projects.team_id) and M30
 // (goals.parent_goal_id) already closed -- re-parenting a team under
 // another named team never validated the caller's access to that
-// destination team at all.
+// destination team at all. updateTeamSettingsSchema accepts the update
+// payload verbatim (raw column names), hence snake_case here.
 export const parentTeamIdFromBody = (req: AuthRequest) => Promise.resolve((req.body as any).parent_team_id || null);
+
+// Milestone 42: same field, same authorization gap, but on the CREATE
+// path (POST /teams) -- createTeamSchema uses its own camelCase field
+// names (parentTeamId, not parent_team_id), so the snake_case resolver
+// above would silently never match here. A distinct resolver, not a
+// shared one, is deliberate: using the wrong one would look like
+// protection while resolving to undefined every time.
+export const parentTeamIdFromCreateBody = (req: AuthRequest) => Promise.resolve((req.body as any).parentTeamId || null);

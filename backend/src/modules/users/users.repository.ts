@@ -8,6 +8,18 @@ export class UsersRepository {
     return queryOne(text, [userId]);
   }
 
+  // Milestone 42: bulk counterpart to getUserById, for callers (e.g.
+  // projects.service.ts's getProjectTasks) that used to fetch a whole
+  // batch of users with one query per ID -- see tasks.repository.ts's
+  // getTasksByIds for the matching fix on the task side of the same
+  // N+1 shape.
+  async getUsersByIds(userIds: string[]) {
+    if (userIds.length === 0) {
+      return [];
+    }
+    return query('SELECT * FROM users WHERE user_id = ANY($1)', [userIds]);
+  }
+
   // Milestone 41: previously returned every user in the entire database --
   // no WHERE clause of any kind -- to any authenticated caller regardless
   // of team membership, unlike every other collection endpoint in the app

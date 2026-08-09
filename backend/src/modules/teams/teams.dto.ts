@@ -9,10 +9,19 @@ export const createTeamSchema = z.object({
   teamName: requiredString('Team name is required', 1, 255),
   description: z.string().max(5000).optional(),
   isPublic: z.boolean().optional(),
-  maxTeamSize: z.union([z.number(), z.string()]).optional(),
-  parentTeamId: z.string().optional(),
-  department: z.string().optional(),
-  teamType: z.string().optional(),
+  // Milestone 42: previously z.union([z.number(), z.string()]) with no
+  // bound at all, unlike the identical field on updateTeamSettingsSchema
+  // (z.number().int().min(1).max(10000)) -- brought in line with its
+  // update-path sibling.
+  maxTeamSize: z.coerce.number().int().min(1).max(10000).optional(),
+  // Milestone 42: format-checked to match parent_team_id's update-path
+  // sibling (updateTeamSettingsSchema). The actual authorization gap --
+  // no destination-team check at all -- is closed at the route level
+  // (see teams.routes.ts's requireTeamRoleIfSpecified on this field,
+  // added this milestone to match PUT /teams/:teamId/settings).
+  parentTeamId: z.string().uuid().optional(),
+  department: z.string().max(255).optional(),
+  teamType: z.string().max(50).optional(),
 });
 
 export const addMemberSchema = z.object({

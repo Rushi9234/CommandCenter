@@ -8,6 +8,7 @@ import {
   requireTeamMembership,
   teamIdFromParams,
   parentTeamIdFromBody,
+  parentTeamIdFromCreateBody,
 } from '../../common/middleware/requireTeamRole';
 import { teamsRepository } from './teams.repository';
 import * as teamsController from './teams.controller';
@@ -33,7 +34,20 @@ const teamIdFromJoinRequest = async (req: any) => {
   return request?.team_id || null;
 };
 
-router.post('/teams', authenticate, validate(createTeamSchema), asyncHandler(teamsController.createTeam));
+// Milestone 42: PUT /teams/:teamId/settings has always guarded a
+// client-supplied parent_team_id via requireTeamRoleIfSpecified (M35) --
+// this sibling create route never got the same guard, so any
+// authenticated user could create a new team nested under an arbitrary
+// EXISTING team (including one they have no access to at all) just by
+// naming its ID, the same cross-reference-authorization class M29/M30/M35
+// already closed elsewhere, missed here on the create path.
+router.post(
+  '/teams',
+  authenticate,
+  validate(createTeamSchema),
+  requireTeamRoleIfSpecified(parentTeamIdFromCreateBody, ['owner', 'admin']),
+  asyncHandler(teamsController.createTeam)
+);
 router.get('/teams', authenticate, asyncHandler(teamsController.getAllTeams));
 router.get('/teams/my', authenticate, asyncHandler(teamsController.getMyTeams));
 router.get('/teams/search', authenticate, validate(searchTeamsQuerySchema, 'query'), asyncHandler(teamsController.searchTeams));

@@ -106,6 +106,22 @@ export class TasksRepository {
     return Number(result[0].count) === taskIds.length;
   }
 
+  // Milestone 42: getProjectTasks (projects.service.ts) used to fetch
+  // each dependency task with its own SELECT inside a per-task
+  // Promise.all -- for a project with N tasks each carrying up to 50
+  // dependencies (M40's cap), that's up to 50N round trips for a single
+  // GET, with nothing capping N (how many tasks a project can have) at
+  // all. A team member with ordinary write access could create many
+  // tasks and turn every subsequent read of the project's task list into
+  // an increasingly expensive query-amplification attack. One bulk
+  // ANY($1) fetch replaces the whole per-task fan-out.
+  async getTasksByIds(taskIds: string[]) {
+    if (taskIds.length === 0) {
+      return [];
+    }
+    return query<any>('SELECT * FROM tasks WHERE task_id = ANY($1)', [taskIds]);
+  }
+
   async getUserTasks(userId: string) {
     const text = `
       SELECT t.* FROM tasks t

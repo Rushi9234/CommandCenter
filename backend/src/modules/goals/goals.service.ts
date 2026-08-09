@@ -12,7 +12,22 @@ async function buildGoalTree(parentId: string, allGoals: any[]): Promise<any[]> 
 }
 
 export class GoalsService {
-  createGoal(userId: string, body: any) {
+  // Milestone 42: same cross-reference-authorization gap M30 already
+  // closed for updateGoal, missed on the create path -- the route's own
+  // requireTeamRoleIfSpecified(teamIdFromBody) only checks the NEW goal's
+  // own team, never a client-supplied parentGoalId, so a caller could
+  // create a goal nested under one belonging to a team they have no
+  // write access to just by naming that goal's ID. Reuses canWriteGoal
+  // against the destination parent, the exact same rule and reasoning
+  // updateGoal already applies.
+  async createGoal(userId: string, body: any) {
+    if (body.parentGoalId) {
+      const canWriteParent = await goalsRepository.canWriteGoal(userId, body.parentGoalId);
+      if (!canWriteParent) {
+        throw new ForbiddenError('Access denied to the parent goal');
+      }
+    }
+
     return goalsRepository.createGoal({
       title: body.title,
       description: body.description || '',

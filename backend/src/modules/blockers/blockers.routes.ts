@@ -4,6 +4,7 @@ import { asyncHandler } from '../../common/middleware/asyncHandler';
 import { validate, validateUuidParams } from '../../common/middleware/validate';
 import { requireAccess } from '../../common/middleware/requireAccess';
 import { requireTeamRole, teamIdFromBody } from '../../common/middleware/requireTeamRole';
+import { getRateLimitProvider } from '../../common/rateLimit/rateLimitProviderFactory';
 import { blockersRepository } from './blockers.repository';
 import { teamsRepository } from '../teams/teams.repository';
 import * as blockersController from './blockers.controller';
@@ -62,9 +63,14 @@ router.get(
   requireAccess((req) => blockersRepository.canAccessBlocker(req.user!.userId, req.params.blockerId), 'Access denied to this blocker'),
   asyncHandler(blockersController.getMessages)
 );
+// Milestone 42: same unrated, repeatable AI-provider-call shape closed
+// for logs.routes.ts's suggestions/insights/standup this milestone --
+// re-reading a blocker's AI advice has no natural cap the way creating a
+// blocker does.
 router.get(
   '/blockers/:blockerId/ai-advice',
   authenticate,
+  getRateLimitProvider().createApiLimiter(),
   validateUuidParams('blockerId'),
   requireAccess((req) => blockersRepository.canAccessBlocker(req.user!.userId, req.params.blockerId), 'Access denied to this blocker'),
   asyncHandler(blockersController.getAIMentorAdvice)

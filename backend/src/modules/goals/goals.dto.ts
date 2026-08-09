@@ -5,7 +5,7 @@ export const createGoalSchema = z.object({
   title: requiredString('Goal title is required', 1, 255),
   description: z.string().max(5000).optional(),
   goalType: z.string().optional(),
-  parentGoalId: z.string().optional(),
+  parentGoalId: z.string().uuid().optional(),
   targetDate: z.string().optional(),
   teamId: z.string().optional(),
 });
