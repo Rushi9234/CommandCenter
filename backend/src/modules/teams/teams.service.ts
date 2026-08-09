@@ -200,9 +200,17 @@ export class TeamsService {
     }
   }
 
+  // Milestone 43: rejectInvite's own repository call is now the same
+  // atomic conditional UPDATE as acceptInvite (WHERE status='pending') --
+  // a null result means the invite was already accepted/rejected/revoked
+  // by the time this write ran (e.g. a concurrent accept), and must be a
+  // real error, not a silent status flip.
   async rejectInvite(inviteId: string, userId: string) {
     await this.assertInviteBelongsToCaller(inviteId, userId);
-    await teamsRepository.rejectInvite(inviteId);
+    const rejected = await teamsRepository.rejectInvite(inviteId);
+    if (!rejected) {
+      throw new BadRequestError('This invitation is no longer valid');
+    }
   }
 
   async searchTeams(searchQuery: string) {
@@ -249,12 +257,25 @@ export class TeamsService {
     );
   }
 
+  // Milestone 43: both approveJoinRequest/rejectJoinRequest's repository
+  // calls now guard on status = 'pending' (same pattern as acceptInvite/
+  // rejectInvite) -- a null result means the request was already
+  // approved/rejected by the time this write ran, and must be a real
+  // error rather than silently re-processing (or, for reject, silently
+  // flipping an already-approved request's status back with no effect
+  // on the membership that approval already granted).
   async approveJoinRequest(requestId: string) {
-    await teamsRepository.approveJoinRequest(requestId);
+    const approved = await teamsRepository.approveJoinRequest(requestId);
+    if (!approved) {
+      throw new BadRequestError('This join request has already been processed');
+    }
   }
 
   async rejectJoinRequest(requestId: string) {
-    await teamsRepository.rejectJoinRequest(requestId);
+    const rejected = await teamsRepository.rejectJoinRequest(requestId);
+    if (!rejected) {
+      throw new BadRequestError('This join request has already been processed');
+    }
   }
 
   // Milestone 40: same atomicity fix as removeMember above -- the leave

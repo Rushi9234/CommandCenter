@@ -1300,6 +1300,111 @@ O(1) queries rather than capping the output or leaving it O(N).*
 
 ---
 
+## 15. Write-side state-machine transitions missing the atomic-conditional guard their sibling already had
+
+**Vulnerability class:** A status-transition mutation (`UPDATE ... SET
+status = 'x'`) has no guard on the row's *current* status — it will
+happily overwrite a status that has already moved past the state this
+transition assumes, producing a self-contradictory result (a status
+column and the real side effects it implies disagree with each other).
+This is the exact TOCTOU shape Section 4 established the fix for
+(`acceptInvite`), but three sibling methods on the same two tables never
+received it.
+
+**Root cause:** `acceptInvite` (Milestone 39) got the atomic conditional
+`WHERE status = 'pending'` guard because a specific, demonstrated race
+(concurrent invite revocation) motivated it. `rejectInvite`,
+`approveJoinRequest`, and `rejectJoinRequest` are the same shape of
+mutation on the same two tables (`team_invites`, `join_requests`) — but
+each was written independently, at different milestones (`rejectInvite`
+predates Milestone 39 entirely; `approveJoinRequest` got a `withTransaction`
+wrapper in Milestone 25 for an unrelated reason — the `ON CONFLICT DO
+NOTHING` membership insert, not a status guard), and the fix that closed
+the gap for their sibling `acceptInvite` was never propagated to them.
+This is the general lesson Section 14 already named for CREATE-vs-UPDATE
+authorization checks, recurring here for a different pair: *sibling
+mutations on the same resource, written at different times, drift apart
+even when one of them gets fixed.*
+
+**Exploit/inconsistency scenario (demonstrated, not theoretical):**
+1. An invitee has one still-`pending` invite. They call `accept` and
+   `reject` on the *same* invite in quick succession (a double-submit, two
+   open tabs, or simply two requests racing).
+2. If `acceptInvite`'s atomic UPDATE commits first (membership inserted,
+   status → `accepted`), the still-in-flight `rejectInvite` — which had
+   no status guard — would unconditionally flip status back to `rejected`.
+3. Result: the invitee is a real `team_members` row, but their own invite
+   record reads `rejected` — a permanent, self-contradictory audit trail
+   with no error surfaced to either request.
+
+The join-request pair has the identical shape without even needing a
+race: an admin can call `reject` on an already-`approved` request (or
+`approve` on an already-`rejected` one) through the ordinary UI, since
+neither checked the request's current status at all. Approving an
+already-rejected request would silently re-grant membership (relying on
+`ON CONFLICT DO NOTHING` to avoid a crash, but with no signal to the
+caller that this was a no-op-if-already-a-member versus a fresh grant);
+rejecting an already-approved request would flip its status to `rejected`
+with **zero effect on the membership that approval had already granted**
+— an admin's own request list would show "rejected" for a person who is,
+in fact, a full team member.
+
+**Severity note:** none of these three is a privilege-escalation or
+authorization-bypass path — `approveJoinRequest`/`rejectJoinRequest` are
+already gated to the target team's `owner`/`admin` (who could add/remove
+the member directly through an entirely different, already-authorized
+route anyway), and `rejectInvite`'s race requires the *same* invitee who
+legitimately accepted to also be racing their own reject call. The
+vulnerability class is state-machine/audit-trail integrity, not
+unauthorized access — but a security-relevant audit trail (who is
+actually a member, and why the system's own records say otherwise) being
+wrong is still a real finding worth closing, not a cosmetic one.
+
+**Fix pattern:** Identical to `acceptInvite`'s existing pattern, applied
+to the three missed siblings — no new concept:
+- `rejectInvite`: `UPDATE team_invites SET status = 'rejected' WHERE
+  invite_id = $1 AND status = 'pending' RETURNING *` — a null result
+  (already accepted/rejected/revoked) is now a `BadRequestError`, not a
+  silent flip.
+- `approveJoinRequest`: the previous shape (`SELECT`, then unconditional
+  `INSERT ... ON CONFLICT DO NOTHING`, then unconditional `UPDATE`) is
+  now the same atomic-conditional-UPDATE-first pattern as `acceptInvite`
+  — the status transition runs first, inside the transaction, and the
+  membership insert only proceeds if it affected a row.
+- `rejectJoinRequest`: same `AND status = 'pending'` guard as `rejectInvite`.
+
+**Reusable checklist question:** *Whenever a status-transition mutation
+gets an atomic-conditional-UPDATE fix (because a specific race or bug was
+found), grep for every OTHER mutation on the same table that also writes
+to the same status column — was the fix a one-off patch to the method
+that happened to be reported, or does the underlying resource have
+multiple methods that can each move its status, all of which need the
+same guard? A resource with N possible transitions needs the guard N
+times, not once.*
+
+**A sibling finding, same milestone — `blockers.affected_tasks` missed
+the M39 reference-integrity treatment given to `tasks.dependencies`:**
+`affected_tasks` references tasks by ID (a blocker "affects" certain
+tasks) but, unlike `tasks.dependencies`, never received an existence or
+same-scope check — the create path didn't even validate UUID *shape*,
+and the update path checked shape but not existence/scope. Since a
+blocker is team-scoped (not project-scoped like a task's own
+dependencies), the correct invariant is "the referenced task belongs to
+*some* project within the blocker's own team," proven via a join through
+`projects` (`tasksRepository.tasksExistInTeam`), the same one-query-
+proves-every-ID-at-once shape as `tasksExistInProject`. Confirmed
+low-impact in practice (zero read/frontend consumers of this field today
+— a pure data-integrity gap, not an exposed authorization bypass) but
+fixed for consistency with the established pattern rather than left as a
+visibly-inconsistent exception. **Reusable checklist question:** *whenever
+a reference-integrity fix (existence + scope check) is applied to one
+JSONB/array reference field, list every OTHER reference field in the
+codebase with the same shape (an array of foreign IDs with no real FK) —
+was the fix applied to all of them, or just the one instance that
+prompted the audit?*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —

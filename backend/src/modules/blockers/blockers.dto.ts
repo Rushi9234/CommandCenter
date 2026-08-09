@@ -13,7 +13,12 @@ export const createBlockerSchema = z.object({
   blockerType: z.string().optional(),
   urgency: z.string().max(50).optional(),
   impact: z.string().max(50).optional(),
-  affectedTasks: z.array(z.string()).max(MAX_AFFECTED_TASKS_ARRAY_LENGTH).optional(),
+  // Milestone 43: was z.array(z.string()) -- no UUID-shape check at all,
+  // unlike its update-path sibling (affected_tasks below, which already
+  // had .uuid()). The actual existence/same-team check is added in
+  // blockers.service.ts (createBlocker/updateBlocker), matching the
+  // pattern M39 established for tasks.dependencies.
+  affectedTasks: z.array(z.string().uuid()).max(MAX_AFFECTED_TASKS_ARRAY_LENGTH).optional(),
   attemptedSolutions: z.string().max(5000).optional(),
 });
 

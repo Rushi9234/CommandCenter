@@ -106,6 +106,27 @@ export class TasksRepository {
     return Number(result[0].count) === taskIds.length;
   }
 
+  // Milestone 43: a blocker's affected_tasks references tasks by ID but
+  // (unlike a task's own dependencies) has no single project to scope
+  // against -- a blocker is team-scoped, and its affected tasks can
+  // legitimately belong to any project within that same team. Existence
+  // + same-team scoping is proven for every referenced ID at once via a
+  // join through projects (a task's team is its project's team, by
+  // construction). Same class of fix as tasksExistInProject above,
+  // applied to blockers.affected_tasks, which never received it.
+  async tasksExistInTeam(taskIds: string[], teamId: string): Promise<boolean> {
+    if (taskIds.length === 0) {
+      return true;
+    }
+    const result = await query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM tasks t
+       INNER JOIN projects p ON t.project_id = p.project_id
+       WHERE t.task_id = ANY($1) AND p.team_id = $2`,
+      [taskIds, teamId]
+    );
+    return Number(result[0].count) === taskIds.length;
+  }
+
   // Milestone 42: getProjectTasks (projects.service.ts) used to fetch
   // each dependency task with its own SELECT inside a per-task
   // Promise.all -- for a project with N tasks each carrying up to 50

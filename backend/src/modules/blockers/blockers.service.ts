@@ -1,8 +1,9 @@
 import { blockersRepository } from './blockers.repository';
 import { teamsRepository } from '../teams/teams.repository';
 import { usersRepository } from '../users/users.repository';
+import { tasksRepository } from '../projects/tasks.repository';
 import { analyzeBlocker, generateMentorAdvice } from '../ai/ai.service';
-import { NotFoundError } from '../../common/errors';
+import { NotFoundError, BadRequestError } from '../../common/errors';
 import { privacyService, AI_DISABLED_MESSAGE } from '../privacy/privacy.service';
 
 async function generateBlockerSuggestions(title: string, description: string, type: string, attempted: string): Promise<string[]> {
@@ -36,7 +37,25 @@ async function suggestTeamHelpers(teamId: string): Promise<string[]> {
 }
 
 export class BlockersService {
+  // Milestone 43: affected_tasks referenced tasks by ID with only UUID-
+  // shape validation (update path) or no validation at all (create
+  // path) -- never existence or same-team scoping, unlike tasks.dependencies
+  // (M39). Reuses the same rule: a blocker's affected tasks must actually
+  // exist and belong to a project within the blocker's own team --
+  // there's no product meaning to a blocker in Team A being "affected
+  // by" a task that belongs to Team B.
+  private async validateAffectedTasks(teamId: string, affectedTasks?: string[]) {
+    if (affectedTasks && affectedTasks.length > 0) {
+      const allInTeam = await tasksRepository.tasksExistInTeam(affectedTasks, teamId);
+      if (!allInTeam) {
+        throw new BadRequestError('affected_tasks must reference existing tasks in the same team');
+      }
+    }
+  }
+
   async createBlocker(userId: string, body: any) {
+    await this.validateAffectedTasks(body.teamId, body.affectedTasks);
+
     const aiEnabled = await privacyService.isAiEnabledForUser(userId);
     const aiSuggestions = aiEnabled
       ? await generateBlockerSuggestions(body.title, body.description, body.blockerType, body.attemptedSolutions)
@@ -84,7 +103,20 @@ export class BlockersService {
   // also send resolved_by=self. Reopening (status set to anything other
   // than 'resolved') clears both, so a reopened blocker never keeps a
   // stale resolver/timestamp from a previous resolution.
-  updateBlocker(blockerId: string, updates: any, userId: string) {
+  // Milestone 43: fetches the blocker first (only when affected_tasks is
+  // actually part of this update, to avoid an unnecessary read on every
+  // other field-only update) so validateAffectedTasks has a team_id to
+  // scope against -- mirrors projects.service.ts's updateTask, which
+  // already fetches the task first for the identical reason.
+  async updateBlocker(blockerId: string, updates: any, userId: string) {
+    if (updates.affected_tasks) {
+      const blocker = await blockersRepository.getBlocker(blockerId);
+      if (!blocker) {
+        throw new NotFoundError('Blocker not found');
+      }
+      await this.validateAffectedTasks(blocker.team_id, updates.affected_tasks);
+    }
+
     if (updates.status === 'resolved') {
       updates.resolved_by = userId;
       updates.resolved_at = new Date();

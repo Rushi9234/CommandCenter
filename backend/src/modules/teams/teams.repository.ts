@@ -301,11 +301,27 @@ export class TeamsRepository {
     });
   }
 
+  // Milestone 43: previously an unconditional UPDATE with no status
+  // guard, unlike its sibling acceptInvite (Milestone 39's atomic
+  // conditional UPDATE). Demonstrable inconsistency this closes: the
+  // service layer's own belongs-to-caller check (assertInviteBelongsToCaller)
+  // reads a separate, non-transactional snapshot of "still pending"
+  // before this ever runs -- two concurrent requests from the same
+  // caller (accept + reject on the same invite) could both pass that
+  // check while the invite was still pending, then race at the write:
+  // if acceptInvite committed first (membership already inserted,
+  // status -> 'accepted'), this unconditional UPDATE would still flip
+  // status back to 'rejected' with no error, leaving the invite row
+  // self-contradictory (says 'rejected', but the caller is a real
+  // team_members row). The same `status = 'pending'` guard acceptInvite
+  // already uses closes it: rejecting a no-longer-pending invite is now
+  // a no-op (0 rows), which the service layer turns into a clean error
+  // instead of a silent, incorrect status flip.
   async rejectInvite(inviteId: string) {
     const text = `
       UPDATE team_invites
       SET status = 'rejected'
-      WHERE invite_id = $1
+      WHERE invite_id = $1 AND status = 'pending'
       RETURNING *
     `;
     return queryOne(text, [inviteId]);
@@ -411,15 +427,30 @@ export class TeamsRepository {
     return query<any>(text, [teamId]);
   }
 
+  // Milestone 43: the status transition used to be a plain SELECT
+  // (no status filter) followed by an unconditional UPDATE -- the exact
+  // same TOCTOU shape rejectInvite had (see its comment above), just on
+  // join_requests instead of team_invites. A join request already
+  // rejected (or approved a second time) had no guard preventing this
+  // from re-approving it or double-counting. The status transition is
+  // now the same atomic conditional-UPDATE pattern as acceptInvite:
+  // affects zero rows if the request is no longer pending, in which
+  // case the membership INSERT never runs at all.
   async approveJoinRequest(requestId: string) {
     return withTransaction(async (client) => {
-      const requestResult = await client.query('SELECT * FROM join_requests WHERE request_id = $1', [requestId]);
+      const updateResult = await client.query(
+        `UPDATE join_requests
+         SET status = 'approved'
+         WHERE request_id = $1 AND status = 'pending'
+         RETURNING *`,
+        [requestId]
+      );
 
-      if (requestResult.rows.length === 0) {
+      if (updateResult.rows.length === 0) {
         return null;
       }
 
-      const request = requestResult.rows[0];
+      const request = updateResult.rows[0];
 
       // Milestone 25: same ON CONFLICT DO NOTHING as acceptInvite above --
       // approving a join request for someone already a member (e.g. they
@@ -430,17 +461,20 @@ export class TeamsRepository {
         [request.team_id, request.user_id, 'member']
       );
 
-      await client.query('UPDATE join_requests SET status = $1 WHERE request_id = $2', ['approved', requestId]);
-
       return request;
     });
   }
 
+  // Milestone 43: same fix as rejectInvite/approveJoinRequest above --
+  // previously unconditional, so rejecting an already-approved request
+  // flipped its status back to 'rejected' with no effect on the
+  // membership that approval had already granted, leaving an admin's
+  // view of the request contradicted by actual team_members state.
   async rejectJoinRequest(requestId: string) {
     const text = `
       UPDATE join_requests
       SET status = 'rejected'
-      WHERE request_id = $1
+      WHERE request_id = $1 AND status = 'pending'
       RETURNING *
     `;
     return queryOne(text, [requestId]);
