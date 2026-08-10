@@ -1515,6 +1515,138 @@ for every read of the same column.*
 
 ---
 
+## 17. Unbounded recursive query as a low-privilege DoS vector, plus two architectural findings deliberately deferred
+
+**Vulnerability class: a recursive query with no cycle guard, over data
+whose cycle-freedom was never enforced at write time.** `goals.parent_goal_id`
+forms a tree by convention, not by any database constraint — nothing
+stops a `parent_goal_id` chain from looping back on itself. Two
+consumers of that chain existed: `buildGoalTree` (walks *down* from
+actual roots, `parent_goal_id IS NULL`) and `calculateGoalProgress`'s
+`WITH RECURSIVE` CTE (walks in whatever direction the query is aimed,
+starting from an arbitrary caller-supplied `goalId`). A tree-shaped
+consumer that only ever starts at real roots cannot enter a cycle even
+if one exists elsewhere in the data (a cyclic "island" has no root, so
+it's simply invisible to that traversal) — but a consumer that starts
+from an arbitrary node has no such protection.
+
+**Root cause:** `updateGoal`'s M30 fix (destination-authorization on
+`parent_goal_id`) checks the caller's *access* to the new parent — it
+was never extended to also check whether that new parent is already a
+*descendant* of the goal being updated, which is a completely different
+question (authorization vs. graph topology) that happened to live next
+to each other in the same method. `UNION ALL` in the recursive CTE never
+deduplicates rows, so once a cycle exists, the query has no natural
+terminating condition — it repeats the cycle's members forever, bounded
+only by the database server running out of memory/CPU or an external
+`statement_timeout` (none is configured anywhere in this application).
+
+**Exploit scenario (concretely reachable, no elevated privilege
+required):** Any ordinary team member (not admin/owner — any writer)
+who owns or has write access to two goals in the same team can: (1)
+`PUT /goals/:A` with `parent_goal_id: B` — accepted, no cycle yet. (2)
+`PUT /goals/:B` with `parent_goal_id: A` — under the pre-fix code, also
+accepted (the caller has write access to `A`, which is all M30's check
+verified), completing the cycle `A → B → A`. (3) `GET /goals/:A/progress`
+(or `:B`) — gated only by `canAccessGoal` (any team member, including
+`viewer`, can trigger this step even if steps 1–2 required write access)
+— starts `calculateGoalProgress` at the cyclic node, entering the
+infinite walk. Three ordinary API calls, no special role, no timing
+trick — a genuine low-privilege denial-of-service vector against the
+shared Postgres instance.
+
+**Fix pattern — closed at both the root and the point of damage
+(deliberate belt-and-suspenders, not redundancy for its own sake):**
+1. **Root fix**: `goalsRepository.wouldCreateCycle(goalId, candidateParentId)`
+   walks the candidate parent's own ancestor chain and rejects the
+   update (`BadRequestError`) if the goal being updated appears anywhere
+   in it — this is exactly the condition under which the update would
+   close a cycle, checked *before* the write, not after. Also correctly
+   catches the trivial self-parent case (`goalId === candidateParentId`).
+2. **Defense in depth at the point of damage**: `calculateGoalProgress`'s
+   CTE itself was independently hardened using the standard Postgres
+   cycle-safe recursive-query idiom — carry a `visited` array of node IDs
+   through each recursive step, and add `WHERE NOT (next_node = ANY(visited))`
+   to the recursive term. This means even if a cycle somehow entered the
+   data through a path this milestone didn't anticipate (a direct DB
+   write, a future code path that bypasses the service layer), the query
+   itself still terminates instead of hanging — the same reasoning this
+   project has applied before (e.g. M39's TOCTOU residual documented as
+   accepted specifically because the *write-time* check was judged
+   sufficient; here, given how much cheaper a query-level guard is
+   compared to the severity of an unbounded query, both layers were
+   applied).
+3. The write-time check (`wouldCreateCycle`) is *itself* built with the
+   same cycle-safe idiom, so that even running the check against
+   already-cyclic data (verified absent from both the dev and test
+   databases before this fix, matching the established "verify before
+   constraining" discipline from M24/M40) terminates rather than hanging.
+
+**Why `teams.parent_team_id` does NOT need the same fix:** the identical
+missing-cycle-check pattern exists at the data level for team hierarchy
+too, but `getSubTeams` (the only consumer) is a flat, single-level
+`WHERE parent_team_id = $1` query — not recursive. `RECURSIVE` appears
+exactly once in the entire backend (`goals.repository.ts`). A
+`parent_team_id` cycle is possible to create but has no code path that
+would ever walk it recursively, so it cannot cause a hang or unbounded
+query. Confirmed by grep, not assumed — the fix is scoped to the actual
+vulnerable consumer, not applied reflexively to every superficially
+similar field.
+
+**Two architectural findings investigated and deliberately deferred
+(not fixed this milestone — documented per this project's own
+discipline of not fixing without evidence a fix is warranted, and not
+silently dropping a real finding):**
+
+- **Legacy bearer JWT stored in `localStorage`** (`frontend/src/services/api.ts`,
+  `frontend/src/hooks/useAuth.tsx`) — a 7-day-lived credential sitting in
+  a location any injected script could read, with no `httpOnly`
+  protection, unlike the cookie-based access/refresh pair the backend
+  already supports in parallel (M4's design). No live XSS injection
+  point was found in this pass (zero `dangerouslySetInnerHTML` usage
+  anywhere in the frontend), so this is a **latent architectural
+  weakness, not an actively exploited vulnerability today** — it would
+  only become one if a future XSS bug, a compromised dependency, or a
+  malicious browser extension were also present. Not fixed this
+  milestone because doing so properly means migrating the legacy bearer
+  frontend flow onto the cookie-based path entirely — a frontend
+  authentication redesign, explicitly out of scope for a backend-focused
+  hardening milestone. **Reopening condition: revisit the moment any
+  future audit finds even one place user-controlled content reaches the
+  DOM unescaped, or when frontend architecture work is ever undertaken.**
+- **AI prompt injection between co-workers via `generateStandup`** — one
+  team member's freely-authored log text (already capped at 5000 chars,
+  M40) enters the same AI prompt as other members' logs with no
+  per-author sanitization, so a member could attempt to steer the AI's
+  summary of the *whole team's* standup. Judged not worth fixing: the
+  only effect is on AI-*generated display text*, never on the underlying
+  log data (which every team member can already see raw and unfiltered
+  elsewhere in the product) and no automated action is ever taken on the
+  AI's output. This is the identical, already-acknowledged residual
+  `logs.service.ts`'s own comment names ("filtering AI usage of each
+  individual team member's log content is a separate, larger
+  per-subject-consent design this milestone deliberately doesn't take
+  on") — re-confirmed, not newly discovered. **Reopening condition:
+  revisit if `generateStandup`'s output is ever used for anything beyond
+  display (an automated decision, a stored record treated as fact).**
+
+**Reusable checklist question:** *For every recursive query (`WITH
+RECURSIVE`) in the codebase, does the underlying data have any database-
+level constraint preventing a cycle in the relationship it recurses
+over? If not (a self-referencing foreign key alone never prevents a
+cycle — only an application-level check can, since a cycle spans
+multiple rows/statements), does EVERY consumer of that data start only
+from a position a cycle can't reach (e.g., true roots), or can ANY
+consumer start from an arbitrary, caller-supplied node? If even one
+consumer can be pointed at an arbitrary node, the query itself needs a
+cycle-safe guard (the visited-path idiom) regardless of whether a
+write-time cycle-prevention check also exists — the two are
+complementary, not substitutes for each other, and the query-level guard
+is cheap enough that "we already prevent cycles at write time" is not a
+sufficient reason to skip it.*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —

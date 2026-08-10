@@ -1,5 +1,5 @@
 import { goalsRepository } from './goals.repository';
-import { ForbiddenError } from '../../common/errors';
+import { ForbiddenError, BadRequestError } from '../../common/errors';
 
 async function buildGoalTree(parentId: string, allGoals: any[]): Promise<any[]> {
   const children = allGoals.filter((g) => g.parent_goal_id === parentId);
@@ -69,11 +69,29 @@ export class GoalsService {
   // under one belonging to a team they have no access to. Reuses
   // canWriteGoal against the *destination* parent, same rule the caller
   // already had to satisfy for the goal itself.
+  // Milestone 45: a caller could previously create a parent_goal_id
+  // cycle via two ordinary, individually-authorized updates (set A's
+  // parent to B, then B's parent to A) -- canWriteGoal only checks
+  // access to the destination parent, it says nothing about whether
+  // that destination is already a descendant of the goal being updated.
+  // Once such a cycle existed, calculateGoalProgress's recursive CTE
+  // would walk it forever (UNION ALL never deduplicates) -- an
+  // unbounded query any ordinary team member could trigger with no
+  // elevated privilege at all. wouldCreateCycle walks the candidate
+  // parent's own ancestor chain and rejects the update before the
+  // cycle can ever be written, closing the vulnerability at its root
+  // (the CTE itself was also hardened independently, see
+  // calculateGoalProgress's comment, as defense in depth).
   async updateGoal(userId: string, goalId: string, updates: Record<string, any>) {
     if (updates.parent_goal_id) {
       const canWriteParent = await goalsRepository.canWriteGoal(userId, updates.parent_goal_id);
       if (!canWriteParent) {
         throw new ForbiddenError('Access denied to the parent goal');
+      }
+
+      const wouldCycle = await goalsRepository.wouldCreateCycle(goalId, updates.parent_goal_id);
+      if (wouldCycle) {
+        throw new BadRequestError('This would create a cycle in the goal hierarchy');
       }
     }
 

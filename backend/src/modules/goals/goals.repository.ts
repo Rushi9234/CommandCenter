@@ -100,6 +100,24 @@ export class GoalsRepository {
     return query(text, [goalId]);
   }
 
+  // Milestone 45: previously no cycle guard at all -- a caller could
+  // create a parent_goal_id cycle via two ordinary, individually-
+  // authorized updates (set A's parent to B, then B's parent to A;
+  // updateGoal only ever checked canWriteGoal on the DESTINATION parent,
+  // never whether that destination was already a descendant of the goal
+  // being updated). Once a cycle existed, `UNION ALL` never deduplicates,
+  // so this recursive CTE walked A, B, A, B, ... forever -- an unbounded
+  // query any ordinary team member (not just an admin) could trigger via
+  // three plain API calls, with no statement_timeout configured anywhere
+  // in the app to bound the damage. The cycle itself is now prevented at
+  // write time (see wouldCreateCycle, used by goals.service.ts's
+  // updateGoal), but this query is ALSO made cycle-safe directly (the
+  // standard Postgres idiom: carry the visited-node path in an array,
+  // stop recursing into any node already in it) as defense in depth --
+  // belt-and-suspenders, matching this project's established preference
+  // for closing a vulnerability class at its root AND at the point of
+  // damage, not just one or the other.
+  //
   // Milestone 30: the recursion used to follow parent_goal_id links with no
   // regard for team boundaries -- a cross-team parent_goal_id (however it
   // got there) would silently fold a foreign team's goal into this team's
@@ -110,11 +128,12 @@ export class GoalsRepository {
   async calculateGoalProgress(goalId: string) {
     const text = `
       WITH RECURSIVE goal_tree AS (
-        SELECT goal_id, progress, status, team_id FROM goals WHERE goal_id = $1
+        SELECT goal_id, progress, status, team_id, ARRAY[goal_id] AS visited FROM goals WHERE goal_id = $1
         UNION ALL
-        SELECT g.goal_id, g.progress, g.status, g.team_id
+        SELECT g.goal_id, g.progress, g.status, g.team_id, gt.visited || g.goal_id
         FROM goals g
         INNER JOIN goal_tree gt ON g.parent_goal_id = gt.goal_id AND g.team_id IS NOT DISTINCT FROM gt.team_id
+        WHERE NOT (g.goal_id = ANY(gt.visited))
       )
       SELECT
         COUNT(*) as total_goals,
@@ -135,6 +154,35 @@ export class GoalsRepository {
       completed,
       total,
     };
+  }
+
+  // Milestone 45: the actual cycle-prevention check, used by
+  // goals.service.ts's updateGoal before a client-supplied parent_goal_id
+  // is ever written. Walks UP the candidate parent's own ancestor chain
+  // (parent, grandparent, ...) and returns true if the goal being updated
+  // appears anywhere in it -- which is exactly the condition under which
+  // completing this update would create a cycle (including the trivial
+  // self-parent case, since the walk's first row is the candidate parent
+  // itself). The walk is itself cycle-safe (same visited-array idiom as
+  // calculateGoalProgress) so that even if this check somehow ran against
+  // already-cyclic data, it terminates instead of hanging.
+  async wouldCreateCycle(goalId: string, candidateParentId: string): Promise<boolean> {
+    if (goalId === candidateParentId) {
+      return true;
+    }
+    const text = `
+      WITH RECURSIVE ancestors AS (
+        SELECT goal_id, parent_goal_id, ARRAY[goal_id] AS visited FROM goals WHERE goal_id = $1
+        UNION ALL
+        SELECT g.goal_id, g.parent_goal_id, a.visited || g.goal_id
+        FROM goals g
+        INNER JOIN ancestors a ON g.goal_id = a.parent_goal_id
+        WHERE NOT (g.goal_id = ANY(a.visited))
+      )
+      SELECT 1 FROM ancestors WHERE goal_id = $2
+    `;
+    const result = await queryOne(text, [candidateParentId, goalId]);
+    return result !== null;
   }
 
   // Milestone 5: goals have no update/delete/progress authorization check
