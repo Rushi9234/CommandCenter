@@ -3,6 +3,11 @@ import { usersRepository } from '../users/users.repository';
 import { sendTeamInviteEmail } from '../../services/emailService';
 import { ForbiddenError, NotFoundError, BadRequestError, ConflictError } from '../../common/errors';
 
+// Milestone 47: max_team_size gained real enforcement this milestone --
+// see teams.repository.ts's TEAM_CAPACITY_GATE comment for why the
+// frontend's own required "Team Size Limit *" field made this a genuine
+// gap rather than continued-decorative metadata.
+
 export class TeamsService {
   createTeam(userId: string, body: any) {
     return teamsRepository.createTeam({
@@ -48,6 +53,14 @@ export class TeamsService {
   // check into the same atomic statement that performs the write; if it
   // reports no row changed, a plain (now-current) read is used only to
   // pick the right error message, never to gate anything.
+  // Milestone 47: addTeamMemberIfAuthorized's INSERT can now also be
+  // blocked by TEAM_CAPACITY_GATE, not just the hierarchy WHERE clause --
+  // a null result with the target NOT already a member (targetRole ===
+  // null) can only mean capacity blocked the insert, since that's the
+  // only other condition the SELECT-based INSERT gates. A stale read (the
+  // team filling up between this check and the block above) is not a
+  // concern here -- isTeamAtCapacity is just for producing the right
+  // error message, not for deciding whether to insert.
   async addMember(teamId: string, targetUserId: string, role: string | undefined, requesterRole: string) {
     const result = await teamsRepository.addTeamMemberIfAuthorized(teamId, targetUserId, role || 'member', requesterRole);
     if (result) {
@@ -60,6 +73,12 @@ export class TeamsService {
     }
     if (targetRole === 'admin') {
       throw new ForbiddenError("Only the team owner can change an admin's role");
+    }
+    if (targetRole === null) {
+      const atCapacity = await teamsRepository.isTeamAtCapacity(teamId);
+      if (atCapacity) {
+        throw new ConflictError('This team has reached its maximum size');
+      }
     }
   }
 

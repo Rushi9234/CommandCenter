@@ -1,4 +1,70 @@
 import { query, queryOne, withTransaction, buildSetClause } from '../../db/client';
+import { ConflictError } from '../../common/errors';
+
+// Milestone 47: max_team_size was confirmed decorative (M44/M46's own
+// audits) on the assumption it was never surfaced in the frontend -- a
+// fresh check found that assumption was wrong: Teams.tsx's create-team
+// form has a required "Team Size Limit *" field with the helper text
+// "Maximum number of team members", i.e. the product visibly promises
+// enforcement that never existed. This SELECT-based INSERT is reused by
+// every membership-creation path below (addTeamMemberIfAuthorized,
+// acceptInvite, approveJoinRequest). The EXISTS clause makes it a no-op
+// gate for a user who is ALREADY a member -- re-inviting/re-approving/
+// updating an existing member's role never grows headcount, so it must
+// never be blocked by a full team.
+//
+// IMPORTANT -- this WHERE clause alone is NOT race-safe, unlike the
+// single-row conditional statements M36/M39/M40 established (a plain
+// row lock naturally serializes two UPDATEs/DELETEs targeting the same
+// row). COUNT(*) is a read across potentially-many OTHER rows with no
+// single row to lock -- two concurrent callers can each read "count = 2,
+// max = 3" before either commits, and both then legitimately pass the
+// check, overshooting the cap (a genuine, real bug this milestone's own
+// concurrency test caught: 5 concurrent adds against 2 open slots let 3
+// through, not 2). `lockTeamForCapacityCheck` (a `SELECT ... FOR UPDATE`
+// on the team's own `teams` row, issued as its OWN statement before the
+// capacity-gated INSERT) is what actually closes this.
+//
+// A tempting-looking "optimization" was tried and REJECTED: folding the
+// lock into a CTE on the SAME statement as the INSERT (`WITH team_lock AS
+// (SELECT ... FOR UPDATE) INSERT ... FROM team_lock WHERE COUNT(*) <
+// team_lock.max_team_size`), to avoid a separate round trip. That is
+// NOT correct, and this milestone's own concurrency test caught it too
+// (successCount came back 3, not 2, on the exact same race): in READ
+// COMMITTED, a statement's snapshot is taken once at that statement's
+// start. Postgres's EvalPlanQual mechanism re-checks ONLY the specific
+// locked row against its latest committed version once the lock is
+// granted -- it does NOT refresh the snapshot for the REST of that same
+// statement. So the COUNT(*) subquery over team_members (a different
+// table from the locked teams row) still reads the ORIGINAL, pre-wait
+// snapshot even after the FOR UPDATE unblocks, and can miss a
+// concurrently-committed insert. The lock must be its own statement,
+// followed by the capacity-gated INSERT as a SEPARATE statement (both
+// inside one transaction) so the INSERT gets a fresh snapshot that
+// correctly reflects everything committed while it was waiting on the
+// lock. The extra round trip this costs is real (see
+// lockTeamForCapacityCheck's own comment for how that latency was
+// addressed instead of removing the lock).
+const TEAM_CAPACITY_GATE = `(
+  EXISTS (SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2)
+  OR (SELECT COUNT(*) FROM team_members WHERE team_id = $1) <
+     (SELECT max_team_size FROM teams WHERE team_id = $1)
+)`;
+
+// Milestone 47: this extra round trip (a separate statement from the
+// capacity-gated INSERT that follows it -- see TEAM_CAPACITY_GATE's
+// comment on why it can't be folded into one statement) measurably slowed
+// down every membership-creation path, enough to push
+// teamMembershipConcurrency.test.ts's already bcrypt-heavy
+// buildTeamWithRoles()-based tests past Jest's 30s ceiling. Fixed at the
+// actual cost driver instead of here: fixtures.ts's buildTeamWithRoles now
+// registers its 6 independent users concurrently (they have no
+// dependency on each other) rather than one at a time, the same "reduce
+// the test's own wall-clock cost, don't touch the timeout" fix M39 used
+// for the same class of problem. That bought back more wall-clock time
+// than this one extra round trip costs.
+const lockTeamForCapacityCheck = (client: import('pg').PoolClient, teamId: string) =>
+  client.query('SELECT team_id FROM teams WHERE team_id = $1 FOR UPDATE', [teamId]);
 
 const TEAM_SETTINGS_UPDATABLE_COLUMNS = [
   'team_name',
@@ -125,18 +191,50 @@ export class TeamsRepository {
   // RETURNING yields no row, exactly like a blocked DELETE/UPDATE above.
   // Only reachable for an EXISTING member; a brand-new insert has no
   // target role to protect and always proceeds.
+  // Milestone 47: the plain VALUES(...) INSERT this used to be unconditionally
+  // attempted the insert regardless of team size -- rewritten as a SELECT-based
+  // INSERT so TEAM_CAPACITY_GATE can gate whether a row is proposed at all
+  // (a brand-new member), while the ON CONFLICT...DO UPDATE WHERE clause
+  // (unchanged) still separately gates the hierarchy rule for an existing
+  // member's role change. If capacity blocks the insert, RETURNING yields no
+  // row, identical in shape to a hierarchy-blocked result -- isTeamAtCapacity
+  // (below) is what the service layer uses to tell the two apart. Runs
+  // inside a transaction that locks the team's own row as its own
+  // statement FIRST (see lockTeamForCapacityCheck's comment on
+  // TEAM_CAPACITY_GATE for why this can't be folded into one statement)
+  // so concurrent addMember calls against the same team serialize instead
+  // of both reading a stale COUNT(*) and overshooting the cap.
   async addTeamMemberIfAuthorized(teamId: string, targetUserId: string, role: string, requesterRole: string) {
+    return withTransaction(async (client) => {
+      await lockTeamForCapacityCheck(client, teamId);
+      const result = await client.query(
+        `INSERT INTO team_members (team_id, user_id, role)
+         SELECT $1, $2, $3
+         WHERE ${TEAM_CAPACITY_GATE}
+         ON CONFLICT (team_id, user_id) DO UPDATE SET
+           role = EXCLUDED.role,
+           joined_at = CURRENT_TIMESTAMP
+         WHERE team_members.role != 'owner'
+           AND (team_members.role != 'admin' OR $4 = 'owner')
+         RETURNING role`,
+        [teamId, targetUserId, role, requesterRole]
+      );
+      return result.rows.length > 0 ? result.rows[0] : null;
+    });
+  }
+
+  // Milestone 47: lets the service layer distinguish "insert blocked by
+  // capacity" from "insert blocked by hierarchy" when addTeamMemberIfAuthorized
+  // returns null and the target isn't already a member -- the only two
+  // reasons TEAM_CAPACITY_GATE (which the hierarchy-check WHERE clause above
+  // doesn't affect for a brand-new member) would have blocked the row.
+  async isTeamAtCapacity(teamId: string): Promise<boolean> {
     const text = `
-      INSERT INTO team_members (team_id, user_id, role)
-      VALUES ($1, $2, $3)
-      ON CONFLICT (team_id, user_id) DO UPDATE SET
-        role = EXCLUDED.role,
-        joined_at = CURRENT_TIMESTAMP
-      WHERE team_members.role != 'owner'
-        AND (team_members.role != 'admin' OR $4 = 'owner')
-      RETURNING role
+      SELECT (SELECT COUNT(*) FROM team_members WHERE team_id = $1) >=
+             (SELECT max_team_size FROM teams WHERE team_id = $1) AS at_capacity
     `;
-    return queryOne<any>(text, [teamId, targetUserId, role, requesterRole]);
+    const result = await queryOne<any>(text, [teamId]);
+    return result ? result.at_capacity : false;
   }
 
   async getTeamMembers(teamId: string) {
@@ -301,10 +399,38 @@ export class TeamsRepository {
       // or the same invite accepted twice) is treated as a no-op rather
       // than crashing on the team_members(team_id, user_id) unique
       // constraint.
-      await client.query(
-        'INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT (team_id, user_id) DO NOTHING',
+      //
+      // Milestone 47: also gated by TEAM_CAPACITY_GATE, now that
+      // max_team_size has a real enforcement path. A zero-row result is
+      // ambiguous between "already a member" (harmless no-op, same as
+      // before M47) and "team is full" (a real error that must roll back
+      // the status flip above too, so the invite stays 'pending' and can
+      // be retried later if a spot opens up) -- the follow-up SELECT
+      // disambiguates. Throwing here (inside withTransaction) rolls back
+      // the whole transaction, including the invite UPDATE. The lock
+      // (see TEAM_CAPACITY_GATE's comment on why it must be its own
+      // statement) must be taken before the capacity-gated insert so this
+      // serializes against a concurrent addMember/approveJoinRequest on
+      // the same team.
+      await lockTeamForCapacityCheck(client, invite.team_id);
+      const insertResult = await client.query(
+        `INSERT INTO team_members (team_id, user_id, role)
+         SELECT $1, $2, $3
+         WHERE ${TEAM_CAPACITY_GATE}
+         ON CONFLICT (team_id, user_id) DO NOTHING
+         RETURNING *`,
         [invite.team_id, userId, 'member']
       );
+
+      if (insertResult.rows.length === 0) {
+        const alreadyMember = await client.query(
+          'SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2',
+          [invite.team_id, userId]
+        );
+        if (alreadyMember.rows.length === 0) {
+          throw new ConflictError('This team has reached its maximum size');
+        }
+      }
 
       return invite;
     });
@@ -495,10 +621,31 @@ export class TeamsRepository {
       // approving a join request for someone already a member (e.g. they
       // separately accepted an invite in the meantime) is a no-op instead
       // of crashing. The request is still marked approved either way.
-      await client.query(
-        'INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT (team_id, user_id) DO NOTHING',
+      //
+      // Milestone 47: same TEAM_CAPACITY_GATE + disambiguation as
+      // acceptInvite -- a genuinely full team throws (rolling back the
+      // status flip above, leaving the request 'pending'), while
+      // already-a-member stays the pre-M47 silent no-op. Same lock-before-
+      // check requirement as acceptInvite/addTeamMemberIfAuthorized.
+      await lockTeamForCapacityCheck(client, request.team_id);
+      const insertResult = await client.query(
+        `INSERT INTO team_members (team_id, user_id, role)
+         SELECT $1, $2, $3
+         WHERE ${TEAM_CAPACITY_GATE}
+         ON CONFLICT (team_id, user_id) DO NOTHING
+         RETURNING *`,
         [request.team_id, request.user_id, 'member']
       );
+
+      if (insertResult.rows.length === 0) {
+        const alreadyMember = await client.query(
+          'SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2',
+          [request.team_id, request.user_id]
+        );
+        if (alreadyMember.rows.length === 0) {
+          throw new ConflictError('This team has reached its maximum size');
+        }
+      }
 
       return request;
     });

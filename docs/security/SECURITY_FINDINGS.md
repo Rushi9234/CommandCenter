@@ -1789,6 +1789,314 @@ recurring, easy-to-miss class of their own.*
 
 ---
 
+## 19. Release-readiness hardening (M47) — frontend audit, max_team_size enforcement, connection-pool tuning, and load-test evidence
+
+**Context:** M46 classified the project "B — requires M47 with four specific,
+evidence-based blockers": (1) the frontend had never been the PRIMARY
+subject of a dedicated security milestone, (2) no realistic load/capacity
+test had ever validated the backend, (3) the 20-connection pool size had
+never been evaluated against the stated 50-100+ team deployment target,
+(4) `max_team_size` needed a real decision, not further documentation.
+M47 investigated all four.
+
+### Finding 1 — frontend security audit: no active vulnerability found; `localStorage` JWT storage reclassified
+
+A full, dedicated frontend audit (every file under `frontend/src`, not
+spot-checks) searched for every pattern in the milestone's own checklist
+(`localStorage`, `dangerouslySetInnerHTML`, `eval`, open-redirect
+patterns, `postMessage`/`iframe`, unsafe external links, environment-variable
+leakage) and inventoried every API call the frontend makes.
+
+**Resolved the M45-deferred finding.** The legacy bearer JWT in
+`localStorage` (`frontend/src/hooks/useAuth.tsx`, read by
+`frontend/src/services/api.ts`'s axios interceptor on every request) is
+confirmed **live, not dead code** — it is the app's *only* authentication
+mechanism; no parallel cookie-based session exists in the frontend at all
+(`withCredentials`/`document.cookie` — zero hits). The token's exposure to
+XSS is real IN PRINCIPLE, but **no injection point exists to exploit it
+today**: every user-controlled or AI-generated string rendered anywhere in
+the app (log entries, blocker titles/messages, team/goal text, AI chat
+output) goes through plain JSX interpolation (`{value}`), which React
+escapes by default; `dangerouslySetInnerHTML`/`eval`/`new Function` have
+zero occurrences in `frontend/src`, and no markdown/HTML-rendering library
+is even a dependency. **Reclassified from "open finding" to "accepted
+architectural risk with no live exploit path"** — the correct fix (migrating
+onto the existing but frontend-unused cookie-based session flow) remains a
+frontend-authentication-redesign task, appropriately out of scope for a
+hardening milestone; reopen the moment ANY future change introduces
+`dangerouslySetInnerHTML` or an HTML/markdown renderer, since that is the
+exact precondition this conclusion depends on.
+
+**No open-redirect, unsafe-external-link, or postMessage/iframe surface
+exists.** All `window.location` usage is two hardcoded-path cases (a 401
+redirect to `/login`, an error-boundary reload); no `location.search`,
+`location.hash`, or query-param-built redirect exists anywhere; no
+`target="_blank"`, `<iframe>`, or `postMessage` exists anywhere.
+
+**Role-based UI is confirmed cosmetic-only, matching the backend-authoritative
+model.** `Teams.tsx` disables/hides role-editing controls for the owner row
+as a UX nicety, but never gates the underlying API call behind a client-side
+role check — every mutating call (`removeTeamMember`, `updateMemberRole`,
+`approveJoinRequest`, etc.) reaches the backend regardless of what the UI
+shows, and the backend's own `requireTeamRole`/hierarchy checks (already
+covered extensively M27-M46) are what actually enforce it. This is the
+correct model, re-confirmed rather than assumed.
+
+### Finding 2 — `max_team_size`: previous milestones' non-enforcement conclusion was based on incorrect evidence; now enforced for real
+
+M42/M44/M46 all concluded `max_team_size` was decorative metadata,
+explicitly citing "never displayed in the frontend" as supporting evidence.
+**That evidence was wrong.** `frontend/src/pages/Teams.tsx`'s create-team
+form has a **required** field labeled `"Team Size Limit *"` with the
+helper text `"Maximum number of team members"` (`Teams.tsx:527-544`) — the
+product visibly promises an enforced capacity limit that never existed.
+This is exactly Section 1's "a setting round-trips correctly but nothing
+enforces it" class, except here the UI doesn't just collect the value —
+it actively tells the admin it's a real limit.
+
+**Fix — atomic capacity check on every membership-creation path**
+(`teams.repository.ts`): `addTeamMemberIfAuthorized`, `acceptInvite`, and
+`approveJoinRequest` (the three places `team_members` ever grows) now
+gate their `INSERT` on `(SELECT COUNT(*) FROM team_members WHERE team_id =
+$1) < (SELECT max_team_size FROM teams WHERE team_id = $1)`, with an
+`EXISTS` escape hatch so re-adding/re-approving an EXISTING member (which
+doesn't grow headcount) is never blocked by a full team. `createTeam`
+needs no check — the first member (the owner) is exempt by construction.
+
+**A genuine race condition was found and fixed in this milestone's OWN
+first attempt, caught by its own concurrency test — worth recording as a
+cautionary, reusable lesson.** Unlike the single-row conditional
+statements M36/M39/M40 established (where a plain row lock is sufficient
+because the check and the mutation target the SAME row), a capacity check
+is an AGGREGATE over many OTHER rows (`COUNT(*) FROM team_members`) with
+no single row to lock. Two attempts were made:
+1. **First attempt (broken):** wrap the INSERT in `withTransaction`,
+   explicitly `SELECT ... FOR UPDATE` the team's own row, THEN run the
+   capacity-gated INSERT as a SEPARATE statement. This is correct, but
+   costs 4 round trips (BEGIN/lock/insert/COMMIT) instead of the original
+   1 — see Finding 3 for the real, measured cost this had.
+2. **"Optimization" attempt (INCORRECT, caught by testing, reverted):**
+   fold the lock into a CTE on the SAME statement as the INSERT (`WITH
+   team_lock AS (SELECT ... FOR UPDATE) INSERT ... FROM team_lock WHERE
+   COUNT(*) < team_lock.max_team_size`), to avoid the extra round trip.
+   **This is not race-safe.** In READ COMMITTED, a statement's snapshot is
+   taken once at that statement's start. Postgres's EvalPlanQual mechanism
+   re-checks ONLY the specific locked row against its latest committed
+   version once the lock is granted — it does NOT refresh the snapshot for
+   the rest of that same statement. The `COUNT(*)` subquery (over a
+   different table from the locked row) still read the ORIGINAL, pre-wait
+   snapshot even after the lock unblocked, and could miss a
+   concurrently-committed insert. A dedicated concurrency test (5
+   simultaneous `addMember` calls against a team with exactly 2 open
+   slots) caught this immediately: 3 successes landed instead of 2. Fixed
+   by reverting to attempt 1 (lock and insert as two separate statements,
+   both inside one transaction) — the extra round trip is the price of
+   correctness here, not an oversight to optimize away.
+
+**Verified via `maxTeamSizeEnforcement.test.ts` (12 tests, isolated-run
+clean, twice):** direct `addMember` blocked at capacity without touching
+existing members' role changes; invite acceptance and join-request
+approval both blocked at capacity while leaving the invite/request
+`pending` (not silently consumed) so a later capacity increase lets a
+retry succeed; and — the test that caught the race above — 5 concurrent
+`addMember` calls against exactly 2 open slots produce exactly 2 successes
+and 3 conflicts, never more.
+
+### Finding 3 — a real, measured regression from Finding 2's own fix, caused and fixed within this same milestone
+
+The correct (attempt-1) capacity check adds 3 extra network round trips
+per membership-creation call (BEGIN, `SELECT...FOR UPDATE`, COMMIT, on top
+of the original single INSERT). In isolation this is a few hundred
+milliseconds. Stacked across `buildTeamWithRoles()` (the shared test
+fixture used throughout `backend/tests/`, which calls `addMember` 4 times
+per team) plus bcrypt's own real hashing cost per registration, this
+pushed `teamMembershipConcurrency.test.ts`'s heaviest tests past Jest's
+30-second per-test ceiling — confirmed as a genuine regression (not
+pre-existing flakiness) by reverting the M47 diff via `git stash` and
+observing the exact same test file pass 7/7 cleanly on the pre-M47 code,
+then reproducing the failure 3 consecutive times on the M47 code before
+diagnosing it.
+
+**Fixed at the actual cost driver, not by touching Jest's timeout**
+(forbidden by this project's own standing rule, and the wrong fix even if
+it weren't): `buildTeamWithRoles()`'s 6 `registerAndLogin` calls have no
+dependency on each other, and were running one at a time for no reason —
+parallelized via `Promise.all` (`tests/utils/fixtures.ts`), the same
+"reduce the fixture's own wall-clock cost" fix M39 already established
+for this exact shape of problem. This bought back more wall-clock time
+than the capacity check's extra round trip cost, and
+`teamMembershipConcurrency.test.ts` passed cleanly (7/7) on two
+consecutive isolated re-runs afterward.
+
+### Finding 4 — database connection pool: `connectionTimeoutMillis` was measurably too tight; `statement_timeout` was completely unset
+
+**Pool architecture confirmed:** one shared `pg.Pool` (`max: 20`,
+`utils/database.ts`), used by every repository through `db/client.ts`'s
+`query`/`queryOne`/`withTransaction` helpers, which always `.connect()`
+then `.release()` in a `finally` block — verified no connection-leak path
+exists (every call site was re-checked, not assumed). The backend deploys
+to Vercel as a Node serverless function (`backend/vercel.json`); the
+configured `DATABASE_URL` (dev/test) points at Neon's own **pooled**
+endpoint (hostname contains `-pooler`), which is the correct choice for a
+serverless topology where each function instance may run its own
+independent `pg.Pool` — the "one shared 20-connection pool" framing used
+throughout M40-M46 describes the app-level client pool correctly, but the
+REAL multiplexing against Postgres itself happens at Neon's pooler layer,
+one level below what this app's own code controls. This app-level detail
+could not be fully verified against the live Vercel/Neon account
+configuration (outside this audit's access) and should be confirmed
+operationally, not assumed, before treating any pool-size number as final.
+
+**`statement_timeout` was not configured anywhere** — a residual M45
+explicitly flagged but didn't fix. `wouldCreateCycle`/the cycle-safe CTE
+rewrite prevent the ONE known unbounded-recursion shape at the point a
+cycle could be written, but nothing bounded how long ANY query could hold
+one of the 20 shared connections. Added `statement_timeout: 30000` to the
+pool config — generous for every real query in this app, a real backstop
+against a future runaway one.
+
+**`connectionTimeoutMillis: 5000` was measurably too tight — this is a
+genuine finding, not a tuning guess.** Direct, repeated measurement
+(a bare `pg.Pool` connecting straight to the real Neon endpoint, bypassing
+every layer of this app's own code) showed fresh-connection establishment
+taking 5.2-11.5 seconds under the network conditions encountered during
+this milestone's own test runs — a meaningful fraction of which would be
+flatly rejected by a 5-second ceiling, not because anything was overloaded
+(a single connection, checked via `pg_stat_activity`, confirmed no
+concurrent contention) but because that is simply how long a connection
+can legitimately take against a serverless-autosuspend database provider.
+Bumped to `connectionTimeoutMillis: 10000` — still a real ceiling, just
+one reflecting measured reality instead of an arbitrary round number.
+
+### Finding 5 — realistic load/capacity testing: methodology and tooling delivered; clean numeric results blocked by a live, independently-confirmed Neon connectivity episode
+
+A load-test harness (`backend/scripts/loadTest.ts`, kept as a reusable
+tool, not a one-off) seeds N teams with real members/logs/blockers/goals,
+then fires an increasing number of concurrent "ordinary session" bundles
+(login + `GET /teams/my` + `GET /logs/standup` + `GET /teams/:id/blockers`
++ `GET /goals/hierarchy` + `GET /leaderboard` — the exact endpoints M46
+hardened against N+1 fan-out) against the real Express app + local test
+database, measuring success rate, p50/p95/p99 latency, and the shared
+pool's own `waitingCount`.
+
+**An early, buggy run surfaced two script-level bugs worth recording
+because they'd otherwise be mistaken for app bugs:** (1) `addMember` calls
+made during seeding weren't checked for success before their token was
+added to the "confirmed members" list — under concurrent seeding load, a
+failed add still left a token that later produced a correct-but-confusing
+403 on every team-scoped read, looking exactly like an app-side capacity
+bug. Fixed by checking each `addMember` call's actual HTTP status before
+trusting it. (2) The first version's seeding had no per-team error
+isolation, so one team's transient failure crashed the whole seeding
+loop. Fixed with a try/catch per team and an explicit skipped-team count
+(never a silent truncation — logged).
+
+**A severe, live Neon connectivity episode delayed but did not ultimately
+block clean results.** Partway through this milestone's own verification,
+the live connection to Neon degraded severely and persistently for over an
+hour: a hard DNS resolution failure (`getaddrinfo ENOTFOUND ...neon.tech`),
+repeated raw `Connection terminated due to connection timeout`/`Connection
+terminated unexpectedly` errors from the `pg` driver itself (reproduced by
+calling `authService.register()` directly, bypassing the HTTP layer,
+controller, and every app-level retry/pool setting), and
+connection-establishment times of 5.2-11.8 seconds measured directly and
+repeatedly. This is the same class of severe, environmental instability
+this project has documented before (M37's operational note,
+`PROJECT_HANDOFF.md` §9) — confirmed here with an unusually direct,
+code-bypassing measurement, not inferred from test failure patterns alone.
+Connectivity later recovered (confirmed via the same direct measurement,
+back to ~1.5s) and the load test was re-run cleanly to completion.
+
+**Final results (30 teams, 240 members, real logs/blockers/goals seeded,
+against the local test database with a healthy Neon connection):**
+
+| Concurrency | Requests | Success rate | `GET /teams/my` p50/p95 | `GET /logs/standup` p50/p95 | Peak pool `waitingCount` |
+|---|---|---|---|---|---|
+| 25 sessions | 125 | **100%** | 859ms / 2005ms | 1666ms / 1801ms | 16 |
+| 50 sessions | 250 | **100%** | 946ms / 1132ms | 2737ms / 2959ms | 73 |
+| 100 sessions | 500 | **100%** | 1784ms / 2195ms | 5416ms / 5502ms | 174 |
+| 200 sessions | 1000 | **100%** | 3597ms / 4430ms | 10591ms / 10638ms | 377 |
+
+**Zero functional failures at any tested concurrency level** — every one
+of 1,875 requests across all four levels succeeded, including at 200
+concurrent sessions (roughly 2-4x the simultaneous-active-user count a
+50-100 team deployment would realistically produce even at a worst-case
+"everyone checks in at 9am" peak, given not every member of every team is
+active in the same instant). The pool degrades LATENCY under load, not
+correctness — no error, no dropped request, no timeout was observed even
+as queuing pressure (`waitingCount`) grew to 377 at the heaviest level
+tested. This is the graceful-degradation shape a capacity-constrained but
+correctly-implemented shared resource should have, not a capacity failure.
+
+**What this means for the pool-size question:** 20 connections comfortably
+serves 25-50 concurrent sessions (sub-3-second p95 on every endpoint) and
+still correctly serves 100-200 concurrent sessions, at the cost of
+multi-second latency on the heaviest endpoint (`getStandup`, which is also
+the one M46 already batch-loaded and this milestone confirmed still
+correct under load). This is real, measured evidence — not a guess — that
+20 is *adequate but not generous* for the stated 50-100+ team target: safe
+today, worth revisiting (a pool-size increase, or splitting read-heavy
+endpoints onto a dedicated smaller pool) if actual production usage
+consistently clusters near the 100-200-concurrent-session end of what was
+tested here.
+
+**Reusable checklist question:** *When a load test's own numbers look
+wrong (impossible success/failure patterns, latencies that don't scale
+smoothly with concurrency), check the load-test SCRIPT for a bug before
+concluding the application has one — an unchecked setup-phase HTTP call
+whose failure silently propagates into later assertions produces exactly
+the same symptom shape as a real capacity bug. Separately: when a
+database-heavy test suite shows severe, widespread instability that
+doesn't correlate with the code actually under test, get ONE piece of
+direct, code-bypassing evidence (a bare driver connection with precise
+timing) before spending further effort chasing what might be an
+environmental problem no code change can fix.*
+
+### Finding 6 — dependency vulnerability scan: already running in CI since M16, not "never run"; two known backend findings re-confirmed, two new frontend findings triaged
+
+M46's own classification stated `npm audit` "has never been run and
+reported on in this project's history." **This was incorrect** —
+`.github/workflows/ci.yml` has run `npm audit` on every push/PR for both
+backend and frontend since M16, with `continue-on-error: true` (a
+deliberate choice, not an oversight — see its own comment) because two
+pre-existing findings were already known and triaged as of M7. Re-running
+it manually as part of this milestone re-confirmed those two and found
+two new frontend ones:
+
+- **Backend (re-confirmed, unchanged since M7):** `bcrypt` (a direct,
+  necessary dependency) pulls in `@mapbox/node-pre-gyp`, which pulls in a
+  vulnerable `tar` (1 high, 1 critical — path traversal / DoS issues in
+  tar extraction). This tool runs ONLY at `npm install` time, to fetch
+  bcrypt's prebuilt native binary — it is never imported or executed by
+  the running application. `npm audit fix` (non-forced) makes no change;
+  the only fix path is a major-version bump to `bcrypt`/`node-pre-gyp`,
+  which would need its own dedicated dependency-upgrade testing cycle for
+  a library this central to authentication — correctly deferred, not
+  forced through here.
+- **Frontend (new since M16's original wiring — CVE dates confirm this):**
+  `react-router-dom@6.30.4` (the latest 6.x release; no non-breaking fix
+  exists) carries two CVEs: an open-redirect via a backslash in
+  `<Link>`/`useNavigate`, and an arbitrary-constructor-injection via
+  `deserializeErrors()` during SSR hydration. **Neither is exploitable in
+  this app**, confirmed directly by Finding 1's own frontend audit: the
+  open-redirect requires a navigation target built from user/URL-controlled
+  input, and this codebase's audit already confirmed every `Link`/`navigate()`
+  target is a hardcoded literal; the SSR-hydration vulnerability requires
+  SSR, and this is a client-only Vite SPA with none. The fix requires a
+  major-version bump to react-router v7 (breaking API changes) — deferred
+  as a dedicated frontend dependency-upgrade task. `esbuild`'s separate
+  moderate finding (a dev-server-only issue, irrelevant to the built
+  production bundle) is likewise deferred, needing a breaking Vite major
+  bump to resolve.
+
+**Reusable checklist question:** *Before accepting a previous milestone's
+claim that some standard check "has never been run," grep the CI
+configuration for it first — a check that runs in CI but is deliberately
+non-blocking (`continue-on-error`) can look, from a pure code-reading
+audit, like it was never run at all.*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —

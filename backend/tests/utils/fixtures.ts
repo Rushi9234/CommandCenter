@@ -72,13 +72,32 @@ export const addMember = (ownerToken: string, teamId: string, userId: string, ro
 // Builds a team with one persona per role, all logged in and added with
 // their named role. `owner` is whoever creates the team (teams.service.ts
 // assigns the creator the owner role automatically).
+//
+// Milestone 47: the 6 registerAndLogin calls have no dependency on each
+// other (each registers/logs in a brand-new, independent user) -- running
+// them one at a time was pure serialized bcrypt + Neon round-trip cost
+// with nothing gained from the ordering. Parallelizing them is the same
+// "reduce the fixture's own wall-clock cost, don't touch Jest's timeout"
+// fix M39 already established for this exact shape of problem, and it's
+// what bought back the wall-clock room M47's max_team_size capacity check
+// needed (an extra row-lock round trip per membership-creation call --
+// see teams.repository.ts's TEAM_CAPACITY_GATE comment) without which
+// this fixture's heaviest callers (teamMembershipConcurrency.test.ts)
+// started exceeding Jest's 30s per-test ceiling. The addMember calls
+// still run sequentially -- they're now safe to parallelize too (the
+// capacity check serializes them correctly), but buildTeamWithRoles is
+// shared by many tests that assert on ordering-sensitive side effects
+// (e.g. joined_at), so only the genuinely order-independent registrations
+// were changed here.
 export const buildTeamWithRoles = async () => {
-  const owner = await registerAndLogin('owner');
-  const admin = await registerAndLogin('admin');
-  const manager = await registerAndLogin('manager');
-  const member = await registerAndLogin('member');
-  const viewer = await registerAndLogin('viewer');
-  const nonMember = await registerAndLogin('nonmember');
+  const [owner, admin, manager, member, viewer, nonMember] = await Promise.all([
+    registerAndLogin('owner'),
+    registerAndLogin('admin'),
+    registerAndLogin('manager'),
+    registerAndLogin('member'),
+    registerAndLogin('viewer'),
+    registerAndLogin('nonmember'),
+  ]);
 
   const teamId = await createTeam(owner.token, `Team_${unique()}`);
   await addMember(owner.token, teamId, admin.userId, 'admin').expect(200);
