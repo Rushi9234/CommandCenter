@@ -362,6 +362,28 @@ export class TeamsService {
     });
   }
 
+  // Milestone 50: the self-scoped mirror of getMyInvites -- lets a
+  // requester see their own join requests' status (pending/rejected;
+  // approved ones stop being interesting once team_members already
+  // reflects membership), the exact "Waiting for team leader approval"
+  // UX gap Teams.tsx had no way to answer before this. Same bulk-load
+  // pattern (one query for every referenced team, not one per request).
+  async getMyJoinRequests(userId: string) {
+    const requests = await teamsRepository.getUserJoinRequests(userId);
+    if (requests.length === 0) {
+      return requests;
+    }
+
+    const teamIds = Array.from(new Set(requests.map((r: any) => r.team_id)));
+    const teams = await teamsRepository.getTeamsByIds(teamIds);
+    const teamById = new Map(teams.map((t: any) => [t.team_id, t]));
+
+    return requests.map((request: any) => ({
+      ...request,
+      team: teamById.get(request.team_id) || null,
+    }));
+  }
+
   // Milestone 43: both approveJoinRequest/rejectJoinRequest's repository
   // calls now guard on status = 'pending' (same pattern as acceptInvite/
   // rejectInvite) -- a null result means the request was already

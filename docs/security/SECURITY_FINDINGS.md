@@ -2231,6 +2231,78 @@ instead of application-level locking.*
 
 ---
 
+## 22. Classroom/hackathon collaboration UX (M50) — zero new authorization surface, one small additive endpoint
+
+**Context:** M50 built the first real classroom/hackathon frontend UX on
+top of the existing `teams` model (M48's Model D). Every frontend action
+this milestone added maps to an EXISTING, already-audited backend
+endpoint with no new authorization primitive:
+
+| Frontend action | Backend endpoint | Gate | Prior audit |
+|---|---|---|---|
+| Preview a team by ID before joining | `GET /teams/:teamId/preview` | none (deliberate — see §20) | M48 §20 |
+| Request to join | `POST /teams/:teamId/join` | none (deliberate, unchanged since early milestones) | re-verified M49, M50 |
+| Create a team/classroom/hackathon with a context type | `POST /teams` | `requireTeamRoleIfSpecified` on `parentTeamId` if supplied | M42 |
+| View sub-teams of a classroom/hackathon | `GET /teams/:teamId/sub-teams` | `requireTeamMembership` | M37 |
+| Neutral "submitted today" activity indicator | `GET /teams/:teamId/work-submissions` | `requireTeamMembership` | M49 §21 |
+
+**One new backend piece, deliberately minimal:** `GET /join-requests/my`
+— the self-scoped mirror of the already-existing `GET /invites/my`,
+returning only the CALLER's own join requests (`WHERE user_id = $1`,
+enforced in SQL, not by filtering a broader result client-side). This
+closes the "Waiting for team leader approval" UX gap the product brief
+explicitly asked for — before this, a requester who'd sent a join
+request had no way to check its status at all. Same bulk-team-load
+pattern `getMyInvites` already uses (M46), not a per-request fan-out.
+Tested explicitly for cross-user isolation (`myJoinRequests.test.ts`) —
+a caller never sees another user's join request, status transitions
+(pending → rejected) are reflected correctly, and unauthenticated
+requests are rejected.
+
+**Explicit re-confirmation: no implicit parent→child access was
+introduced.** The "Teams in this context" (sub-teams) view and the
+"Today's Activity" indicator are both scoped to the SELECTED team only
+— a coordinator viewing a classroom's sub-team list sees names/IDs/
+public-vs-private status (the same fields `getSubTeams` already
+returned pre-M50), never a sub-team's own tasks/goals/blockers/daily-work,
+which still require separate, explicit membership in that specific
+sub-team. The frontend explicitly displays this boundary to the user
+("You can only see the sub-teams here because you're a member of this
+parent team -- being a member here does not give you access to any
+sub-team's own tasks, goals, blockers, or daily work") rather than
+leaving it ambiguous.
+
+**"Hardworking score" avoided by design, not by omission.** The activity
+indicator sourced from M49's `work-submissions` shows exactly two states
+per member — submitted today / not yet — with no streak, no count, no
+comparison, no ranking. This was a deliberate product-safety constraint
+in the milestone's own instructions (avoid labeling students/employees as
+lazy/hardworking); recorded here because a future "let's make this
+richer" request should re-read this constraint before adding anything
+that could rank or compare members.
+
+**`team_type`/`parentTeamId` manipulation re-checked from the frontend's
+new entry points:** the create-team form lets ANY user pick "Classroom"
+or "Hackathon" as a label (still free text, no enum, unchanged from
+M48/M49's conclusion) and optionally supply a `parentTeamId` — the
+backend's existing `requireTeamRoleIfSpecified` check is what actually
+decides whether that succeeds, not anything in the UI. A user without
+owner/admin access to the named parent gets the same 403 the backend
+already produced before M50; the frontend does not attempt to hide the
+parent-ID field from users who "look like" they can't use it, since
+there's no reliable client-side way to know that in advance — consistent
+with "never rely on frontend role hiding for security."
+
+**Reusable checklist question:** *When building a frontend feature on
+top of an existing backend, list every new UI action next to the exact
+backend endpoint and authorization check it calls BEFORE writing any
+component code — if that list has zero "needs a new check" rows, the
+milestone is UX-only and carries none of the audit burden a new backend
+surface would; if it has even one, audit that one specifically rather
+than assuming the rest of the reused surface needs re-auditing too.*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —

@@ -79,6 +79,11 @@ export const getJoinRequests = async (req: AuthRequest, res: Response) => {
   ok(res, requests);
 };
 
+export const getMyJoinRequests = async (req: AuthRequest, res: Response) => {
+  const requests = await teamsService.getMyJoinRequests(req.user!.userId);
+  ok(res, requests);
+};
+
 export const approveJoinRequest = async (req: AuthRequest, res: Response) => {
   await teamsService.approveJoinRequest(req.params.requestId);
   ok(res, undefined, 'Join request approved');

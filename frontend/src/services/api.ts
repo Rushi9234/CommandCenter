@@ -82,6 +82,20 @@ export const getAllTeams = () =>
 export const getSubTeams = (teamId: string) =>
   api.get(`/teams/${teamId}/sub-teams`);
 
+// Milestone 50: safe, minimal team info by exact ID -- backend (M48) has
+// no membership/discoverability gate on this by design (see
+// docs/security/SECURITY_FINDINGS.md §20 for why that's not a new
+// exposure), so this is the "preview before you request to join" half of
+// the Team ID join flow requestJoinTeam already supported unpreviewed.
+export const getTeamPreview = (teamId: string) =>
+  api.get(`/teams/${teamId}/preview`);
+
+// Milestone 50: M49's daily-work submission history for a team -- used
+// only for the neutral "submitted today / not yet" indicator on a
+// classroom/hackathon overview, never a productivity score.
+export const getTeamWorkSubmissions = (teamId: string, date?: string) =>
+  api.get(`/teams/${teamId}/work-submissions`, { params: date ? { date } : undefined });
+
 export const getDepartments = () =>
   api.get('/teams/departments');
 
@@ -108,6 +122,12 @@ export const requestJoinTeam = (teamId: string) =>
 
 export const getJoinRequests = (teamId: string) =>
   api.get(`/teams/${teamId}/join-requests`);
+
+// Milestone 50: the requester's own pending/rejected join requests --
+// powers the "Waiting for team leader approval" empty state, which had
+// no data source before this.
+export const getMyJoinRequests = () =>
+  api.get('/join-requests/my');
 
 export const approveJoinRequest = (requestId: string) =>
   api.post(`/join-requests/${requestId}/approve`);

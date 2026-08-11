@@ -13,25 +13,68 @@ export default function Teams() {
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [showDiscoverModal, setShowDiscoverModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showJoinByIdModal, setShowJoinByIdModal] = useState(false);
   const [loading, setLoading] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
+
+  // Milestone 50: "join by Team ID" preview state -- getTeamPreview
+  // (M48) returns only the same safe field set searchTeams already
+  // exposes for discoverable teams, so previewing before joining adds no
+  // new exposure (see docs/security/SECURITY_FINDINGS.md §20).
+  const [joinByIdInput, setJoinByIdInput] = useState('');
+  const [previewedTeam, setPreviewedTeam] = useState<any>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState('');
+
+  // Milestone 50: sub-teams (M37's existing getSubTeams) and today's
+  // work-submission status (M49) for whichever team is selected --
+  // both membership-gated, already-audited endpoints, no new backend
+  // surface.
+  const [subTeams, setSubTeams] = useState<any[]>([]);
+  const [workSubmissions, setWorkSubmissions] = useState<any[]>([]);
 
   const [newTeam, setNewTeam] = useState({
     teamName: '',
     description: '',
     isPublic: true,
     maxTeamSize: 10,
+    teamType: 'main',
+    parentTeamId: '',
   });
 
   const [inviteEmail, setInviteEmail] = useState('');
+
+  // Milestone 50: labels only -- team_type is still free-text/unvalidated
+  // on the backend (no consumer branches on it there either, confirmed
+  // during M49's re-verification), so this is purely a frontend
+  // convenience list, not an enum the backend enforces.
+  const CONTEXT_TYPES = [
+    { value: 'main', label: 'Normal Team', emoji: '👥' },
+    { value: 'classroom', label: 'Subject / Classroom', emoji: '🎓' },
+    { value: 'hackathon', label: 'Hackathon', emoji: '🏆' },
+  ];
+  const contextTypeLabel = (teamType?: string) => CONTEXT_TYPES.find((c) => c.value === teamType)?.label || teamType;
+  const contextTypeEmoji = (teamType?: string) => CONTEXT_TYPES.find((c) => c.value === teamType)?.emoji || '👥';
+
+  const [myJoinRequests, setMyJoinRequests] = useState<any[]>([]);
 
   useEffect(() => {
     loadTeams();
     loadInvites();
     loadAllTeams();
+    loadMyJoinRequests();
   }, []);
+
+  const loadMyJoinRequests = async () => {
+    try {
+      const response = await api.getMyJoinRequests();
+      setMyJoinRequests(response.data.data.filter((r: any) => r.status === 'pending'));
+    } catch (error) {
+      console.error('Failed to load my join requests:', error);
+    }
+  };
 
   const loadTeams = async () => {
     try {
@@ -65,6 +108,8 @@ export default function Teams() {
 
   const selectTeam = async (team: any) => {
     setSelectedTeam(team);
+    setSubTeams([]);
+    setWorkSubmissions([]);
     try {
       const [membersRes, requestsRes] = await Promise.all([
         api.getTeamMembers(team.team_id),
@@ -75,20 +120,89 @@ export default function Teams() {
     } catch (error) {
       console.error('Failed to load team data:', error);
     }
+
+    // Milestone 50: best-effort, additive context data -- a failure here
+    // (e.g. a normal team with no sub-teams, or nobody has submitted
+    // today) must never break the rest of the team view, so each is
+    // caught independently rather than sharing the Promise.all above.
+    try {
+      const subTeamsRes = await api.getSubTeams(team.team_id);
+      setSubTeams(subTeamsRes.data.data);
+    } catch (error) {
+      console.error('Failed to load sub-teams:', error);
+    }
+    try {
+      const submissionsRes = await api.getTeamWorkSubmissions(team.team_id);
+      setWorkSubmissions(submissionsRes.data.data);
+    } catch (error) {
+      console.error('Failed to load work submissions:', error);
+    }
   };
 
   const handleCreateTeam = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     try {
-      await api.createTeam(newTeam.teamName, newTeam.description, newTeam.isPublic, newTeam.maxTeamSize);
+      // Milestone 50: parentTeamId is only sent if the user actually
+      // filled it in -- the backend already requires owner/admin access
+      // to that exact parent team (requireTeamRoleIfSpecified, M42) and
+      // will correctly reject it with a clear error otherwise; nothing
+      // here tries to pre-guess or hide that from the user, since the
+      // frontend has no way to know in advance who "is" a coordinator.
+      await api.createTeam(
+        newTeam.teamName,
+        newTeam.description,
+        newTeam.isPublic,
+        newTeam.maxTeamSize,
+        newTeam.parentTeamId.trim() || undefined,
+        undefined,
+        newTeam.teamType
+      );
       setShowCreateModal(false);
-      setNewTeam({ teamName: '', description: '', isPublic: true, maxTeamSize: 10 });
+      setNewTeam({ teamName: '', description: '', isPublic: true, maxTeamSize: 10, teamType: 'main', parentTeamId: '' });
       loadTeams();
     } catch (error: any) {
       alert(error.response?.data?.error || 'Failed to create team');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Milestone 50: preview-before-joining -- getTeamPreview (M48) works
+  // for ANY exact Team ID regardless of privacy/discoverability (the
+  // same precondition requestJoinTeam already had), so a 404 here means
+  // "no team with that exact ID," not "you can't see this team."
+  const handlePreviewTeamId = async () => {
+    const teamId = joinByIdInput.trim();
+    if (!teamId) return;
+    setPreviewLoading(true);
+    setPreviewError('');
+    setPreviewedTeam(null);
+    try {
+      const res = await api.getTeamPreview(teamId);
+      setPreviewedTeam(res.data.data);
+    } catch (error: any) {
+      setPreviewError(
+        error.response?.status === 404
+          ? 'No team found with that ID. Double-check the Team ID with whoever shared it.'
+          : error.response?.data?.error || 'Failed to preview that team.'
+      );
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const handleJoinPreviewedTeam = async () => {
+    if (!previewedTeam) return;
+    try {
+      await api.requestJoinTeam(previewedTeam.team_id);
+      alert('Join request sent! The team owner will review your request.');
+      setShowJoinByIdModal(false);
+      setJoinByIdInput('');
+      setPreviewedTeam(null);
+      loadMyJoinRequests();
+    } catch (error: any) {
+      alert(error.response?.data?.error || 'Failed to send join request');
     }
   };
 
@@ -170,6 +284,7 @@ export default function Teams() {
     try {
       await api.requestJoinTeam(teamId);
       alert('Join request sent! The team owner will review your request.');
+      loadMyJoinRequests();
     } catch (error: any) {
       alert(error.response?.data?.error || 'Failed to send join request');
     }
@@ -248,8 +363,11 @@ export default function Teams() {
               <button onClick={() => setShowDiscoverModal(true)} className="btn-secondary">
                 🔍 Discover Teams
               </button>
+              <button onClick={() => { setShowJoinByIdModal(true); setPreviewedTeam(null); setPreviewError(''); setJoinByIdInput(''); }} className="btn-secondary">
+                🔑 Join with Team ID
+              </button>
               <button onClick={() => setShowCreateModal(true)} className="btn-primary">
-                + Create Team
+                + Create Team / Classroom
               </button>
             </div>
           </div>
@@ -298,6 +416,30 @@ export default function Teams() {
         </motion.div>
       )}
 
+      {/* Milestone 50: Pending Join Requests (mine) -- "Waiting for team
+          leader approval" empty state, previously had no data source. */}
+      {myJoinRequests.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-yellow-50 border-b border-yellow-200"
+        >
+          <div className="max-w-7xl mx-auto px-6 py-4">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">⏳</span>
+              <div>
+                <div className="font-semibold text-yellow-900">
+                  Waiting for approval on {myJoinRequests.length} join {myJoinRequests.length === 1 ? 'request' : 'requests'}
+                </div>
+                <div className="text-sm text-yellow-700">
+                  {myJoinRequests.map((r: any) => r.team?.team_name).filter(Boolean).join(', ') || 'A team leader still needs to review this.'}
+                </div>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
+
       <div className="max-w-7xl mx-auto px-6 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* Teams List */}
@@ -327,9 +469,20 @@ export default function Teams() {
                   ))}
                 </AnimatePresence>
                 {teams.length === 0 && (
-                  <p className="text-sm text-gray-500 text-center py-8">
-                    No teams yet.<br/>Create one to get started!
-                  </p>
+                  <div className="text-sm text-gray-500 text-center py-8 space-y-3">
+                    <p>You have no teams yet.</p>
+                    <p className="text-xs">Got a Team ID from a coordinator or team leader?</p>
+                    <button
+                      onClick={() => { setShowJoinByIdModal(true); setPreviewedTeam(null); setPreviewError(''); setJoinByIdInput(''); }}
+                      className="btn-secondary text-xs w-full"
+                    >
+                      🔑 Join with Team ID
+                    </button>
+                    <p className="text-xs">or</p>
+                    <button onClick={() => setShowCreateModal(true)} className="btn-primary text-xs w-full">
+                      + Create a Team or Classroom
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -349,8 +502,19 @@ export default function Teams() {
                 <div className="pro-card p-6">
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
-                      <h2 className="text-2xl font-bold text-gray-900">{selectedTeam.team_name}</h2>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h2 className="text-2xl font-bold text-gray-900">{selectedTeam.team_name}</h2>
+                        {selectedTeam.team_type && selectedTeam.team_type !== 'main' && (
+                          <span className="badge badge-blue">
+                            {contextTypeEmoji(selectedTeam.team_type)} {contextTypeLabel(selectedTeam.team_type)}
+                          </span>
+                        )}
+                      </div>
                       <p className="text-gray-600 mt-2">{selectedTeam.description || 'No description provided'}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-xs text-gray-400">Team ID:</span>
+                        <code className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">{selectedTeam.team_id}</code>
+                      </div>
                       <div className="flex items-center gap-4 mt-4">
                         <span className="badge badge-blue">{teamMembers.length} members</span>
                         <span className={`badge ${selectedTeam.is_public ? 'badge-green' : 'badge-gray'}`}>
@@ -372,6 +536,60 @@ export default function Teams() {
                         🚪 Leave
                       </button>
                     </div>
+                  </div>
+                </div>
+
+                {/* Milestone 50: Teams in this context (M37's existing
+                    getSubTeams -- membership-gated, no new backend
+                    surface). Shown for ANY team with sub-teams, not just
+                    classroom/hackathon -- the concept ("this team has
+                    child teams") is generic, team_type is just a label. */}
+                {subTeams.length > 0 && (
+                  <div className="pro-card p-6">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-1">
+                      Teams in this {contextTypeLabel(selectedTeam.team_type) || 'context'} ({subTeams.length})
+                    </h3>
+                    <p className="text-sm text-gray-500 mb-4">
+                      You can only see the sub-teams here because you're a member of this parent team -- being a member here does not give you access to any sub-team's own tasks, goals, blockers, or daily work.
+                    </p>
+                    <div className="space-y-2">
+                      {subTeams.map((st: any) => (
+                        <div key={st.team_id} className="flex items-center justify-between p-3 pro-card-hover">
+                          <div>
+                            <div className="font-medium text-gray-900">{st.team_name}</div>
+                            <div className="text-xs text-gray-500">{st.description || 'No description'}</div>
+                            <code className="text-xs text-gray-400">{st.team_id}</code>
+                          </div>
+                          <span className={`badge ${st.is_public ? 'badge-green' : 'badge-gray'}`}>
+                            {st.is_public ? 'Public' : 'Private'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Milestone 50: neutral, non-scoring activity indicator
+                    (Phase E's own explicit rule -- no "hardworking
+                    score"). Only shows whether each member has confirmed
+                    a daily-work submission for today (M49), never a
+                    ranking, never a time-based metric. */}
+                <div className="pro-card p-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-1">Today's Activity</h3>
+                  <p className="text-sm text-gray-500 mb-4">Who has submitted today's confirmed work -- not a productivity score.</p>
+                  <div className="flex flex-wrap gap-2">
+                    {teamMembers.map((member: any) => {
+                      const submitted = workSubmissions.some((s: any) => s.user_id === member.user_id);
+                      return (
+                        <span
+                          key={member.user_id}
+                          className={`badge ${submitted ? 'badge-green' : 'badge-gray'}`}
+                          title={member.user?.full_name}
+                        >
+                          {submitted ? '✅' : '⚪'} {member.user?.full_name}
+                        </span>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -498,6 +716,30 @@ export default function Teams() {
               <form onSubmit={handleCreateTeam} className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
+                    What are you creating? *
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {CONTEXT_TYPES.map((ct) => (
+                      <button
+                        key={ct.value}
+                        type="button"
+                        onClick={() => setNewTeam({ ...newTeam, teamType: ct.value })}
+                        className={`p-3 rounded-lg border-2 text-center text-sm transition-all ${
+                          newTeam.teamType === ct.value ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="text-2xl mb-1">{ct.emoji}</div>
+                        {ct.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    A classroom or hackathon works exactly like a team -- you'll be its owner and can create sub-teams under it.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
                     Team Name *
                   </label>
                   <input
@@ -505,7 +747,7 @@ export default function Teams() {
                     value={newTeam.teamName}
                     onChange={(e) => setNewTeam({ ...newTeam, teamName: e.target.value })}
                     className="input-field"
-                    placeholder="Engineering Team"
+                    placeholder={newTeam.teamType === 'classroom' ? 'Software Engineering - TY CSE - 2026' : newTeam.teamType === 'hackathon' ? 'Smart India Hackathon 2026' : 'Engineering Team'}
                     required
                     autoFocus
                   />
@@ -523,6 +765,24 @@ export default function Teams() {
                     placeholder="What does this team do?"
                   />
                 </div>
+
+                {newTeam.teamType === 'main' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Parent Classroom/Hackathon Team ID (optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={newTeam.parentTeamId}
+                      onChange={(e) => setNewTeam({ ...newTeam, parentTeamId: e.target.value })}
+                      className="input-field"
+                      placeholder="Paste the classroom/hackathon's Team ID"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Only works if you're an owner/admin of that classroom/hackathon -- otherwise leave this blank and create a normal team instead.
+                    </p>
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -700,6 +960,82 @@ export default function Teams() {
                 className="btn-secondary w-full mt-4"
               >
                 Close
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Milestone 50: Join with Team ID -- preview (M48's GET
+          /teams/:teamId/preview, no membership/discoverability gate by
+          design) before requesting to join (existing POST
+          /teams/:teamId/join, unchanged). This is the safe, minimal
+          field set the preview endpoint returns -- no member list, no
+          project data, nothing beyond what a caller who already knew
+          this exact ID could already learn by requesting to join blind. */}
+      <AnimatePresence>
+        {showJoinByIdModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              transition={{ type: 'spring', duration: 0.3 }}
+              className="pro-card p-6 w-full max-w-md"
+            >
+              <h2 className="text-xl font-bold text-gray-900 mb-4">Join with Team ID</h2>
+              <p className="text-sm text-gray-600 mb-4">
+                Ask your coordinator, team leader, or organizer for the Team ID.
+              </p>
+
+              <div className="flex gap-2 mb-4">
+                <input
+                  type="text"
+                  value={joinByIdInput}
+                  onChange={(e) => { setJoinByIdInput(e.target.value); setPreviewedTeam(null); setPreviewError(''); }}
+                  className="input-field flex-1"
+                  placeholder="Paste the Team ID"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  onClick={handlePreviewTeamId}
+                  disabled={previewLoading || !joinByIdInput.trim()}
+                  className="btn-secondary"
+                >
+                  {previewLoading ? 'Looking...' : 'Preview'}
+                </button>
+              </div>
+
+              {previewError && <p className="text-sm text-red-600 mb-4">{previewError}</p>}
+
+              {previewedTeam && (
+                <div className="p-4 pro-card-hover mb-4">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-semibold text-gray-900">{previewedTeam.team_name}</h3>
+                    {previewedTeam.team_type && previewedTeam.team_type !== 'main' && (
+                      <span className="badge badge-blue">
+                        {contextTypeEmoji(previewedTeam.team_type)} {contextTypeLabel(previewedTeam.team_type)}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm text-gray-600 mt-1">{previewedTeam.description || 'No description'}</p>
+                  <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
+                    <span>{previewedTeam.member_count}/{previewedTeam.max_team_size} members</span>
+                    {previewedTeam.owner && <span>Led by {previewedTeam.owner.full_name}</span>}
+                  </div>
+                  <button onClick={handleJoinPreviewedTeam} className="btn-primary w-full mt-4">
+                    Request to Join
+                  </button>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setShowJoinByIdModal(false)}
+                className="btn-secondary w-full"
+              >
+                Cancel
               </button>
             </motion.div>
           </div>

@@ -592,6 +592,20 @@ export class TeamsRepository {
     return query<any>(text, [teamId]);
   }
 
+  // Milestone 50: the self-scoped counterpart to getUserInvites -- lets a
+  // requester see the status of join requests THEY sent ("waiting for
+  // approval" / "rejected"), the same "own resource, WHERE user_id = $1"
+  // shape getUserInvites already uses for the same job on the invite
+  // side. Nothing here lets a caller see anyone else's requests.
+  async getUserJoinRequests(userId: string) {
+    const text = `
+      SELECT * FROM join_requests
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+    `;
+    return query<any>(text, [userId]);
+  }
+
   // Milestone 43: the status transition used to be a plain SELECT
   // (no status filter) followed by an unconditional UPDATE -- the exact
   // same TOCTOU shape rejectInvite had (see its comment above), just on

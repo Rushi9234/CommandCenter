@@ -175,6 +175,10 @@ router.post(
 );
 
 router.get('/invites/my', authenticate, asyncHandler(teamsController.getMyInvites));
+// Milestone 50: self-scoped (WHERE user_id = caller) -- no membership or
+// role gate needed, the same shape /invites/my already uses for the
+// identical "my own pending action, not a team's" question.
+router.get('/join-requests/my', authenticate, asyncHandler(teamsController.getMyJoinRequests));
 router.post('/invites/:inviteId/accept', authenticate, validateUuidParams('inviteId'), asyncHandler(teamsController.acceptInvite));
 router.post('/invites/:inviteId/reject', authenticate, validateUuidParams('inviteId'), asyncHandler(teamsController.rejectInvite));
 
