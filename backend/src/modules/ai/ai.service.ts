@@ -238,6 +238,43 @@ Return ONLY valid JSON:
   }
 };
 
+// Milestone 49: drafts a same-day work summary from a user's OWN raw
+// entries only -- unlike generateStandup (which aggregates every team
+// member's data into one prompt, an already-documented, deliberately
+// accepted residual, see docs/security/SECURITY_FINDINGS.md), this never
+// crosses a user boundary, so it carries none of that finding's cross-
+// user prompt-injection/data-mixing concern. maskPII applied per-entry,
+// matching analyzeLog's own precedent, since these are still user-
+// authored free text. Returns a draft only -- the caller (logs.service.ts)
+// never persists this return value directly; the user must separately
+// confirm/edit it before anything is written, enforced at the service
+// layer, not here.
+export const generateWorkSummary = async (entries: string[]): Promise<string> => {
+  const sanitizedEntries = entries.map((e) => maskPII(e));
+
+  const prompt = `Summarize today's work log entries into a concise, professional summary (2-4 sentences or a short bullet list).
+
+Entries (in chronological order):
+${sanitizedEntries.map((e, i) => `${i + 1}. ${e}`).join('\n')}
+
+Return ONLY the summary text, no preamble, no JSON.
+
+Note: ${AI_DISCLAIMERS.SUGGESTION}`;
+
+  try {
+    const content = await callAI([{ role: 'user', content: prompt }], { max_tokens: 400 });
+    return content?.trim() || sanitizedEntries.join(' | ');
+  } catch (error) {
+    console.error('AI Work Summary Error:', error);
+    // Milestone 49: a safe, always-available fallback -- joining the raw
+    // entries verbatim -- rather than failing the request outright. The
+    // user reviews and can edit/rewrite this before confirming either
+    // way, so a degraded (non-AI) draft is still a usable starting point,
+    // not a broken feature.
+    return sanitizedEntries.join(' | ');
+  }
+};
+
 export const generateStandup = async (logs: any[], teamMembers: any[]) => {
   const standupData = logs.map((log) => ({
     member: log.username,

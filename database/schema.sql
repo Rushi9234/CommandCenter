@@ -190,6 +190,38 @@ CREATE TABLE join_requests (
 CREATE UNIQUE INDEX idx_team_invites_pending_unique ON team_invites (team_id, email) WHERE status = 'pending';
 CREATE UNIQUE INDEX idx_join_requests_pending_unique ON join_requests (team_id, user_id) WHERE status = 'pending';
 
+-- Milestone 49 (backend/migrations/1786462800000_add-daily-work-entries-and-submissions.sql):
+-- raw multi-entry daily work log (many per user/team/day) feeding an
+-- AI-drafted, user-confirmed final submission (at most one per
+-- user/team/day, enforced the same way daily_logs' own M24
+-- UNIQUE(user_id, log_date) is). Deliberately separate from daily_logs
+-- (personal, single free-form entry, unchanged) -- see the migration's
+-- own comment for why a new, team-scoped model was verified necessary
+-- rather than assumed.
+CREATE TABLE daily_work_entries (
+    entry_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    team_id UUID NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
+    entry_text VARCHAR(1000) NOT NULL,
+    entry_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE daily_work_submissions (
+    submission_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    team_id UUID NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
+    work_date DATE NOT NULL,
+    ai_summary TEXT,
+    confirmed_summary VARCHAR(5000) NOT NULL,
+    confirmed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, team_id, work_date)
+);
+
+CREATE INDEX idx_daily_work_entries_user_team_date ON daily_work_entries(user_id, team_id, entry_date);
+CREATE INDEX idx_daily_work_submissions_team_date ON daily_work_submissions(team_id, work_date);
+
 -- Indexes for performance
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_users_username ON users(username);

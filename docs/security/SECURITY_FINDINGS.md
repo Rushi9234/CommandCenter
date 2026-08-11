@@ -2146,6 +2146,91 @@ it's the same gap (already accepted) wearing a friendlier shape.*
 
 ---
 
+## 21. Daily-work entries/submissions feature (M49) — new tables, new authorization surface, security audit
+
+**Context:** M48 identified that the existing `daily_logs` table (one
+free-form entry per user per day, `UNIQUE(user_id, log_date)` since M24,
+no team scoping) is the wrong shape for "many small entries through the
+day → AI-drafted summary → user confirms/edits → one final submission."
+M49 re-verified this rather than assuming it (confirmed: `daily_logs` has
+no `team_id` column at all — team association for `getStandup` is done by
+joining through `team_members` at query time, not stored on the log) and
+implemented the new model: `daily_work_entries` (raw, many per user/team/
+day, no uniqueness constraint) and `daily_work_submissions` (the final
+confirmed record, `UNIQUE(user_id, team_id, work_date)` — the exact same
+race-safety pattern `daily_logs` already established for its own
+one-per-day invariant). `daily_logs` itself is completely unchanged.
+
+**Authorization model:** every entry/submission is scoped by `(userId`
+from the auth token, never client-supplied`, teamId)`, gated by the same
+`requireTeamRole`/`requireTeamMembership` middleware every other
+team-scoped resource already uses — no new authorization primitive was
+introduced. `GET /work-entries/today` is additionally scoped to the
+caller's own `user_id` (a teammate's entries are never returned, even to
+an owner/admin — tested explicitly). `GET /teams/:teamId/work-submissions`
+is membership-gated (any role) and returns every member's submissions for
+the team, matching `getStandup`/`getTeamBlockers`'s existing "any member
+can see the team's collective work" precedent — no new privacy concept.
+
+**State-machine integrity — "submit" is a hard, one-way lock, by design:**
+Once `daily_work_submissions` has a row for `(user, team, today)`,
+`createEntry` refuses new entries for that day (checked at the service
+layer) and `submitWork` refuses a second submission (checked at the
+service layer AND enforced unconditionally by the `UNIQUE` constraint,
+translated to a clean `409` via the existing `errorHandler.ts`
+`23505`-translation, M40 — no bespoke locking code needed). A dedicated
+concurrency test fires two simultaneous submit requests for the same
+day and confirms exactly one `201` and one `409`, never two `201`s.
+**Deliberately NOT implemented: editing a submission after it's
+created.** The product brief describes editing the AI draft BEFORE
+submission (handled entirely client-side — the user free-edits the text
+returned by `summarize` before calling `submit`, no backend "edit" step
+needed for that); post-submission editing (changing an already-confirmed,
+already-visible-to-teammates day) is a different, larger decision
+(should teammates see an edit history? does it need re-confirmation?)
+with no product evidence yet that it's required — recorded here as a
+deliberate P2 deferral, not an oversight, so a future session doesn't
+have to re-derive why it's missing.
+
+**AI-provider security (`generateWorkSummary`, `ai.service.ts`):** summarizes
+ONLY the calling user's own entries — verified in code
+(`dailyWorkRepository.getTodaysEntries(userId, teamId)`, scoped by
+`user_id`), so this carries none of `generateStandup`'s already-documented
+cross-member data-mixing residual (§17). `maskPII` applied per-entry,
+matching `analyzeLog`'s established precedent. Gated by the caller's own
+`ai_enabled` privacy setting (falls back to a plain joined-entries string
+when disabled, matching the `AI_DISABLED_MESSAGE` pattern used everywhere
+else). Rate-limited via `createApiLimiter()` (re-summarizing has no
+natural cap, the same reasoning M42/M46 already applied to every other
+re-readable AI endpoint). Cost/abuse bounded by `MAX_ENTRIES_PER_DAY = 50`
+combined with each entry's 1000-character cap (~50KB realistic prompt
+ceiling) — the same "cap the collection, not just one item" lesson M40
+already applied to `contributors`/`dependencies`/`affected_tasks`.
+Never persists an unconfirmed draft — `summarizeToday` returns its result
+directly to the caller with zero database write, so there is no path by
+which an AI-generated draft becomes "official" without a separate,
+explicit `submitWork` call.
+
+**Database/capacity:** `getTeamSubmissionsForDate` is one indexed JOIN
+query (`idx_daily_work_submissions_team_date`), not a per-member fan-out
+— the exact N+1 shape M42/M46 already fixed elsewhere was not
+reintroduced here. Date filtering uses `COALESCE($2::date, CURRENT_DATE)`
+in SQL, not a JS-computed "today" string — the exact DATE-column/JS-Date
+timezone mismatch M46 already found once (`getTodaysLogsForUsers`) was
+deliberately avoided here from the start rather than reintroduced and
+caught later.
+
+**Reusable checklist question:** *When a new feature needs "one raw,
+frequently-created record" and "one finalized, rarely-created record,"
+resist collapsing them into a single table with a status flag — a
+separate table for the frequent, unconstrained case (rows accumulate
+freely) and a separate table for the rare, uniquely-constrained case
+(the actual invariant a `UNIQUE` index enforces) is usually the smaller,
+more honest schema, and lets the database do the race-safety work
+instead of application-level locking.*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —

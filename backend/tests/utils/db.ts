@@ -9,6 +9,8 @@ export const testPool = new Pool({ connectionString: process.env.DATABASE_URL })
 const TABLES = [
   'messages',
   'blockers',
+  'daily_work_submissions',
+  'daily_work_entries',
   'daily_logs',
   'tasks',
   'goals',
