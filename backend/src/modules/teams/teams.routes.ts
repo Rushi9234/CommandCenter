@@ -100,6 +100,12 @@ router.post(
   validate(inviteMemberSchema),
   asyncHandler(teamsController.inviteMember)
 );
+// Milestone 48: deliberately no requireTeamMembership/requireTeamRole and
+// no is_public/is_discoverable check -- see getTeamPreview's own comment
+// for why this doesn't create new exposure (requestJoin below already
+// accepts any team_id with no such gate; this just lets the caller see a
+// few safe fields about it first instead of joining blind).
+router.get('/teams/:teamId/preview', authenticate, validateUuidParams('teamId'), asyncHandler(teamsController.getTeamPreview));
 router.post('/teams/:teamId/join', authenticate, validateUuidParams('teamId'), asyncHandler(teamsController.requestJoin));
 
 // Previously unprotected -- any authenticated user could view any team's

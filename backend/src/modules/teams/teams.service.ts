@@ -283,6 +283,50 @@ export class TeamsService {
     });
   }
 
+  // Milestone 48: the "enter a Team ID to join" workflow (a teacher/team
+  // leader shares a team_id out of band -- a classroom code, a hackathon
+  // invite link) already worked end-to-end at the request layer --
+  // requestJoin below has never gated on is_public/is_discoverable, since
+  // knowing the exact ID is itself the invitation, the same precedent
+  // is_public/is_discoverable's sibling searchTeams (M46) uses for
+  // "browse without an ID" instead. What was missing: a caller who has
+  // been given an ID has no way to see what they're about to request to
+  // join before firing requestJoin blindly. This adds exactly that,
+  // deliberately narrow -- the same safe-field shape searchTeams already
+  // returns (M46), not the full team record -- and confirms no new
+  // exposure exists: a caller who already knows a team_id could always
+  // join-request it sight-unseen, so surfacing these same few fields
+  // first is strictly a UX improvement, not a new privacy boundary.
+  // Unlike getSubTeams/getTeamMembers (require membership) and unlike
+  // searchTeams (requires is_public+is_discoverable), this intentionally
+  // requires neither -- it answers "what is the team with THIS exact ID,"
+  // the same question requestJoin already answers by side effect.
+  async getTeamPreview(teamId: string) {
+    const team = await teamsRepository.getTeam(teamId);
+    if (!team) {
+      throw new NotFoundError('Team not found');
+    }
+
+    const [owner, memberCounts] = await Promise.all([
+      usersRepository.getUserById(team.created_by),
+      teamsRepository.getMemberCounts([teamId]),
+    ]);
+
+    return {
+      team_id: team.team_id,
+      team_name: team.team_name,
+      description: team.description,
+      team_type: team.team_type,
+      department: team.department,
+      is_public: team.is_public,
+      is_discoverable: team.is_discoverable,
+      max_team_size: team.max_team_size,
+      member_count: memberCounts[teamId] || 0,
+      owner: owner ? { full_name: owner.full_name, username: owner.username } : null,
+      created_at: team.created_at,
+    };
+  }
+
   // Milestone 40: same fix as inviteMember above -- createJoinRequest's
   // ON CONFLICT DO NOTHING returns no row when this caller already has a
   // pending join request for this team, surfaced as a clean 409 instead

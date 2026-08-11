@@ -64,6 +64,11 @@ export const searchTeams = async (req: AuthRequest, res: Response) => {
   ok(res, teams);
 };
 
+export const getTeamPreview = async (req: AuthRequest, res: Response) => {
+  const preview = await teamsService.getTeamPreview(req.params.teamId);
+  ok(res, preview);
+};
+
 export const requestJoin = async (req: AuthRequest, res: Response) => {
   const request = await teamsService.requestJoin(req.params.teamId, req.user!.userId);
   ok(res, request, 'Join request sent');

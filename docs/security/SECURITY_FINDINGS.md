@@ -2097,6 +2097,55 @@ audit, like it was never run at all.*
 
 ---
 
+## 20. New authorization surface: team preview-by-ID (M48)
+
+**Context:** M48 is a product-architecture milestone (multi-context
+workspace foundation for classrooms/hackathons/companies), not a security
+audit — but it added one new route, `GET /teams/:teamId/preview`, which
+deliberately has neither `requireTeamMembership` nor `requireTeamRole`
+nor an `is_public`/`is_discoverable` check. Recorded here because "a new
+endpoint with no membership gate" is exactly the shape every prior
+audit (M37, M41, M44) has flagged as a real vulnerability when found
+elsewhere — this entry exists so a future audit doesn't have to
+re-derive from scratch whether this one is the same class or a deliberate
+exception.
+
+**Why this one is not the same class:** `POST /teams/:teamId/join`
+(`teams.service.ts`'s `requestJoin`, present since early milestones) has
+never had a membership/role/discoverability gate either — knowing a
+`team_id` and sending a join request has always been enough to queue a
+request an owner/admin must explicitly approve, regardless of whether the
+team is `is_public`/`is_discoverable`. `GET /teams/:teamId/preview` reveals
+*strictly less* than what a caller could already learn by just calling
+`requestJoin` and inspecting the team afterward via any membership-gated
+endpoint once approved — it only front-loads a narrow, deliberately
+minimal field set (`team_name`, `description`, `team_type`, `department`,
+`is_public`, `is_discoverable`, `max_team_size`, `member_count`,
+`owner.{full_name,username}`, `created_at`) so a caller can decide
+whether to bother requesting at all. No member list, `permissions`,
+`parent_team_id`, or child-resource data is exposed. Enumeration risk is
+unchanged from M44's standing conclusion (`gen_random_uuid()` v4, ~122
+bits of entropy — guessing a valid ID is infeasible; this only matters to
+someone who already has a specific ID, the same precondition `requestJoin`
+already required).
+
+**What would reopen this:** if `requestJoin` ever gains a
+membership/discoverability gate of its own (closing the precondition this
+finding relies on), `getTeamPreview` would need the identical gate added
+at the same time, or it would become a genuine gap. If the preview's
+field set is ever widened (e.g., to include a member list preview),
+re-run this same "does this reveal more than `requestJoin`'s own
+precondition already allowed" analysis before shipping it.
+
+**Reusable checklist question:** *Before flagging "an endpoint with no
+membership gate" as an authorization bug, check whether an EXISTING,
+already-reviewed endpoint already has the identical exposure as its own
+established precondition — a new endpoint that reveals a strict subset of
+what an existing, unchanged endpoint already allowed is not a new gap,
+it's the same gap (already accepted) wearing a friendlier shape.*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —
