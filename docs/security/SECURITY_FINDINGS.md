@@ -1647,6 +1647,148 @@ sufficient reason to skip it.*
 
 ---
 
+## 18. A pervasive N+1-against-a-shared-pool class, recurring in five places M42's own fix never got generalized to
+
+**Vulnerability class:** M42 fixed exactly one instance of "fetch N related
+records with N separate per-item queries inside a `Promise.all`, where N
+is an attacker-inflatable collection size" (`GET /projects/:projectId/tasks`)
+and wrote the exact checklist question that would have caught every other
+instance — but that checklist question was apparently never actually
+re-run against the rest of the codebase. M46's fresh audit did run it
+(grepping every `Promise.all(...map(...))` doing a per-item DB call) and
+found the identical shape recurring in five more places, two with
+concretely worse reachability than the original.
+
+**Root cause — why this differs from an ordinary performance bug:** the
+app's entire Postgres access goes through one shared pool of **20
+connections** (`db/client.ts`/`utils/database.ts`). A single request that
+fans out N concurrent queries doesn't just make itself slow — once N
+exceeds the pool size, that one request starves the connection pool for
+*every other in-flight request across the whole application*, not just
+the caller's own. This is the same "one caller's cost is every caller's
+cost" shape as M45's recursive-CTE finding, just via query *count*
+instead of query *hang time*. Combined with M44's confirmed conclusion
+that `max_team_size` is unenforced decorative metadata, "N" here is
+genuinely attacker-inflatable — nothing stops a team from growing to
+hundreds of members via ordinary invites/join-requests.
+
+**Confirmed instances, by severity:**
+1. **`teams.repository.ts`'s `searchTeams` (most severe)** — the SQL
+   itself had no `LIMIT` at all, and the service-layer enrichment fanned
+   out 2 queries per matched team. Reachable by ANY authenticated user
+   with zero relationship to any matched team, and the route carries no
+   rate limiter — the worst reachability of the whole class, since every
+   other instance at least requires membership in the team whose
+   collection is being fanned out over.
+2. **`logs.service.ts`'s `getStandup`** — one query per team member, no
+   cap on team size, compounding with an AI-cost amplification (the
+   `generateStandup` prompt itself scales with member count, see §17's
+   AI-cost note) at the *same* rate-limit price M42 already established.
+3. **`blockers.service.ts`'s `getTeamBlockers`/`getMessages`/`getAIMentorAdvice`** —
+   the latter two were not even genuine N+1s once inspected: `getBlockerMessages`
+   already joins `users` and returns `username`/`full_name` on every row
+   — the per-message `getUserById` re-fetch was **pure unforced N+1 with
+   no query ever actually needed**, the cheapest possible class of this
+   bug to close (delete the redundant call, don't even need to batch it).
+4. **`teams.service.ts`'s `getMyInvites`/`getJoinRequests`** — lower
+   severity (self-scoped inbox / per-team collections realistically
+   bounded by actual invitations sent, not simple to inflate arbitrarily),
+   fixed for consistency with the rest of the class.
+
+**Fix pattern:** Where a real query was needed, replaced the per-item
+fan-out with exactly two bulk queries (`WHERE id = ANY($1)` for entities,
+`GROUP BY` for counts) regardless of collection size — the same pattern
+M42 established for `getProjectTasks`, `usersRepository.getUsersByIds`
+reused directly, and new siblings added (`teamsRepository.getMemberCounts`/
+`getTeamsByIds`, `blockersRepository.getMessageCounts`, `logsRepository.getTodaysLogsForUsers`).
+Where no query was ever needed (`getMessages`/`getAIMentorAdvice`),
+removed the redundant fetch entirely rather than "batching" something
+that shouldn't have run at all. `searchTeams`'s SQL also gained a `LIMIT 50`
+(matching M40's established array-length-bound convention) as a second,
+independent layer of protection — even a correctly-batched query against
+an unbounded match set is still an unbounded *result set* to serialize
+and transmit.
+
+**A genuine, unrelated bug this rewrite's own test caught and fixed
+along the way:** `getStandup`'s "only show today's log" filter compared
+a Postgres `DATE` column's value (which node-postgres returns as a JS
+`Date` object, constructed at *local* midnight) against a plain
+`"YYYY-MM-DD"` string via `===` — always `false` outside UTC+0, and even
+at UTC+0 fragile to round-tripping through `.toISOString()` (which
+converts local midnight to UTC, shifting the date by the server's offset
+whenever it isn't literally zero). This filter had **no prior test
+coverage** and had likely never actually worked. Fixed by filtering
+`log_date = CURRENT_DATE` directly in SQL instead of comparing dates in
+JS at all — Postgres's own date comparison has no such ambiguity, and
+`daily_logs`' existing `UNIQUE(user_id, log_date)` constraint (M24) means
+the bulk query already returns at most one row per user, no `DISTINCT ON`
+even needed. This is exactly the kind of thing this project's own
+discipline says to fix when found incidentally while touching the exact
+code, rather than either silently leaving a known-broken filter in place
+or weakening the new test to avoid catching it.
+
+**A related O(n²) CPU-bound finding, same milestone, different
+mechanism:** `goals.service.ts`'s `buildGoalTree` re-filtered the
+*entire* goals array at every node of the tree it built — O(n) work per
+node visited, O(n²) total for a team with n goals. Unlike the pool-
+exhaustion findings above, this is single-threaded CPU cost on the
+Node.js event loop, not a database connection cost, but the effect is
+the same shape: one request (any read-authorized member, including
+`viewer`) can stall the whole process for its own duration. Fixed by
+building a `parent_goal_id -> children` index once (O(n)) and having the
+recursive tree-build only ever look up that index — O(n) total instead
+of O(n²), correctness unchanged (verified by a new regression test
+against a real multi-level hierarchy).
+
+**Defensive hardening investigated and applied, though not an active
+vulnerability:** `jwt.ts`'s `jwt.verify` call named no explicit
+`algorithms` option. Confirmed, against the installed `jsonwebtoken`
+library's own source, that it already refuses an unsigned/`alg: none`
+token unless the caller explicitly opts in, and defaults to
+HS256/384/512 for a plain string secret (which `env.jwtSecret` is) — so
+this was never a live algorithm-confusion vulnerability (that class
+requires an asymmetric public key reachable as a would-be HMAC secret,
+which doesn't apply to a symmetric string secret). Named the algorithm
+explicitly on both sign and verify anyway (`algorithms: ['HS256']`) as
+cheap, zero-risk defensive clarity — a future change to the secret's
+type or the library's own defaults can no longer silently widen what
+gets accepted without a corresponding, deliberate change here. Verified
+with a new test that a manually-crafted `alg: none` token is rejected.
+
+**Investigated and confirmed NOT vulnerabilities this milestone:** task
+`dependencies` cycles (confirmed no consumer ever recurses over them —
+`getProjectTasks` does one flat, single-level lookup; a 2-cycle has zero
+DoS consequence, unlike the goal-hierarchy case M45 fixed). Production
+configuration (no fallback JWT secret, `AUTO_VERIFY`/CORS/cookie flags
+all correctly environment-gated, bcrypt cost uniform, error verbosity
+identical in every environment). Mechanism-interaction ordering (CSRF →
+auth → authorization → the M45 cycle-check all correctly sequenced in
+`updateGoal`, cheapest/most-authoritative gate first). Index coverage
+(every query in the N+1 chains above was itself already indexed and
+cheap — the vulnerability was the multiplication factor, not per-query
+cost). Frontend trust boundary (no identity/role/permission field is
+ever sent by the frontend and trusted by the backend instead of being
+derived server-side; re-confirmed, not newly discovered).
+
+**Reusable checklist question:** *When a fix closes one instance of a
+vulnerability class (an N+1, a missing cap, a missing check), the
+checklist question that fix's own documentation writes is not
+self-executing — schedule an explicit, later pass that actually re-runs
+it against the rest of the codebase (a grep for the same code shape),
+rather than trusting that writing the question down was equivalent to
+asking it everywhere it applies. For any per-item fan-out inside a
+`Promise.all`: first check whether the "related data" is already present
+on the base query's own joined columns (no query needed at all) before
+reaching for a batch-query fix — the cheapest fix is deleting an
+unnecessary re-fetch, not batching one that shouldn't exist. For any
+JS-side comparison involving a database DATE/TIMESTAMP column: prefer
+filtering by that condition in SQL over fetching broadly and comparing
+in application code — timezone/type-representation mismatches between a
+driver's parsed value and a hand-constructed comparison value are a
+recurring, easy-to-miss class of their own.*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —

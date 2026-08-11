@@ -148,6 +148,12 @@ export class TeamsService {
     return invite;
   }
 
+  // Milestone 46: used to fetch each invite's team and inviter with its
+  // own pair of queries inside a per-invite Promise.all -- same
+  // unbounded-fan-out shape as this milestone's other fixes, just on a
+  // self-scoped (the caller's own inbox) rather than team-scoped
+  // collection. Replaced with two bulk queries regardless of how many
+  // invites the caller has pending.
   async getMyInvites(userId: string) {
     const user = await usersRepository.getUserById(userId);
     if (!user) {
@@ -155,18 +161,28 @@ export class TeamsService {
     }
 
     const invites = await teamsRepository.getUserInvites(user.email);
+    if (invites.length === 0) {
+      return invites;
+    }
 
-    return Promise.all(
-      invites.map(async (invite: any) => {
-        const team = await teamsRepository.getTeam(invite.team_id);
-        const inviter = await usersRepository.getUserById(invite.invited_by);
-        return {
-          ...invite,
-          team,
-          inviter: inviter ? { full_name: inviter.full_name, username: inviter.username } : null,
-        };
-      })
-    );
+    const teamIds = Array.from(new Set(invites.map((i: any) => i.team_id)));
+    const inviterIds = Array.from(new Set(invites.map((i: any) => i.invited_by)));
+
+    const [teams, inviters] = await Promise.all([
+      teamsRepository.getTeamsByIds(teamIds),
+      usersRepository.getUsersByIds(inviterIds),
+    ]);
+    const teamById = new Map(teams.map((t: any) => [t.team_id, t]));
+    const inviterById = new Map(inviters.map((u: any) => [u.user_id, u]));
+
+    return invites.map((invite: any) => {
+      const inviter = inviterById.get(invite.invited_by);
+      return {
+        ...invite,
+        team: teamById.get(invite.team_id) || null,
+        inviter: inviter ? { full_name: inviter.full_name, username: inviter.username } : null,
+      };
+    });
   }
 
   // Milestone 5: previously accepted ANY pending invite by ID regardless of
@@ -213,20 +229,39 @@ export class TeamsService {
     }
   }
 
+  // Milestone 46: used to fetch each matched team's owner and full member
+  // list with its own pair of queries inside a per-team Promise.all -- for
+  // an unbounded match set (the repository query itself had no LIMIT,
+  // also fixed this milestone) reachable by any authenticated user with
+  // no team relationship and no rate limiter on the route, this was an
+  // easy way to exhaust the app's single, shared 20-connection pool with
+  // one broad search. Replaced with exactly two bulk queries (all matched
+  // teams' owners, all matched teams' member counts) regardless of how
+  // many teams matched, then joined in memory -- same output shape, O(1)
+  // round trips instead of O(N).
   async searchTeams(searchQuery: string) {
     const teams = await teamsRepository.searchTeams(searchQuery);
+    if (teams.length === 0) {
+      return teams;
+    }
 
-    return Promise.all(
-      teams.map(async (team: any) => {
-        const owner = await usersRepository.getUserById(team.created_by);
-        const members = await teamsRepository.getTeamMembers(team.team_id);
-        return {
-          ...team,
-          owner: owner ? { full_name: owner.full_name, username: owner.username } : null,
-          member_count: members.length,
-        };
-      })
-    );
+    const ownerIds = Array.from(new Set(teams.map((t: any) => t.created_by)));
+    const teamIds = teams.map((t: any) => t.team_id);
+
+    const [owners, memberCounts] = await Promise.all([
+      usersRepository.getUsersByIds(ownerIds),
+      teamsRepository.getMemberCounts(teamIds),
+    ]);
+    const ownerById = new Map(owners.map((u: any) => [u.user_id, u]));
+
+    return teams.map((team: any) => {
+      const owner = ownerById.get(team.created_by);
+      return {
+        ...team,
+        owner: owner ? { full_name: owner.full_name, username: owner.username } : null,
+        member_count: memberCounts[team.team_id] || 0,
+      };
+    });
   }
 
   // Milestone 40: same fix as inviteMember above -- createJoinRequest's
@@ -241,20 +276,27 @@ export class TeamsService {
     return joinRequest;
   }
 
+  // Milestone 46: same fix as getMyInvites above -- one bulk user lookup
+  // instead of one per join request.
   async getJoinRequests(teamId: string) {
     const requests = await teamsRepository.getTeamJoinRequests(teamId);
+    if (requests.length === 0) {
+      return requests;
+    }
 
-    return Promise.all(
-      requests.map(async (request: any) => {
-        const user = await usersRepository.getUserById(request.user_id);
-        return {
-          ...request,
-          user: user
-            ? { user_id: user.user_id, username: user.username, full_name: user.full_name, email: user.email }
-            : null,
-        };
-      })
-    );
+    const userIds = Array.from(new Set(requests.map((r: any) => r.user_id)));
+    const users = await usersRepository.getUsersByIds(userIds);
+    const userById = new Map(users.map((u: any) => [u.user_id, u]));
+
+    return requests.map((request: any) => {
+      const user = userById.get(request.user_id);
+      return {
+        ...request,
+        user: user
+          ? { user_id: user.user_id, username: user.username, full_name: user.full_name, email: user.email }
+          : null,
+      };
+    });
   }
 
   // Milestone 43: both approveJoinRequest/rejectJoinRequest's repository

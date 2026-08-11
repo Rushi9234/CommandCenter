@@ -1,14 +1,34 @@
 import { goalsRepository } from './goals.repository';
 import { ForbiddenError, BadRequestError } from '../../common/errors';
 
-async function buildGoalTree(parentId: string, allGoals: any[]): Promise<any[]> {
-  const children = allGoals.filter((g) => g.parent_goal_id === parentId);
-  return Promise.all(
-    children.map(async (child) => ({
-      ...child,
-      children: await buildGoalTree(child.goal_id, allGoals),
-    }))
-  );
+// Milestone 46: used to re-filter the ENTIRE goals array at every node of
+// the tree (children = allGoals.filter(...)) -- O(n) work per node
+// visited, O(n^2) total for a team with n goals, a synchronous, CPU-bound
+// pass on Node's single-threaded event loop with no cap on how many goals
+// a team can accumulate. Building a parent -> children index once (O(n))
+// and having the recursive build only ever look up that index turns the
+// whole traversal into O(n) total, regardless of shape (wide, deep, or
+// balanced). No longer async -- there was never any I/O in this function,
+// only synchronous array filtering that happened to be wrapped in
+// Promise.all.
+function buildChildrenIndex(allGoals: any[]): Map<string, any[]> {
+  const index = new Map<string, any[]>();
+  for (const goal of allGoals) {
+    if (goal.parent_goal_id) {
+      const siblings = index.get(goal.parent_goal_id) ?? [];
+      siblings.push(goal);
+      index.set(goal.parent_goal_id, siblings);
+    }
+  }
+  return index;
+}
+
+function buildGoalTree(parentId: string, childrenIndex: Map<string, any[]>): any[] {
+  const children = childrenIndex.get(parentId) ?? [];
+  return children.map((child) => ({
+    ...child,
+    children: buildGoalTree(child.goal_id, childrenIndex),
+  }));
 }
 
 export class GoalsService {
@@ -55,12 +75,11 @@ export class GoalsService {
     const goals = teamId ? await goalsRepository.getTeamGoals(teamId) : await goalsRepository.getUserGoals(userId);
 
     const rootGoals = goals.filter((g: any) => !g.parent_goal_id);
-    return Promise.all(
-      rootGoals.map(async (goal: any) => ({
-        ...goal,
-        children: await buildGoalTree(goal.goal_id, goals),
-      }))
-    );
+    const childrenIndex = buildChildrenIndex(goals);
+    return rootGoals.map((goal: any) => ({
+      ...goal,
+      children: buildGoalTree(goal.goal_id, childrenIndex),
+    }));
   }
 
   // Milestone 30: canWriteGoal (checked at the route level) only verifies

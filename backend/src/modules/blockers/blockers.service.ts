@@ -81,20 +81,36 @@ export class BlockersService {
 
   // Milestone 5: base gate (requireAccess + canAccessTeam) moved to
   // blockers.routes.ts.
+  // Milestone 46: used to fetch each blocker's creator and its full
+  // message list (just to take `.length`) with its own pair of queries
+  // inside a per-blocker Promise.all -- for a team with many blockers,
+  // this is the same unbounded-fan-out-against-a-shared-pool shape as
+  // M45's goal-cycle finding and M46's other fixes. Replaced with two
+  // bulk queries (all creators, all message counts) regardless of how
+  // many blockers the team has.
   async getTeamBlockers(teamId: string) {
     const blockers = await blockersRepository.getTeamBlockers(teamId);
+    if (blockers.length === 0) {
+      return blockers;
+    }
 
-    return Promise.all(
-      blockers.map(async (blocker: any) => {
-        const creator = await usersRepository.getUserById(blocker.created_by);
-        const messages = await blockersRepository.getBlockerMessages(blocker.blocker_id);
-        return {
-          ...blocker,
-          creator: creator ? { full_name: creator.full_name, username: creator.username } : null,
-          message_count: messages.length,
-        };
-      })
-    );
+    const creatorIds = Array.from(new Set(blockers.map((b: any) => b.created_by)));
+    const blockerIds = blockers.map((b: any) => b.blocker_id);
+
+    const [creators, messageCounts] = await Promise.all([
+      usersRepository.getUsersByIds(creatorIds),
+      blockersRepository.getMessageCounts(blockerIds),
+    ]);
+    const creatorById = new Map(creators.map((u: any) => [u.user_id, u]));
+
+    return blockers.map((blocker: any) => {
+      const creator = creatorById.get(blocker.created_by);
+      return {
+        ...blocker,
+        creator: creator ? { full_name: creator.full_name, username: creator.username } : null,
+        message_count: messageCounts[blocker.blocker_id] || 0,
+      };
+    });
   }
 
   // Milestone 35: resolved_by/resolved_at are not client-writable
@@ -131,18 +147,18 @@ export class BlockersService {
     return blockersRepository.createMessage(blockerId, userId, messageText);
   }
 
+  // Milestone 46: used to re-fetch each message's author with its own
+  // getUserById call inside a per-message Promise.all -- entirely
+  // redundant, since blockersRepository.getBlockerMessages already joins
+  // users and returns username/full_name on every row directly. No query
+  // was ever needed here; this was pure unforced N+1.
   async getMessages(blockerId: string) {
     const messages = await blockersRepository.getBlockerMessages(blockerId);
 
-    return Promise.all(
-      messages.map(async (message: any) => {
-        const user = await usersRepository.getUserById(message.user_id);
-        return {
-          ...message,
-          user: user ? { user_id: user.user_id, username: user.username, full_name: user.full_name } : null,
-        };
-      })
-    );
+    return messages.map((message: any) => ({
+      ...message,
+      user: { user_id: message.user_id, username: message.username, full_name: message.full_name },
+    }));
   }
 
   async getAIMentorAdvice(blockerId: string, userId: string) {
@@ -156,13 +172,11 @@ export class BlockersService {
       return { advice: AI_DISABLED_MESSAGE };
     }
 
+    // Milestone 46: same fix as getMessages above -- getBlockerMessages
+    // already joins users, so re-fetching each author was pure unforced
+    // N+1 with no query actually needed.
     const messages = await blockersRepository.getBlockerMessages(blockerId);
-    const messagesWithUsers = await Promise.all(
-      messages.map(async (m: any) => {
-        const user = await usersRepository.getUserById(m.user_id);
-        return { username: user?.username || 'Unknown', message_text: m.message_text };
-      })
-    );
+    const messagesWithUsers = messages.map((m: any) => ({ username: m.username || 'Unknown', message_text: m.message_text }));
 
     const advice = await generateMentorAdvice(
       `${blocker.title}\n${blocker.description}`,

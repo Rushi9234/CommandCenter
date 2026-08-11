@@ -129,16 +129,22 @@ export class LogsService {
       }
 
       members = await teamsRepository.getTeamMembers(teamId);
-      const today = new Date().toISOString().split('T')[0];
 
-      const teamLogs = await Promise.all(
-        members.map(async (m: any) => {
-          const userLogs = await logsRepository.getUserLogs(m.user_id, 1);
-          const todayLog = userLogs.find((l: any) => l.log_date === today);
-          return todayLog ? { ...todayLog, username: m.user?.username || 'Unknown' } : null;
+      // Milestone 46: one bulk query for every member's today-dated log,
+      // replacing the old per-member Promise.all fan-out (see
+      // getTodaysLogsForUsers' own comment for the vulnerability this
+      // closes, and the real, pre-existing "today" comparison bug it
+      // also fixes by filtering the date in SQL instead of JS).
+      // daily_logs' own UNIQUE(user_id, log_date) constraint (M24)
+      // guarantees at most one row per member here.
+      const todaysLogs = await logsRepository.getTodaysLogsForUsers(members.map((m: any) => m.user_id));
+      const todaysLogByUserId = new Map(todaysLogs.map((l: any) => [l.user_id, l]));
+      logs = members
+        .map((m: any) => {
+          const log = todaysLogByUserId.get(m.user_id);
+          return log ? { ...log, username: m.user?.username || 'Unknown' } : null;
         })
-      );
-      logs = teamLogs.filter((l) => l !== null);
+        .filter((l: any) => l !== null);
     } else {
       const user = await usersRepository.getUserById(userId);
       const userLogs = await logsRepository.getUserLogs(userId, 1);

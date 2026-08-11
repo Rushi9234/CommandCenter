@@ -25,12 +25,23 @@ export const ACCESS_TOKEN_TTL_SECONDS = 15 * 60; // 15 minutes, for the new cook
 export const LEGACY_BEARER_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days, unchanged -- see auth.service.ts for why
 export const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+// Milestone 46: jsonwebtoken already refuses an unsigned/`alg: none`
+// token unless the caller explicitly opts into `algorithms: ['none']`,
+// and defaults to HS256/384/512 for a plain string secret (verified
+// directly against the installed library) -- so this was never an
+// active algorithm-confusion vulnerability. Naming the algorithm
+// explicitly on both sides anyway is cheap, defensive clarity: it means
+// a future change to this secret's type (e.g. to an asymmetric key) or
+// to the library's own defaults can't silently widen what gets accepted
+// without a corresponding, deliberate change here.
+const JWT_ALGORITHM = 'HS256';
+
 export const signAccessToken = (payload: AccessTokenPayload, expiresInSeconds: number = LEGACY_BEARER_TOKEN_TTL_SECONDS): string => {
-  return jwt.sign(payload, env.jwtSecret, { expiresIn: expiresInSeconds });
+  return jwt.sign(payload, env.jwtSecret, { expiresIn: expiresInSeconds, algorithm: JWT_ALGORITHM });
 };
 
 export const verifyAccessToken = (token: string): AccessTokenPayload => {
-  return jwt.verify(token, env.jwtSecret) as AccessTokenPayload;
+  return jwt.verify(token, env.jwtSecret, { algorithms: [JWT_ALGORITHM] }) as AccessTokenPayload;
 };
 
 // Refresh tokens, email-verification tokens, and password-reset tokens are

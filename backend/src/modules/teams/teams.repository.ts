@@ -86,6 +86,15 @@ export class TeamsRepository {
     return queryOne(text, [teamId]);
   }
 
+  // Milestone 46: bulk counterpart to getTeam, for callers (getMyInvites)
+  // that used to fetch one team per invite with its own query.
+  async getTeamsByIds(teamIds: string[]) {
+    if (teamIds.length === 0) {
+      return [];
+    }
+    return query<any>('SELECT * FROM teams WHERE team_id = ANY($1)', [teamIds]);
+  }
+
   async getAllTeams() {
     const text = `
       SELECT * FROM teams
@@ -327,6 +336,16 @@ export class TeamsRepository {
     return queryOne(text, [inviteId]);
   }
 
+  // Milestone 46: was unbounded (no LIMIT at all) -- reachable by ANY
+  // authenticated user with zero relationship to any matched team and no
+  // rate limiter on the route, so a broad query (e.g. a single common
+  // letter) could match every public+discoverable team in the app. The
+  // service layer's own per-team owner/member-count enrichment then
+  // fanned out two more queries per match (see teams.service.ts's
+  // searchTeams, fixed alongside this). Capped at 50 -- comfortably more
+  // than a search UI would ever usefully display on one page, matching
+  // the array-length bound convention already established (M40) rather
+  // than an arbitrary number.
   async searchTeams(searchQuery: string) {
     const text = `
       SELECT * FROM teams
@@ -337,9 +356,29 @@ export class TeamsRepository {
           LOWER(description) LIKE LOWER($1)
         )
       ORDER BY created_at DESC
+      LIMIT 50
     `;
     const searchPattern = `%${searchQuery}%`;
     return query(text, [searchPattern]);
+  }
+
+  // Milestone 46: batch counterpart to the per-team getTeamMembers fan-out
+  // searchTeams' service-layer enrichment used to do -- one GROUP BY query
+  // for every matched team's member count at once, regardless of how many
+  // teams matched.
+  async getMemberCounts(teamIds: string[]): Promise<Record<string, number>> {
+    if (teamIds.length === 0) {
+      return {};
+    }
+    const rows = await query<{ team_id: string; count: string }>(
+      'SELECT team_id, COUNT(*) AS count FROM team_members WHERE team_id = ANY($1) GROUP BY team_id',
+      [teamIds]
+    );
+    const counts: Record<string, number> = {};
+    for (const row of rows) {
+      counts[row.team_id] = Number(row.count);
+    }
+    return counts;
   }
 
   // Returns the caller's role in the team, or null if they aren't a member

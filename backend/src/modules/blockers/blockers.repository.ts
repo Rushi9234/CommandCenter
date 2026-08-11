@@ -91,6 +91,24 @@ export class BlockersRepository {
     return queryOne<any>(text, [blockerId, ...built.values]);
   }
 
+  // Milestone 46: batch counterpart to the per-blocker getBlockerMessages
+  // fan-out getTeamBlockers' service-layer enrichment used to do -- one
+  // GROUP BY query for every matched blocker's message count at once.
+  async getMessageCounts(blockerIds: string[]): Promise<Record<string, number>> {
+    if (blockerIds.length === 0) {
+      return {};
+    }
+    const rows = await query<{ blocker_id: string; count: string }>(
+      'SELECT blocker_id, COUNT(*) AS count FROM messages WHERE blocker_id = ANY($1) GROUP BY blocker_id',
+      [blockerIds]
+    );
+    const counts: Record<string, number> = {};
+    for (const row of rows) {
+      counts[row.blocker_id] = Number(row.count);
+    }
+    return counts;
+  }
+
   async getBlockerMessages(blockerId: string) {
     const text = `
       SELECT m.*, u.username, u.full_name

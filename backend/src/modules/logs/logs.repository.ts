@@ -57,6 +57,33 @@ export class LogsRepository {
     return query<any>(text, params);
   }
 
+  // Milestone 46: getStandup (logs.service.ts) used to call
+  // getUserLogs(m.user_id, 1) once per team member inside a per-member
+  // Promise.all, then check the result's own log_date against "today" in
+  // JS -- with max_team_size confirmed unenforced (M44) and no cap
+  // anywhere on real team size, the fan-out alone meant one GET
+  // /logs/standup call could queue as many concurrent queries as the
+  // team has members, against the app's single, shared 20-connection
+  // pool (db/client.ts). Filtering to log_date = CURRENT_DATE directly
+  // in SQL, rather than fetching each user's latest log and comparing
+  // its date in JS, closes the fan-out AND sidesteps a real, separate,
+  // pre-existing bug the JS-side comparison had: node-postgres returns a
+  // DATE column as a JS Date constructed at LOCAL midnight, so round-
+  // tripping it through .toISOString() (UTC) shifts the date by the
+  // server's UTC offset -- comparing it against a plain "today" string
+  // was silently always false outside UTC+0. Postgres's own
+  // date-vs-CURRENT_DATE comparison has no such ambiguity.
+  async getTodaysLogsForUsers(userIds: string[]) {
+    if (userIds.length === 0) {
+      return [];
+    }
+    const text = `
+      SELECT * FROM daily_logs
+      WHERE user_id = ANY($1) AND log_date = CURRENT_DATE
+    `;
+    return query<any>(text, [userIds]);
+  }
+
   async getLogById(logId: string) {
     const text = 'SELECT * FROM daily_logs WHERE log_id = $1';
     return queryOne<any>(text, [logId]);
