@@ -1,4 +1,7 @@
 import { getEmailProvider } from './email/providers/emailProviderFactory';
+import { EmailMessage } from './email/providers/emailProvider.interface';
+import { env } from '../config/env';
+import { getLogger } from '../common/logging/loggerFactory';
 
 // Milestone 4: generateVerificationToken removed -- it duplicated
 // modules/auth/jwt.ts's generateOpaqueToken (same crypto.randomBytes(32)
@@ -20,15 +23,38 @@ import { getEmailProvider } from './email/providers/emailProviderFactory';
 // body, and which fields are safe to log) and hands it to whichever
 // EmailProvider emailProviderFactory selects. Every exported function's
 // signature and return behavior is unchanged.
-const getBaseUrl = () => (process.env.NODE_ENV === 'production' ? 'https://commandcenter-sand.vercel.app' : 'http://localhost:3000');
+// Milestone 55: was a locally hardcoded production URL, independent of --
+// and inconsistent with -- app.ts's own CORS config, which already reads
+// FRONTEND_URL via config/env.ts. env.frontendUrl is now the single
+// source of truth for "what is the frontend's URL" in both places.
+const getBaseUrl = () => env.frontendUrl;
+
+// Milestone 55: a real EmailProvider (Resend) can fail -- a thrown
+// exception (network error, SDK error) or a resolved `false` (see
+// ResendEmailProvider). Either must never propagate: the caller (e.g.
+// authService.register/forgotPassword) has already committed the
+// account/token to the database before calling this, so a failed send
+// should never turn into an error response for an otherwise-successful
+// request. Failures are logged server-side via the existing LoggerProvider
+// and swallowed here -- the existing resendVerification/forgotPassword
+// flows remain the user's own recovery path either way.
+const sendSafely = async (message: EmailMessage): Promise<boolean> => {
+  try {
+    const sent = await getEmailProvider().send(message);
+    if (!sent) {
+      getLogger().error('Email send failed', { event: 'email.send_failed', to: message.to, subject: message.subject });
+    }
+    return sent;
+  } catch (error) {
+    getLogger().error('Email send threw', { event: 'email.send_failed', to: message.to, subject: message.subject });
+    return false;
+  }
+};
 
 export const sendVerificationEmail = async (email: string, token: string, fullName: string) => {
   const verificationUrl = `${getBaseUrl()}/verify-email?token=${token}`;
 
-  // TODO: Replace ConsoleEmailProvider with a real provider (SendGrid,
-  // AWS SES, etc.) implementing EmailProvider -- this call site doesn't
-  // change either way.
-  return getEmailProvider().send({
+  return sendSafely({
     to: email,
     subject: 'Verify your CommandCenter account',
     body: `Hi ${fullName}, please verify your email by visiting: ${verificationUrl}`,
@@ -40,7 +66,7 @@ export const sendVerificationEmail = async (email: string, token: string, fullNa
 export const sendPasswordResetEmail = async (email: string, token: string, fullName: string) => {
   const resetUrl = `${getBaseUrl()}/reset-password?token=${token}`;
 
-  return getEmailProvider().send({
+  return sendSafely({
     to: email,
     subject: 'Reset your CommandCenter password',
     body: `Hi ${fullName}, reset your password (expires in 1 hour): ${resetUrl}`,
@@ -52,7 +78,7 @@ export const sendPasswordResetEmail = async (email: string, token: string, fullN
 export const sendTeamInviteEmail = async (email: string, teamName: string, inviterName: string) => {
   const inviteLink = `${getBaseUrl()}/login?invite=${encodeURIComponent(email)}&team=${encodeURIComponent(teamName)}`;
 
-  return getEmailProvider().send({
+  return sendSafely({
     to: email,
     subject: `You've been invited to join ${teamName} on CommandCenter`,
     body: `${inviterName} invited you to join ${teamName}. Accept your invitation: ${inviteLink}`,

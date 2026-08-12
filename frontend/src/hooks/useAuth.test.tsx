@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AuthProvider, useAuth } from './useAuth';
@@ -69,5 +70,74 @@ describe('useAuth / AuthProvider', () => {
 
     expect(screen.getByTestId('auth-state')).toHaveTextContent('authenticated');
     expect(screen.getByTestId('user-name')).toHaveTextContent('Ada Lovelace');
+  });
+});
+
+// Milestone 55: register() never returns a session -- the backend's
+// register() always resolves to {email, username, is_verified}, in BOTH
+// the auto-verify and verification-pending cases (confirmed against
+// auth.service.ts). The previous implementation here unconditionally
+// destructured {user, token} from that shape, meaning every registration
+// silently stored `undefined` as the session. These tests exercise the
+// actual fix, not just Register.tsx's reaction to it.
+const RegisterConsumer = () => {
+  const { user, isAuthenticated, register } = useAuth();
+  const [result, setResult] = useState<any>(null);
+
+  return (
+    <div>
+      <div data-testid="auth-state">{isAuthenticated ? 'authenticated' : 'anonymous'}</div>
+      <div data-testid="user-name">{user?.full_name ?? 'none'}</div>
+      <div data-testid="register-result">{result ? JSON.stringify(result) : 'none'}</div>
+      <button
+        onClick={async () => {
+          const r = await register({ email: 'ada@example.com', username: 'ada', fullName: 'Ada Lovelace', password: 'password123' });
+          setResult(r);
+        }}
+      >
+        Register
+      </button>
+    </div>
+  );
+};
+
+describe('useAuth / AuthProvider -- register()', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('establishes a real session (via login) when registration returns is_verified: true', async () => {
+    vi.mocked(api.register).mockResolvedValue({ data: { data: { email: 'ada@example.com', username: 'ada', is_verified: true } } } as any);
+    vi.mocked(api.login).mockResolvedValue({ data: { data: { user: FAKE_USER, token: 'fresh-jwt' } } } as any);
+
+    render(
+      <AuthProvider>
+        <RegisterConsumer />
+      </AuthProvider>
+    );
+
+    fireEvent.click(screen.getByText('Register'));
+
+    await waitFor(() => expect(screen.getByTestId('auth-state')).toHaveTextContent('authenticated'));
+    expect(api.login).toHaveBeenCalledWith({ email: 'ada@example.com', password: 'password123' });
+    expect(localStorage.getItem('token')).toBe('fresh-jwt');
+  });
+
+  it('does NOT establish a session when registration returns is_verified: false, and returns the result to the caller', async () => {
+    vi.mocked(api.register).mockResolvedValue({ data: { data: { email: 'ada@example.com', username: 'ada', is_verified: false } } } as any);
+
+    render(
+      <AuthProvider>
+        <RegisterConsumer />
+      </AuthProvider>
+    );
+
+    fireEvent.click(screen.getByText('Register'));
+
+    await waitFor(() => expect(screen.getByTestId('register-result')).toHaveTextContent('is_verified'));
+    expect(screen.getByTestId('auth-state')).toHaveTextContent('anonymous');
+    expect(api.login).not.toHaveBeenCalled();
+    expect(localStorage.getItem('token')).toBeNull();
   });
 });

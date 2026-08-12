@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { app } from './utils/testApp';
 import { pgPool } from '../src/utils/database';
-import { resetDatabase, closeTestPool } from './utils/db';
+import { resetDatabase, closeTestPool, testPool } from './utils/db';
 import { buildUser, register, login, extractCookie } from './utils/fixtures';
 
 beforeEach(async () => {
@@ -255,5 +255,188 @@ describe('POST /api/auth/resend-verification -- Milestone 26: no account enumera
 
     expect(nonexistentRes.status).toBe(verifiedRes.status);
     expect(nonexistentRes.body).toEqual(verifiedRes.body);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Milestone 55: POST /auth/verify-email + email-provider failure isolation.
+// Creating a genuinely unverified user needs the same isolated-module-
+// registry + NODE_ENV=production technique the "Email verification gate"
+// tests above already use (.env.test's AUTO_VERIFY=true auto-verifies
+// everything otherwise). The raw verification token is never returned by
+// the API and never logged (by design -- see observability.test.ts) -- the
+// only way to observe it in a black-box test is to spy on
+// emailService.sendVerificationEmail's own `token` argument, the same
+// value it's given before it's hashed for storage.
+// ---------------------------------------------------------------------------
+
+const registerUnverifiedAndCaptureToken = async (label: string) => {
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  jest.resetModules();
+
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const prodRequest = require('supertest');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { app: prodApp } = require('../src/app');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { pgPool: prodPool } = require('../src/utils/database');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { buildUser: prodBuildUser } = require('./utils/fixtures');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const emailService = require('../src/services/emailService');
+
+  let capturedToken = '';
+  const sendSpy = jest.spyOn(emailService, 'sendVerificationEmail').mockImplementation(async (_email: any, token: any) => {
+    capturedToken = token;
+    return true;
+  });
+
+  const user = prodBuildUser(label);
+  await prodRequest(prodApp)
+    .post('/api/auth/register')
+    .send({ email: user.email, password: user.password, fullName: user.fullName, username: user.username })
+    .expect(201);
+
+  return {
+    user,
+    token: capturedToken,
+    prodRequest,
+    prodApp,
+    cleanup: async () => {
+      sendSpy.mockRestore();
+      await prodPool.end();
+      process.env.NODE_ENV = originalNodeEnv;
+      jest.resetModules();
+    },
+  };
+};
+
+describe('Milestone 55 -- POST /auth/verify-email', () => {
+  it('verifies a valid token and returns a full session', async () => {
+    const { token, prodRequest, prodApp, cleanup } = await registerUnverifiedAndCaptureToken('m55_verify_ok');
+    try {
+      const res = await prodRequest(prodApp).post('/api/auth/verify-email').send({ token }).expect(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.token).toBeDefined();
+      expect(res.body.data.user).toBeDefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('rejects an expired verification token', async () => {
+    const { user, token, prodRequest, prodApp, cleanup } = await registerUnverifiedAndCaptureToken('m55_verify_expired');
+    try {
+      await testPool.query(`UPDATE users SET verification_token_expires = NOW() - INTERVAL '1 hour' WHERE email = $1`, [user.email]);
+
+      const res = await prodRequest(prodApp).post('/api/auth/verify-email').send({ token }).expect(400);
+      expect(res.body.error).toMatch(/invalid or expired/i);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('rejects a token that has already been used once (single-use)', async () => {
+    const { token, prodRequest, prodApp, cleanup } = await registerUnverifiedAndCaptureToken('m55_verify_reuse');
+    try {
+      await prodRequest(prodApp).post('/api/auth/verify-email').send({ token }).expect(200);
+
+      const replay = await prodRequest(prodApp).post('/api/auth/verify-email').send({ token });
+      expect(replay.status).toBe(400);
+      expect(replay.body.error).toMatch(/invalid or expired/i);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('rejects a garbage token without leaking internal detail', async () => {
+    const res = await request(app).post('/api/auth/verify-email').send({ token: 'not-a-real-token' }).expect(400);
+    expect(res.body.error).toBe('Invalid or expired verification token');
+  });
+});
+
+describe('Milestone 55 -- email provider failure isolation', () => {
+  it('registration still succeeds when the email provider throws', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    jest.resetModules();
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const prodRequest = require('supertest');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { app: prodApp } = require('../src/app');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { pgPool: prodPool } = require('../src/utils/database');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { buildUser: prodBuildUser } = require('./utils/fixtures');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const factory = require('../src/services/email/providers/emailProviderFactory');
+
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const providerSpy = jest.spyOn(factory, 'getEmailProvider').mockReturnValue({
+      send: jest.fn().mockRejectedValue(new Error('SENSITIVE_PROVIDER_DETAIL_should_never_leak')),
+    });
+
+    try {
+      const user = prodBuildUser('m55_provider_throws');
+      const res = await prodRequest(prodApp)
+        .post('/api/auth/register')
+        .send({ email: user.email, password: user.password, fullName: user.fullName, username: user.username })
+        .expect(201);
+
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.is_verified).toBe(false);
+      expect(JSON.stringify(res.body)).not.toContain('SENSITIVE_PROVIDER_DETAIL_should_never_leak');
+    } finally {
+      providerSpy.mockRestore();
+      errorSpy.mockRestore();
+      await prodPool.end();
+      process.env.NODE_ENV = originalNodeEnv;
+      jest.resetModules();
+    }
+  });
+
+  it('forgot-password still succeeds when the email provider returns false', async () => {
+    // Milestone 55: isolated module registry (same technique as the
+    // "provider throws" test above) so the mocked factory is guaranteed
+    // to be the exact instance app.ts's require graph resolves to --
+    // spying on a bare require() of the factory from within an
+    // already-shared module registry was found NOT to intercept
+    // emailService.ts's own call during this test's development (the
+    // real ConsoleEmailProvider ran instead), which is exactly the class
+    // of false-positive this isolated-registry pattern avoids.
+    jest.resetModules();
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const prodRequest = require('supertest');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { app: freshApp } = require('../src/app');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { pgPool: freshPool } = require('../src/utils/database');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { buildUser: freshBuildUser } = require('./utils/fixtures');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const factory = require('../src/services/email/providers/emailProviderFactory');
+
+    const providerSpy = jest.spyOn(factory, 'getEmailProvider').mockReturnValue({
+      send: jest.fn().mockResolvedValue(false),
+    });
+
+    try {
+      const user = freshBuildUser('m55_forgot_provider_false');
+      await prodRequest(freshApp)
+        .post('/api/auth/register')
+        .send({ email: user.email, password: user.password, fullName: user.fullName, username: user.username })
+        .expect(201);
+
+      const res = await prodRequest(freshApp).post('/api/auth/forgot-password').send({ email: user.email }).expect(200);
+      expect(res.body).toEqual({ success: true, message: 'If that email is registered, a reset link has been sent.' });
+      expect(factory.getEmailProvider).toHaveBeenCalled();
+    } finally {
+      providerSpy.mockRestore();
+      await freshPool.end();
+      jest.resetModules();
+    }
   });
 });

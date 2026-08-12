@@ -60,6 +60,10 @@ const authRateLimiter = getRateLimitProvider().createAuthLimiter();
 app.use('/api/auth/login', authRateLimiter);
 app.use('/api/auth/register', authRateLimiter);
 app.use('/api/auth/forgot-password', authRateLimiter);
+// Milestone 55: verify-email had no throttling at all, unlike every other
+// sensitive/human-initiated auth route below -- same limiter, same wiring
+// pattern, no new rate-limiting code.
+app.use('/api/auth/verify-email', authRateLimiter);
 
 // Milestone 33: these three had no throttling at all. resend-verification
 // and reset-password have the same "infrequent, sensitive, human-

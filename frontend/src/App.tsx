@@ -4,6 +4,9 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import Navigation from './components/Navigation';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import VerifyEmail from './pages/VerifyEmail';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
 import Pulse from './pages/Pulse';
 import Projects from './pages/Projects';
 import Teams from './pages/Teams';
@@ -24,7 +27,10 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={isAuthenticated ? <Navigate to="/pulse" /> : <Login />} />
       <Route path="/register" element={isAuthenticated ? <Navigate to="/pulse" /> : <Register />} />
-      
+      <Route path="/verify-email" element={<VerifyEmail />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
+
       <Route
         path="/pulse"
         element={

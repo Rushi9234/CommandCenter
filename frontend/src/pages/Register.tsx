@@ -12,6 +12,10 @@ export default function Register() {
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // Milestone 55: register() never returns a session when verification is
+  // required (see useAuth.tsx) -- this page must not assume login
+  // succeeded and navigate to a protected route in that case.
+  const [pendingVerification, setPendingVerification] = useState(false);
   const { register } = useAuth();
   const navigate = useNavigate();
 
@@ -21,14 +25,38 @@ export default function Register() {
     setLoading(true);
 
     try {
-      await register(formData);
-      navigate('/pulse');
+      const result = await register(formData);
+      if (result.is_verified) {
+        navigate('/pulse');
+      } else {
+        setPendingVerification(true);
+      }
     } catch (err: any) {
       setError(err.response?.data?.error || 'Registration failed');
     } finally {
       setLoading(false);
     }
   };
+
+  if (pendingVerification) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-50 via-white to-blue-50 p-4">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="w-full max-w-md pro-card p-8 shadow-xl text-center"
+        >
+          <h1 className="text-2xl font-bold text-gray-900 mb-3">Check your email</h1>
+          <p className="text-gray-600 mb-6">
+            We've sent a verification link to <strong>{formData.email}</strong>. Click it to activate your account.
+          </p>
+          <Link to="/login" className="text-blue-600 hover:text-blue-700 font-medium">
+            Back to sign in
+          </Link>
+        </motion.div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-50 via-white to-blue-50 p-4">

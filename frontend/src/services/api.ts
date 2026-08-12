@@ -53,6 +53,14 @@ export const verifyEmail = (token: string) =>
 export const resendVerification = (email: string) =>
   api.post('/auth/resend-verification', { email });
 
+// Milestone 55: both already existed backend-side; only the frontend
+// wrappers were missing (no page called them).
+export const forgotPassword = (email: string) =>
+  api.post('/auth/forgot-password', { email });
+
+export const resetPassword = (token: string, newPassword: string) =>
+  api.post('/auth/reset-password', { token, newPassword });
+
 // Logs
 export const createLog = (entryText: string) =>
   api.post('/logs', { entryText });
