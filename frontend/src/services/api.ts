@@ -106,6 +106,23 @@ export const getTeamWorkSubmissions = (teamId: string, date?: string) =>
 export const getContextDashboard = (teamId: string) =>
   api.get(`/teams/${teamId}/context-dashboard`);
 
+// Milestone 52: the create/summarize/submit half of M49's daily work
+// model -- getTeamWorkSubmissions (above) already covers the read side.
+// Every call is team-scoped by design (the backend requires teamId on
+// each); Pulse.tsx gates all four behind an explicitly user-selected team,
+// never a default.
+export const createWorkEntry = (teamId: string, entryText: string) =>
+  api.post('/work-entries', { teamId, entryText });
+
+export const getTodaysWorkEntries = (teamId: string) =>
+  api.get('/work-entries/today', { params: { teamId } });
+
+export const summarizeWork = (teamId: string) =>
+  api.post('/work-entries/summarize', { teamId });
+
+export const submitWork = (teamId: string, confirmedSummary: string, aiSummary?: string) =>
+  api.post('/work-entries/submit', { teamId, confirmedSummary, aiSummary });
+
 export const getDepartments = () =>
   api.get('/teams/departments');
 

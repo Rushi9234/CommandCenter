@@ -17,6 +17,23 @@ export default function Pulse() {
   const [aiChatLoading, setAiChatLoading] = useState(false);
   const [selectedLog, setSelectedLog] = useState<any>(null);
 
+  // Milestone 52: Daily Work is team-scoped (unlike the personal daily_logs
+  // flow above), so it needs its own explicit team selector -- no default,
+  // matching Goals.tsx/Projects.tsx's existing page-local pattern rather
+  // than inventing a global team context.
+  const [myTeams, setMyTeams] = useState<any[]>([]);
+  const [teamsLoading, setTeamsLoading] = useState(true);
+  const [selectedTeam, setSelectedTeam] = useState('');
+  const [teamDataLoading, setTeamDataLoading] = useState(false);
+  const [todaysSubmission, setTodaysSubmission] = useState<any>(null);
+  const [workEntries, setWorkEntries] = useState<any[]>([]);
+  const [newEntryText, setNewEntryText] = useState('');
+  const [draftSummary, setDraftSummary] = useState<string | null>(null);
+  const [confirmedSummary, setConfirmedSummary] = useState('');
+  const [addingEntry, setAddingEntry] = useState(false);
+  const [summarizing, setSummarizing] = useState(false);
+  const [submittingWork, setSubmittingWork] = useState(false);
+
   const wordCount = entryText.trim().split(/\s+/).filter(Boolean).length;
   const charCount = entryText.length;
   const progress = Math.min((charCount / 200) * 100, 100);
@@ -24,7 +41,139 @@ export default function Pulse() {
   useEffect(() => {
     loadLogs();
     loadSuggestions();
+    loadMyTeams();
   }, []);
+
+  // Milestone 52: selecting/switching teams always resets Daily-Work-
+  // specific state before loading the newly selected team's data -- never
+  // leaves a previous team's entries/submission visible while a new
+  // team's data loads, and never fires a Daily Work call while
+  // selectedTeam is ''.
+  useEffect(() => {
+    setTodaysSubmission(null);
+    setWorkEntries([]);
+    setDraftSummary(null);
+    setConfirmedSummary('');
+    setNewEntryText('');
+
+    if (!selectedTeam) return;
+
+    loadTeamWorkState(selectedTeam);
+  }, [selectedTeam]);
+
+  const loadMyTeams = async () => {
+    try {
+      const response = await api.getMyTeams();
+      setMyTeams(response.data.data);
+    } catch (error) {
+      console.error('Failed to load teams:', error);
+    } finally {
+      setTeamsLoading(false);
+    }
+  };
+
+  // Milestone 52: already-submitted state is derived from the existing
+  // GET /teams/:teamId/work-submissions read path (matching this user's
+  // own row via user_id === user?.user_id, the same pattern Teams.tsx/
+  // Grid.tsx/SOSHub.tsx/ExecutiveBrief.tsx already use) -- deliberately
+  // NOT a 409 probe. getTodaysWorkEntries is only called when no
+  // submission is found; there is nothing to show it otherwise.
+  const loadTeamWorkState = async (teamId: string) => {
+    setTeamDataLoading(true);
+    try {
+      const submissionsRes = await api.getTeamWorkSubmissions(teamId);
+      const mine = submissionsRes.data.data.find((s: any) => s.user_id === user?.user_id);
+
+      if (mine) {
+        setTodaysSubmission(mine);
+      } else {
+        const entriesRes = await api.getTodaysWorkEntries(teamId);
+        setWorkEntries(entriesRes.data.data);
+      }
+    } catch (error) {
+      console.error('Failed to load daily work state:', error);
+    } finally {
+      setTeamDataLoading(false);
+    }
+  };
+
+  // Milestone 52: a 409 here is a genuine write conflict (e.g. a second
+  // tab submitted first), not a state-discovery mechanism -- resync by
+  // re-reading the same existing endpoint loadTeamWorkState already uses.
+  const resyncSubmissionState = async () => {
+    if (!selectedTeam) return;
+    try {
+      const submissionsRes = await api.getTeamWorkSubmissions(selectedTeam);
+      const mine = submissionsRes.data.data.find((s: any) => s.user_id === user?.user_id);
+      if (mine) {
+        setTodaysSubmission(mine);
+        setWorkEntries([]);
+      }
+    } catch (error) {
+      console.error('Failed to resync daily work submission state:', error);
+    }
+  };
+
+  const handleAddEntry = async () => {
+    if (!selectedTeam || newEntryText.trim().length === 0) return;
+
+    setAddingEntry(true);
+    try {
+      const response = await api.createWorkEntry(selectedTeam, newEntryText);
+      setWorkEntries([...workEntries, response.data.data]);
+      setNewEntryText('');
+    } catch (error: any) {
+      if (error.response?.status === 409) {
+        await resyncSubmissionState();
+      } else {
+        alert(error.response?.data?.error || 'Failed to add entry');
+      }
+    } finally {
+      setAddingEntry(false);
+    }
+  };
+
+  const handleSummarizeWork = async () => {
+    if (!selectedTeam || workEntries.length === 0) return;
+
+    setSummarizing(true);
+    try {
+      const response = await api.summarizeWork(selectedTeam);
+      setDraftSummary(response.data.data.draftSummary);
+      setConfirmedSummary(response.data.data.draftSummary);
+    } catch (error: any) {
+      if (error.response?.status === 409) {
+        await resyncSubmissionState();
+      } else {
+        alert(error.response?.data?.error || 'Failed to generate summary');
+      }
+    } finally {
+      setSummarizing(false);
+    }
+  };
+
+  const handleSubmitWork = async () => {
+    if (!selectedTeam || confirmedSummary.trim().length < 10) return;
+
+    setSubmittingWork(true);
+    try {
+      const response = await api.submitWork(selectedTeam, confirmedSummary, draftSummary || undefined);
+      // Milestone 52: uses the submit call's own response directly --
+      // no refetch of getTeamWorkSubmissions needed or performed.
+      setTodaysSubmission(response.data.data);
+      setWorkEntries([]);
+      setDraftSummary(null);
+      setConfirmedSummary('');
+    } catch (error: any) {
+      if (error.response?.status === 409) {
+        await resyncSubmissionState();
+      } else {
+        alert(error.response?.data?.error || 'Failed to submit work');
+      }
+    } finally {
+      setSubmittingWork(false);
+    }
+  };
 
   const loadLogs = async () => {
     try {
@@ -286,6 +435,127 @@ export default function Pulse() {
                   )}
                 </button>
               </div>
+            </motion.div>
+
+            {/* Daily Work (Milestone 52) -- team-scoped, independent of the
+                personal daily_logs flow above; requires an explicitly
+                selected team before any Daily Work API call fires. */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="pro-card p-6"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-semibold text-gray-900">Daily Work</h2>
+                <select
+                  value={selectedTeam}
+                  onChange={(e) => setSelectedTeam(e.target.value)}
+                  className="input-field text-sm"
+                  disabled={teamsLoading}
+                >
+                  <option value="">{teamsLoading ? 'Loading teams...' : 'Select a team'}</option>
+                  {myTeams.map((team) => (
+                    <option key={team.team_id} value={team.team_id}>
+                      {team.team_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {!teamsLoading && myTeams.length === 0 && (
+                <p className="text-sm text-gray-600">
+                  You're not on any team yet. Join or create one from the Teams page to log team work.
+                </p>
+              )}
+
+              {myTeams.length > 0 && !selectedTeam && (
+                <p className="text-sm text-gray-600">Select a team above to log or view today's work.</p>
+              )}
+
+              {selectedTeam && teamDataLoading && (
+                <p className="text-sm text-gray-600">Loading...</p>
+              )}
+
+              {selectedTeam && !teamDataLoading && todaysSubmission && (
+                <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-semibold text-green-900">Today's work submitted</span>
+                    {todaysSubmission.confirmed_at && (
+                      <span className="text-xs text-green-700">
+                        {new Date(todaysSubmission.confirmed_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm text-green-800 whitespace-pre-wrap">{todaysSubmission.confirmed_summary}</p>
+                </div>
+              )}
+
+              {selectedTeam && !teamDataLoading && !todaysSubmission && (
+                <div className="space-y-4">
+                  {workEntries.length === 0 ? (
+                    <p className="text-sm text-gray-600">No entries yet today for this team.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {workEntries.map((entry) => (
+                        <div key={entry.entry_id} className="text-sm text-gray-700 p-2 bg-gray-50 rounded">
+                          {entry.entry_text}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={newEntryText}
+                      onChange={(e) => setNewEntryText(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && handleAddEntry()}
+                      placeholder="What did you work on?"
+                      className="input-field flex-1 text-sm"
+                      maxLength={1000}
+                      disabled={addingEntry}
+                    />
+                    <button
+                      onClick={handleAddEntry}
+                      disabled={addingEntry || newEntryText.trim().length === 0}
+                      className="btn-secondary text-sm disabled:opacity-50"
+                    >
+                      {addingEntry ? 'Adding...' : 'Add Entry'}
+                    </button>
+                  </div>
+
+                  {workEntries.length > 0 && draftSummary === null && (
+                    <button
+                      onClick={handleSummarizeWork}
+                      disabled={summarizing}
+                      className="btn-secondary text-sm disabled:opacity-50"
+                    >
+                      {summarizing ? 'Generating...' : 'Get AI Summary'}
+                    </button>
+                  )}
+
+                  {draftSummary !== null && (
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-gray-700">
+                        Review and confirm your summary
+                      </label>
+                      <textarea
+                        value={confirmedSummary}
+                        onChange={(e) => setConfirmedSummary(e.target.value)}
+                        className="input-field min-h-[120px] text-sm resize-none"
+                        maxLength={5000}
+                      />
+                      <button
+                        onClick={handleSubmitWork}
+                        disabled={submittingWork || confirmedSummary.trim().length < 10}
+                        className="btn-primary text-sm disabled:opacity-50"
+                      >
+                        {submittingWork ? 'Submitting...' : "Submit Today's Work"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </motion.div>
 
             {/* Today's Logs */}
