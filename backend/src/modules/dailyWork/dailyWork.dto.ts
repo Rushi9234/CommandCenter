@@ -39,3 +39,13 @@ export const workHistoryDateQuerySchema = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be in YYYY-MM-DD format')
     .optional(),
 });
+
+// Milestone 53: personal history is bounded the same way getMyLogsQuerySchema
+// already bounds GET /logs/my ([1, 100], default 30) -- here capped at 30
+// (not 100) since pagination/date-range browsing is explicitly deferred,
+// not just unbounded-input hardening; a caller cannot request more than
+// this one page's worth of their own history via this endpoint.
+export const workHistoryQuerySchema = z.object({
+  teamId: z.string().uuid(),
+  limit: z.coerce.number().int().min(1).max(30).optional().default(30),
+});

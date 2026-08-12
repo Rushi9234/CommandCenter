@@ -34,6 +34,15 @@ export default function Pulse() {
   const [summarizing, setSummarizing] = useState(false);
   const [submittingWork, setSubmittingWork] = useState(false);
 
+  // Milestone 53: personal Daily Work history -- collapsed by default
+  // (on-demand load, not fetched automatically on team selection, to
+  // avoid a third automatic request per team switch on top of M52's
+  // existing two). Independent of today's Daily Work state above.
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyRecords, setHistoryRecords] = useState<any[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+
   const wordCount = entryText.trim().split(/\s+/).filter(Boolean).length;
   const charCount = entryText.length;
   const progress = Math.min((charCount / 200) * 100, 100);
@@ -55,6 +64,12 @@ export default function Pulse() {
     setDraftSummary(null);
     setConfirmedSummary('');
     setNewEntryText('');
+
+    // Milestone 53: switching teams also collapses/resets history --
+    // no team's history can appear while a different team is selected.
+    setShowHistory(false);
+    setHistoryRecords([]);
+    setHistoryLoaded(false);
 
     if (!selectedTeam) return;
 
@@ -172,6 +187,27 @@ export default function Pulse() {
       }
     } finally {
       setSubmittingWork(false);
+    }
+  };
+
+  // Milestone 53: loads history only the first time it's opened for the
+  // currently selected team (historyLoaded guards against a needless
+  // refetch on every collapse/expand toggle within the same team).
+  const handleToggleHistory = async () => {
+    const opening = !showHistory;
+    setShowHistory(opening);
+
+    if (opening && !historyLoaded && selectedTeam) {
+      setHistoryLoading(true);
+      try {
+        const response = await api.getWorkHistory(selectedTeam, 30);
+        setHistoryRecords(response.data.data);
+        setHistoryLoaded(true);
+      } catch (error: any) {
+        alert(error.response?.data?.error || 'Failed to load past submissions');
+      } finally {
+        setHistoryLoading(false);
+      }
     }
   };
 
@@ -552,6 +588,38 @@ export default function Pulse() {
                       >
                         {submittingWork ? 'Submitting...' : "Submit Today's Work"}
                       </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Personal history (Milestone 53) -- collapsed by default,
+                  loaded on first expand; independent of today's state above. */}
+              {selectedTeam && !teamDataLoading && (
+                <div className="mt-4 pt-4 border-t border-gray-200">
+                  <button
+                    onClick={handleToggleHistory}
+                    className="text-sm text-blue-600 hover:text-blue-700"
+                  >
+                    {showHistory ? 'Hide past submissions' : 'View past submissions'}
+                  </button>
+
+                  {showHistory && (
+                    <div className="mt-3 space-y-2">
+                      {historyLoading ? (
+                        <p className="text-sm text-gray-600">Loading...</p>
+                      ) : historyRecords.length === 0 ? (
+                        <p className="text-sm text-gray-600">No past submissions yet for this team.</p>
+                      ) : (
+                        historyRecords.map((record) => (
+                          <div key={record.work_date} className="p-3 bg-gray-50 rounded-lg">
+                            <div className="text-sm font-medium text-gray-900 mb-1">
+                              {new Date(record.work_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                            </div>
+                            <p className="text-sm text-gray-700 whitespace-pre-wrap">{record.confirmed_summary}</p>
+                          </div>
+                        ))
+                      )}
                     </div>
                   )}
                 </div>

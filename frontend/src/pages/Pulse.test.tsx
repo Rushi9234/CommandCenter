@@ -33,6 +33,7 @@ describe('Pulse — Daily Work (Milestone 52)', () => {
     vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [TEAM_A, TEAM_B] } } as any);
     vi.mocked(api.getTeamWorkSubmissions).mockResolvedValue({ data: { data: [] } } as any);
     vi.mocked(api.getTodaysWorkEntries).mockResolvedValue({ data: { data: [] } } as any);
+    vi.mocked(api.getWorkHistory).mockResolvedValue({ data: { data: [] } } as any);
   });
 
   it('loads teams and starts with no team selected', async () => {
@@ -242,5 +243,124 @@ describe('Pulse — Daily Work (Milestone 52)', () => {
     await waitFor(() => expect(api.getMyLogs).toHaveBeenCalledWith(30));
     expect(screen.getByText('Add New Log')).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/What are you working on\?/)).toBeInTheDocument();
+  });
+});
+
+describe('Pulse — Personal Daily Work History (Milestone 53)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getMyLogs).mockResolvedValue({ data: { data: [] } } as any);
+    vi.mocked(api.getLogSuggestions).mockResolvedValue({ data: { data: null } } as any);
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [TEAM_A, TEAM_B] } } as any);
+    vi.mocked(api.getTeamWorkSubmissions).mockResolvedValue({ data: { data: [] } } as any);
+    vi.mocked(api.getTodaysWorkEntries).mockResolvedValue({ data: { data: [] } } as any);
+    vi.mocked(api.getWorkHistory).mockResolvedValue({ data: { data: [] } } as any);
+  });
+
+  it('history is collapsed by default and makes no history call before a team is selected', async () => {
+    renderPulse();
+    await waitFor(() => screen.getByRole('combobox'));
+
+    expect(screen.queryByText('View past submissions')).not.toBeInTheDocument();
+    expect(api.getWorkHistory).not.toHaveBeenCalled();
+  });
+
+  it('does not fetch history merely by selecting a team -- only when explicitly opened', async () => {
+    renderPulse();
+    await waitFor(() => screen.getByRole('combobox'));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'team-a' } });
+
+    await waitFor(() => expect(screen.getByText('View past submissions')).toBeInTheDocument());
+    expect(api.getWorkHistory).not.toHaveBeenCalled();
+  });
+
+  it('opening history triggers the API call and shows the empty state when there is none', async () => {
+    renderPulse();
+    await waitFor(() => screen.getByRole('combobox'));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'team-a' } });
+    await waitFor(() => screen.getByText('View past submissions'));
+
+    fireEvent.click(screen.getByText('View past submissions'));
+
+    await waitFor(() => expect(api.getWorkHistory).toHaveBeenCalledWith('team-a', 30));
+    expect(await screen.findByText('No past submissions yet for this team.')).toBeInTheDocument();
+  });
+
+  it('renders multiple historical records with correctly displayed dates', async () => {
+    vi.mocked(api.getWorkHistory).mockResolvedValue({
+      data: {
+        data: [
+          { work_date: '2026-08-10', confirmed_summary: 'Newest work.', confirmed_at: '2026-08-10T18:00:00Z' },
+          { work_date: '2026-08-01', confirmed_summary: 'Older work.', confirmed_at: '2026-08-01T18:00:00Z' },
+        ],
+      },
+    } as any);
+    renderPulse();
+    await waitFor(() => screen.getByRole('combobox'));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'team-a' } });
+    await waitFor(() => screen.getByText('View past submissions'));
+    fireEvent.click(screen.getByText('View past submissions'));
+
+    expect(await screen.findByText('Newest work.')).toBeInTheDocument();
+    expect(screen.getByText('Older work.')).toBeInTheDocument();
+    expect(screen.getByText('Aug 10, 2026')).toBeInTheDocument();
+    expect(screen.getByText('Aug 1, 2026')).toBeInTheDocument();
+  });
+
+  it('resets/collapses history when switching to a different team -- no cross-team leakage', async () => {
+    vi.mocked(api.getWorkHistory).mockImplementation((teamId: string) =>
+      Promise.resolve({
+        data: { data: teamId === 'team-a' ? [{ work_date: '2026-08-01', confirmed_summary: "Team A's history.", confirmed_at: '2026-08-01T18:00:00Z' }] : [] },
+      }) as any
+    );
+    renderPulse();
+    await waitFor(() => screen.getByRole('combobox'));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'team-a' } });
+    await waitFor(() => screen.getByText('View past submissions'));
+    fireEvent.click(screen.getByText('View past submissions'));
+    await screen.findByText("Team A's history.");
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'team-b' } });
+
+    await waitFor(() => expect(screen.queryByText("Team A's history.")).not.toBeInTheDocument());
+    expect(screen.queryByText('No past submissions yet for this team.')).not.toBeInTheDocument();
+    expect(screen.getByText('View past submissions')).toBeInTheDocument();
+  });
+
+  it('surfaces a history API error without crashing the page', async () => {
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+    vi.mocked(api.getWorkHistory).mockRejectedValue({ response: { data: { error: 'Failed to load history' } } });
+    renderPulse();
+    await waitFor(() => screen.getByRole('combobox'));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'team-a' } });
+    await waitFor(() => screen.getByText('View past submissions'));
+
+    fireEvent.click(screen.getByText('View past submissions'));
+
+    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('Failed to load history'));
+    alertSpy.mockRestore();
+  });
+
+  it("does not disturb M52's today flow (add entry / summarize / submit still work with history present)", async () => {
+    vi.mocked(api.createWorkEntry).mockResolvedValue({ data: { data: { entry_id: 'e1', entry_text: 'Fixed the bug' } } } as any);
+    renderPulse();
+    await waitFor(() => screen.getByRole('combobox'));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'team-a' } });
+    await waitFor(() => screen.getByText('No entries yet today for this team.'));
+
+    fireEvent.click(screen.getByText('View past submissions'));
+    await screen.findByText('No past submissions yet for this team.');
+
+    fireEvent.change(screen.getByPlaceholderText('What did you work on?'), { target: { value: 'Fixed the bug' } });
+    fireEvent.click(screen.getByText('Add Entry'));
+
+    await waitFor(() => expect(api.createWorkEntry).toHaveBeenCalledWith('team-a', 'Fixed the bug'));
+    expect(await screen.findByText('Fixed the bug')).toBeInTheDocument();
+  });
+
+  it('does not touch the existing personal Daily Logs flow', async () => {
+    renderPulse();
+    await waitFor(() => expect(api.getMyLogs).toHaveBeenCalledWith(30));
+    expect(screen.getByText('Add New Log')).toBeInTheDocument();
   });
 });

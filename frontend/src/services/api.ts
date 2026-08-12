@@ -123,6 +123,13 @@ export const summarizeWork = (teamId: string) =>
 export const submitWork = (teamId: string, confirmedSummary: string, aiSummary?: string) =>
   api.post('/work-entries/submit', { teamId, confirmedSummary, aiSummary });
 
+// Milestone 53: personal history only -- backend scopes the query to the
+// authenticated caller's own user_id, so this can never return another
+// member's submissions. Bounded at 30 by default (no pagination/date-range
+// browsing -- explicitly deferred).
+export const getWorkHistory = (teamId: string, limit?: number) =>
+  api.get('/work-entries/history', { params: { teamId, limit } });
+
 export const getDepartments = () =>
   api.get('/teams/departments');
 

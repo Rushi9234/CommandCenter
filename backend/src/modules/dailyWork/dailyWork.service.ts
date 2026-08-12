@@ -83,6 +83,13 @@ export class DailyWorkService {
   getTeamSubmissionsForDate(teamId: string, date?: string) {
     return dailyWorkRepository.getTeamSubmissionsForDate(teamId, date);
   }
+
+  // Milestone 53: personal history -- userId is always the authenticated
+  // caller (never accepted from the client), so this can never return
+  // another user's submissions regardless of what teamId is passed.
+  getMyHistory(userId: string, teamId: string, limit: number) {
+    return dailyWorkRepository.getMySubmissionHistory(userId, teamId, limit);
+  }
 }
 
 export const dailyWorkService = new DailyWorkService();

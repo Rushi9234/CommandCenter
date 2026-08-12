@@ -76,6 +76,25 @@ export class DailyWorkRepository {
   // a JS-computed date string -- the exact DATE-column/JS-Date timezone
   // mismatch class M46 already found and fixed once (getTodaysLogsForUsers);
   // never re-introduce it by computing "today" in JS again.
+  // Milestone 53: personal history -- scoped to user_id = $1 (the
+  // authenticated caller, never a client-supplied value) AND team_id = $2,
+  // never a team-wide read. Deliberately returns only work_date/
+  // confirmed_summary/confirmed_at (no ai_summary, no submission_id, no
+  // user_id/team_id -- the caller already knows which user/team this is)
+  // -- the smallest field set the history UI actually needs, matching the
+  // "don't add fields for future use" discipline this project already
+  // applies elsewhere (M40's permissions: z.any(), M48's team_type).
+  async getMySubmissionHistory(userId: string, teamId: string, limit: number) {
+    const text = `
+      SELECT work_date, confirmed_summary, confirmed_at
+      FROM daily_work_submissions
+      WHERE user_id = $1 AND team_id = $2
+      ORDER BY work_date DESC
+      LIMIT $3
+    `;
+    return query<any>(text, [userId, teamId, limit]);
+  }
+
   async getTeamSubmissionsForDate(teamId: string, workDate?: string) {
     const text = `
       SELECT s.*, u.username, u.full_name

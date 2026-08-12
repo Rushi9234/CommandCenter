@@ -3,6 +3,7 @@ import { app } from './utils/testApp';
 import { pgPool } from '../src/utils/database';
 import { resetDatabase, closeTestPool } from './utils/db';
 import { authHeader, createTeam, addMember, registerAndLogin } from './utils/fixtures';
+import { testPool } from './utils/db';
 
 beforeEach(async () => {
   await resetDatabase();
@@ -225,5 +226,106 @@ describe('Milestone 49 -- GET /teams/:teamId/work-submissions (team-scoped histo
     const teamId = await createTeam(owner.token, `M49_HistoryAuthz_${Date.now()}`);
 
     await request(app).get(`/api/teams/${teamId}/work-submissions`).set(authHeader(stranger.token)).expect(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Milestone 53 -- personal Daily Work history (GET /work-entries/history).
+// Scoped strictly to the authenticated caller's own submissions for one
+// team -- never a teammate's, never a different team's. Past-dated rows
+// are seeded directly via testPool since the submit API always writes
+// work_date = CURRENT_DATE (no way to submit "for yesterday" through the
+// real flow, by design -- M49's own submitWork).
+// ---------------------------------------------------------------------------
+
+const seedSubmission = async (userId: string, teamId: string, workDate: string, confirmedSummary: string) => {
+  await testPool.query(
+    `INSERT INTO daily_work_submissions (user_id, team_id, work_date, confirmed_summary) VALUES ($1, $2, $3, $4)`,
+    [userId, teamId, workDate, confirmedSummary]
+  );
+};
+
+describe('Milestone 53 -- GET /work-entries/history (personal, cross-user/cross-team isolation)', () => {
+  it("lets an authenticated member retrieve their own history", async () => {
+    const owner = await registerAndLogin('m53_history_owner');
+    const teamId = await createTeam(owner.token, `M53_History_${Date.now()}`);
+    await seedSubmission(owner.userId, teamId, '2026-08-01', 'Worked on the login flow.');
+
+    const res = await request(app).get(`/api/work-entries/history?teamId=${teamId}`).set(authHeader(owner.token)).expect(200);
+    expect(res.body.data.length).toBe(1);
+    expect(res.body.data[0].confirmed_summary).toBe('Worked on the login flow.');
+    expect(res.body.data[0].work_date).toBeDefined();
+    expect(res.body.data[0].confirmed_at).toBeDefined();
+  });
+
+  it("never returns another member's submissions, even for the same team/dates", async () => {
+    const owner = await registerAndLogin('m53_history_iso_owner');
+    const member = await registerAndLogin('m53_history_iso_member');
+    const teamId = await createTeam(owner.token, `M53_HistoryIso_${Date.now()}`);
+    await addMember(owner.token, teamId, member.userId, 'member').expect(200);
+
+    await seedSubmission(owner.userId, teamId, '2026-08-01', "Owner's private history entry.");
+    await seedSubmission(member.userId, teamId, '2026-08-01', "Member's private history entry.");
+
+    const res = await request(app).get(`/api/work-entries/history?teamId=${teamId}`).set(authHeader(member.token)).expect(200);
+    expect(res.body.data.length).toBe(1);
+    expect(res.body.data[0].confirmed_summary).toBe("Member's private history entry.");
+    expect(JSON.stringify(res.body.data)).not.toContain("Owner's private history entry.");
+  });
+
+  it('never leaks history from an unrelated team the caller also belongs to', async () => {
+    const user = await registerAndLogin('m53_history_crossteam_user');
+    const teamA = await createTeam(user.token, `M53_HistoryCrossA_${Date.now()}`);
+    const teamB = await createTeam(user.token, `M53_HistoryCrossB_${Date.now()}`);
+    await seedSubmission(user.userId, teamA, '2026-08-01', "Team A's work.");
+
+    const res = await request(app).get(`/api/work-entries/history?teamId=${teamB}`).set(authHeader(user.token)).expect(200);
+    expect(res.body.data.length).toBe(0);
+  });
+
+  it('rejects a non-member from reading history for that team', async () => {
+    const owner = await registerAndLogin('m53_history_authz_owner');
+    const stranger = await registerAndLogin('m53_history_authz_stranger');
+    const teamId = await createTeam(owner.token, `M53_HistoryAuthz_${Date.now()}`);
+    await seedSubmission(owner.userId, teamId, '2026-08-01', 'Should not be visible to a stranger.');
+
+    await request(app).get(`/api/work-entries/history?teamId=${teamId}`).set(authHeader(stranger.token)).expect(403);
+  });
+
+  it('rejects an unauthenticated request', async () => {
+    const owner = await registerAndLogin('m53_history_unauth_owner');
+    const teamId = await createTeam(owner.token, `M53_HistoryUnauth_${Date.now()}`);
+
+    await request(app).get(`/api/work-entries/history?teamId=${teamId}`).expect(401);
+  });
+
+  it('returns an empty array for a team with no history yet', async () => {
+    const owner = await registerAndLogin('m53_history_empty_owner');
+    const teamId = await createTeam(owner.token, `M53_HistoryEmpty_${Date.now()}`);
+
+    const res = await request(app).get(`/api/work-entries/history?teamId=${teamId}`).set(authHeader(owner.token)).expect(200);
+    expect(res.body.data).toEqual([]);
+  });
+
+  it('returns multiple records ordered newest-first', async () => {
+    const owner = await registerAndLogin('m53_history_multi_owner');
+    const teamId = await createTeam(owner.token, `M53_HistoryMulti_${Date.now()}`);
+    await seedSubmission(owner.userId, teamId, '2026-08-01', 'Oldest entry.');
+    await seedSubmission(owner.userId, teamId, '2026-08-05', 'Middle entry.');
+    await seedSubmission(owner.userId, teamId, '2026-08-10', 'Newest entry.');
+
+    const res = await request(app).get(`/api/work-entries/history?teamId=${teamId}`).set(authHeader(owner.token)).expect(200);
+    expect(res.body.data.map((s: any) => s.confirmed_summary)).toEqual(['Newest entry.', 'Middle entry.', 'Oldest entry.']);
+  });
+
+  it('honors the limit parameter', async () => {
+    const owner = await registerAndLogin('m53_history_limit_owner');
+    const teamId = await createTeam(owner.token, `M53_HistoryLimit_${Date.now()}`);
+    await seedSubmission(owner.userId, teamId, '2026-08-01', 'First.');
+    await seedSubmission(owner.userId, teamId, '2026-08-02', 'Second.');
+    await seedSubmission(owner.userId, teamId, '2026-08-03', 'Third.');
+
+    const res = await request(app).get(`/api/work-entries/history?teamId=${teamId}&limit=2`).set(authHeader(owner.token)).expect(200);
+    expect(res.body.data.length).toBe(2);
   });
 });

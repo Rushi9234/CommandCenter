@@ -27,3 +27,9 @@ export const getTeamSubmissions = async (req: AuthRequest, res: Response) => {
   const submissions = await dailyWorkService.getTeamSubmissionsForDate(req.params.teamId, req.query.date as string | undefined);
   ok(res, submissions);
 };
+
+export const getMyHistory = async (req: AuthRequest, res: Response) => {
+  const { teamId, limit } = req.query as unknown as { teamId: string; limit: number };
+  const history = await dailyWorkService.getMyHistory(req.user!.userId, teamId, limit);
+  ok(res, history);
+};
