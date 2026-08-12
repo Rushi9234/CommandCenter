@@ -65,14 +65,23 @@ Note: ${AI_DISCLAIMERS.ANALYSIS}`;
   }
 };
 
+// Phase 3 security audit: blockerText and each chat message's text are
+// free-form, user-authored content (same class as analyzeLog's entryText)
+// that previously went straight into the prompt unmasked. Masked here at
+// the same boundary analyzeLog/chatWithAI/generateWorkSummary already
+// use. `username` is left as-is -- it's an identifier, not free text, and
+// maskPII's email/phone/IP regexes have nothing to strip from it.
 export const generateMentorAdvice = async (blockerText: string, chatHistory: any[], projectContext: string): Promise<string> => {
+  const sanitizedBlockerText = maskPII(blockerText);
+  const sanitizedChatLines = chatHistory.slice(-3).map((m) => `${m.username}: ${maskPII(m.message_text)}`);
+
   const prompt = `Provide brief technical advice (2-3 sentences max).
 
 Blocker:
-${blockerText}
+${sanitizedBlockerText}
 
 Recent Chat:
-${chatHistory.slice(-3).map((m) => `${m.username}: ${m.message_text}`).join('\n')}
+${sanitizedChatLines.join('\n')}
 
 Advice:`;
 
@@ -85,12 +94,21 @@ Advice:`;
   }
 };
 
+// Phase 3 security audit: projectName/description/requirements are all
+// free-form, user-authored fields (a description or requirements list can
+// easily contain a client's email/phone/IP) that previously reached the
+// prompt unmasked. Masked at the same boundary this file already uses
+// elsewhere.
 export const analyzeProjectWithAI = async (projectName: string, description: string, requirements?: string) => {
+  const sanitizedProjectName = maskPII(projectName);
+  const sanitizedDescription = maskPII(description);
+  const sanitizedRequirements = requirements ? maskPII(requirements) : undefined;
+
   const prompt = `You are a project planning AI. Analyze this project and suggest tasks.
 
-Project: ${projectName}
-Description: ${description}
-${requirements ? `Requirements: ${requirements}` : ''}
+Project: ${sanitizedProjectName}
+Description: ${sanitizedDescription}
+${sanitizedRequirements ? `Requirements: ${sanitizedRequirements}` : ''}
 
 Return ONLY valid JSON:
 {
@@ -121,11 +139,15 @@ Return ONLY valid JSON:
   }
 };
 
+// Phase 3 security audit: recentLogs is the same free-form log text
+// analyzeLog already masks -- this function previously sent it unmasked.
 export const generateLogSuggestions = async (recentLogs: string[], currentTasks: any[]) => {
+  const sanitizedLogs = recentLogs.map((l) => maskPII(l));
+
   const prompt = `Based on recent work, suggest 3 brief writing prompts for today's log.
 
 Recent Work:
-${recentLogs.slice(0, 2).join('\n')}
+${sanitizedLogs.slice(0, 2).join('\n')}
 
 Return ONLY valid JSON:
 {
@@ -209,13 +231,26 @@ Assistant: ${AI_DISCLAIMERS.SUGGESTION}`;
   }
 };
 
+// Phase 3 security audit: title/description/attempted are free-form
+// user-authored text, previously sent unmasked. `type` is a short
+// category label (e.g. 'technical'), not free text -- left as-is, since
+// maskPII's regexes have nothing to strip from it and it isn't the kind
+// of content this fix targets. `attempted` is declared as `string` here
+// but blockers.service.ts's real caller passes body.attemptedSolutions
+// straight through (optional per blockers.dto.ts) -- guard against
+// undefined/null so masking a legitimately-omitted field can't throw
+// before the function's own try/catch ever runs.
 export const analyzeBlocker = async (title: string, description: string, type: string, attempted: string) => {
+  const sanitizedTitle = maskPII(title || '');
+  const sanitizedDescription = maskPII(description || '');
+  const sanitizedAttempted = maskPII(attempted || '');
+
   const prompt = `Analyze this blocker and provide 3-5 brief solutions.
 
-Title: ${title}
-Description: ${description}
+Title: ${sanitizedTitle}
+Description: ${sanitizedDescription}
 Type: ${type}
-Attempted: ${attempted}
+Attempted: ${sanitizedAttempted}
 
 Return ONLY valid JSON:
 {
@@ -275,10 +310,17 @@ Note: ${AI_DISCLAIMERS.SUGGESTION}`;
   }
 };
 
+// Phase 3 security audit: bullet_points are AI-derived from analyzeLog's
+// own already-masked input, so they're already indirectly protected --
+// this is a defense-in-depth mask at the boundary where this function's
+// own prompt is actually built, matching the "mask at the point content
+// enters a prompt" rule uniformly rather than relying on an upstream
+// guarantee. `member`/`sentiment` are an identifier and a number, not
+// free text -- left as-is.
 export const generateStandup = async (logs: any[], teamMembers: any[]) => {
   const standupData = logs.map((log) => ({
     member: log.username,
-    yesterday: log.bullet_points?.slice(0, 3) || [],
+    yesterday: (log.bullet_points?.slice(0, 3) || []).map((point: string) => maskPII(point)),
     sentiment: log.sentiment_score || 0,
   }));
 
