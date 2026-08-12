@@ -96,6 +96,16 @@ export const getTeamPreview = (teamId: string) =>
 export const getTeamWorkSubmissions = (teamId: string, date?: string) =>
   api.get(`/teams/${teamId}/work-submissions`, { params: date ? { date } : undefined });
 
+// Milestone 51: owner/admin-of-the-parent-team-only (backend-enforced via
+// the same requireTeamRole every other owner/admin route uses) --
+// returns only aggregate counts/booleans about child teams, never their
+// member lists, blocker/task content, or daily-work text. Attempt this
+// only when the frontend already knows the caller is owner/admin of the
+// selected team (see Teams.tsx) -- a 403 here is a real, backend-enforced
+// rejection either way, this is just avoiding a pointless failed request.
+export const getContextDashboard = (teamId: string) =>
+  api.get(`/teams/${teamId}/context-dashboard`);
+
 export const getDepartments = () =>
   api.get('/teams/departments');
 

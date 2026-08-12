@@ -2303,6 +2303,105 @@ than assuming the rest of the reused surface needs re-auditing too.*
 
 ---
 
+## 23. Coordinator team-progress dashboard (M51) — one new read-only capability, explicitly not a parent→child cascade
+
+**Context:** M51 built the first coordinator/teacher dashboard —
+`GET /teams/:teamId/context-dashboard` — aggregating neutral activity
+signals (member counts, same-day submission status, open-blocker counts,
+task-progress counts) across a parent team's children. M50 established,
+as a hard rule, that parent-team membership must never implicitly grant
+access to a child team's own private resources. This finding exists to
+record, in detail, why this dashboard does not violate that rule, and
+exactly how narrow the one new capability actually is.
+
+**Authorization model chosen: Model B (explicit coordinator capability on
+the parent context, narrowly scoped to read-only aggregate child-team
+data) — compared against 3 alternatives before implementation:**
+
+- **Model A (explicit membership in every child team)** — already works
+  today with zero new code (an owner/admin who is ALSO added as a member
+  of each child sees that child's data via existing, unchanged checks).
+  **Rejected as the dashboard's mechanism** — it doesn't scale to "a
+  classroom with 8 teams" (would require the coordinator to be manually
+  added to every one), though it remains valid and unaffected as a
+  parallel option for anyone who wants full access to a specific child.
+- **Model C (a separate coordinator-relationship table)** — would solve
+  the same problem Model B solves, at the ongoing cost of a second
+  authorization concept (a table that must stay in sync with
+  `team_members` forever, audited separately, forever). **Rejected** —
+  no capability it would provide isn't already provided by B at lower
+  cost.
+- **Model D (widen `team_members.role` itself)** — never seriously
+  considered: the milestone's own instruction is explicit that any new
+  capability must not overlap or conflict with `team_members.role`, and
+  widening it would do exactly that (a "coordinator" role value would
+  need meaning in every module that reads `team_members.role`, not just
+  this one dashboard).
+- **Model B (selected):** the route (`GET /teams/:teamId/context-
+  dashboard`) is gated by the exact same `requireTeamRole(teamIdFromParams,
+  ['owner','admin'])` middleware every other owner/admin-only team route
+  already uses — on the PARENT team's own ID. No new middleware
+  primitive. What's new is entirely inside the service layer: once past
+  that (pre-existing) gate, `contextDashboardService` reads a narrow,
+  fixed field set about the parent's children — never their member
+  lists, blocker titles/messages, task titles, project descriptions, or
+  daily-work entry/summary text, only `COUNT`s and booleans computed by
+  bulk, backend-side aggregate queries.
+
+**Why this is not a parent→child cascade, precisely:** a coordinator who
+is owner/admin of a classroom but NOT an explicit member of one specific
+child team still gets a plain `403` from that child's own `/blockers`,
+`/tasks`, `/work-entries`, `/teams/:teamId/members`, etc. — verified
+directly (`contextDashboard.test.ts`'s "does not let the classroom owner
+read the sub-team's actual blockers... endpoints without explicit
+membership" test uses a SEPARATE coordinator/classroom pairing with zero
+relationship to the target sub-team and confirms `403`). The dashboard is
+the ONE place, with ONE fixed, narrow field set, where parent-owner/admin
+status buys ANY child-team visibility at all — and even there, content
+(titles, messages, text) is never included, only counts. A dedicated test
+seeds a real blocker titled `SECRET_BLOCKER_TITLE_should_not_leak` and a
+real work entry containing `SECRET_WORK_ENTRY_should_not_leak` in a child
+team, then asserts neither string (nor either user's email) appears
+anywhere in the dashboard's JSON response.
+
+**Cross-context isolation:** a coordinator of classroom A gets a plain
+`403` requesting classroom B's dashboard, even though both are the "same
+kind" of context (`team_type='classroom'` on both) — the authorization
+check is per-team (owner/admin of THIS specific parent), never scoped by
+`team_type`, which remains a pure label with no authorization meaning
+anywhere in the codebase (re-confirmed, unchanged since M48/M49).
+
+**Performance:** exactly 4 bulk queries (`WHERE team_id = ANY($1)` /
+`GROUP BY team_id`) regardless of how many child teams exist, plus one
+query for the child-team list itself — never a per-team fan-out. The
+child-team list itself is capped at 200 rows (`LIMIT 200`,
+`contextDashboard.repository.ts`), matching the array-length-bound
+convention M40/M46 already established elsewhere, closing the
+"unbounded aggregation surface" a very large classroom/hackathon could
+otherwise present. No AI-provider call is made anywhere in this feature —
+aggregating counts needs none, and none was added.
+
+**Confirmed non-findings:** `team_type`/`parent_team_id` cannot be
+manipulated through this endpoint — it's read-only (`GET`, no request
+body), so mass-assignment and parent-reassignment concerns (already
+closed for the write paths, M35/M42) don't apply here at all. Query
+parameter manipulation — the only input is `:teamId`, UUID-validated by
+the existing `validateUuidParams` middleware, unchanged. Member/task/
+blocker/submission ID enumeration — none of those IDs are ever returned
+individually, only aggregate counts, so there's nothing to enumerate.
+
+**Reusable checklist question:** *When a coordinator/manager-style
+dashboard needs to aggregate data across several child resources the
+caller isn't individually a member of, resist the urge to grant
+"membership-equivalent" access to solve it — instead ask "what is the
+SMALLEST, most NEUTRAL field set (counts, booleans, never content) that
+answers the coordinator's actual question," gate exactly that behind the
+role check the caller already legitimately has on the PARENT resource,
+and prove with a test that the same caller still gets rejected by every
+child resource's own, unchanged authorization check.*
+
+---
+
 ## How to use this document
 
 - Add a new numbered section per *vulnerability class*, not per milestone —

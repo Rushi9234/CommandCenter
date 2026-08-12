@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import * as api from '../services/api';
+import { useAuth } from '../hooks/useAuth';
 
 export default function Teams() {
+  const { user } = useAuth();
   const [teams, setTeams] = useState<any[]>([]);
   const [allTeams, setAllTeams] = useState<any[]>([]);
   const [invites, setInvites] = useState<any[]>([]);
@@ -34,6 +36,13 @@ export default function Teams() {
   // surface.
   const [subTeams, setSubTeams] = useState<any[]>([]);
   const [workSubmissions, setWorkSubmissions] = useState<any[]>([]);
+
+  // Milestone 51: coordinator dashboard -- only populated when the
+  // caller is owner/admin of the SELECTED team (see selectTeam); a plain
+  // member/viewer never sees this, and the backend independently
+  // enforces that regardless of what the frontend shows.
+  const [contextDashboard, setContextDashboard] = useState<any>(null);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
 
   const [newTeam, setNewTeam] = useState({
     teamName: '',
@@ -110,6 +119,8 @@ export default function Teams() {
     setSelectedTeam(team);
     setSubTeams([]);
     setWorkSubmissions([]);
+    setContextDashboard(null);
+    let myMembership: any = null;
     try {
       const [membersRes, requestsRes] = await Promise.all([
         api.getTeamMembers(team.team_id),
@@ -117,6 +128,7 @@ export default function Teams() {
       ]);
       setTeamMembers(membersRes.data.data);
       setJoinRequests(requestsRes.data.data);
+      myMembership = membersRes.data.data.find((m: any) => m.user_id === user?.user_id);
     } catch (error) {
       console.error('Failed to load team data:', error);
     }
@@ -136,6 +148,23 @@ export default function Teams() {
       setWorkSubmissions(submissionsRes.data.data);
     } catch (error) {
       console.error('Failed to load work submissions:', error);
+    }
+
+    // Milestone 51: only attempt the coordinator dashboard when the
+    // frontend already knows the caller is owner/admin of THIS team --
+    // the backend enforces this regardless (requireTeamRole on the
+    // route), this check just avoids firing a request that would only
+    // ever come back 403 for a plain member/viewer.
+    if (myMembership && (myMembership.role === 'owner' || myMembership.role === 'admin')) {
+      setDashboardLoading(true);
+      try {
+        const dashboardRes = await api.getContextDashboard(team.team_id);
+        setContextDashboard(dashboardRes.data.data);
+      } catch (error) {
+        console.error('Failed to load context dashboard:', error);
+      } finally {
+        setDashboardLoading(false);
+      }
     }
   };
 
@@ -539,12 +568,90 @@ export default function Teams() {
                   </div>
                 </div>
 
+                {/* Milestone 51: Coordinator Dashboard -- only rendered
+                    when contextDashboard was actually loaded (owner/admin
+                    of THIS team, per selectTeam). Aggregate counts/
+                    booleans only, per-child-team -- see
+                    docs/security/SECURITY_FINDINGS.md §22/§23 for why
+                    this does not violate M50's "no implicit parent->child
+                    access" rule: it never returns a child team's member
+                    list, blocker content, task titles, or daily-work
+                    text, only counts derived from bulk, backend-side
+                    queries the caller's owner/admin role on THIS
+                    (parent) team explicitly authorizes. */}
+                {dashboardLoading && (
+                  <div className="pro-card p-6 text-center text-gray-500">
+                    <div className="spinner w-6 h-6 mx-auto mb-2"></div>
+                    Loading coordinator dashboard...
+                  </div>
+                )}
+                {contextDashboard && (
+                  <div className="pro-card p-6">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-1">
+                      Coordinator Dashboard — {contextTypeLabel(contextDashboard.context.team_type) || 'Teams'}
+                    </h3>
+                    <p className="text-sm text-gray-500 mb-4">
+                      Neutral activity signals only -- not a productivity score. Being a coordinator here does not give you access to any team's own tasks, goals, blockers, or daily work below.
+                    </p>
+
+                    {contextDashboard.teams.length === 0 ? (
+                      <p className="text-center text-gray-500 py-8">No teams have been created in this {contextTypeLabel(contextDashboard.context.team_type) || 'context'} yet.</p>
+                    ) : (
+                      <>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+                          <div className="pro-card p-3 text-center">
+                            <div className="text-2xl font-bold text-gray-900">{contextDashboard.summary.total_teams}</div>
+                            <div className="text-xs text-gray-500">Teams</div>
+                          </div>
+                          <div className="pro-card p-3 text-center">
+                            <div className="text-2xl font-bold text-green-600">{contextDashboard.summary.submitted_today_count}</div>
+                            <div className="text-xs text-gray-500">Submitted Today</div>
+                          </div>
+                          <div className="pro-card p-3 text-center">
+                            <div className="text-2xl font-bold text-red-600">{contextDashboard.summary.blocked_count}</div>
+                            <div className="text-xs text-gray-500">Blocked</div>
+                          </div>
+                          <div className="pro-card p-3 text-center">
+                            <div className="text-2xl font-bold text-yellow-600">{contextDashboard.summary.needs_attention_count}</div>
+                            <div className="text-xs text-gray-500">Needs Attention</div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          {contextDashboard.teams.map((t: any) => (
+                            <div key={t.team_id} className="flex items-center justify-between p-3 pro-card-hover">
+                              <div>
+                                <div className="font-medium text-gray-900">{t.team_name}</div>
+                                <div className="text-xs text-gray-500">{t.description || 'No description'}</div>
+                                <div className="text-xs text-gray-400 flex items-center gap-2 mt-1">
+                                  <code>{t.team_id}</code>
+                                  <span>{t.member_count} members</span>
+                                  {t.task_progress && <span>{t.task_progress.completed}/{t.task_progress.total} tasks ({t.task_progress.percent}%)</span>}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {t.open_blocker_count > 0 && (
+                                  <span className="badge badge-red">🚧 {t.open_blocker_count} blocker{t.open_blocker_count > 1 ? 's' : ''}</span>
+                                )}
+                                <span className={`badge ${t.submitted_today ? 'badge-green' : 'badge-gray'}`}>
+                                  {t.submitted_today ? '✅ Submitted' : '⚪ No recent submission'}
+                                </span>
+                                {t.needs_attention && <span className="badge badge-yellow">⚠️ Needs Attention</span>}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
                 {/* Milestone 50: Teams in this context (M37's existing
                     getSubTeams -- membership-gated, no new backend
-                    surface). Shown for ANY team with sub-teams, not just
-                    classroom/hackathon -- the concept ("this team has
-                    child teams") is generic, team_type is just a label. */}
-                {subTeams.length > 0 && (
+                    surface). Shown to a plain member/viewer who is NOT
+                    owner/admin (contextDashboard above covers the
+                    owner/admin case with richer, still-neutral data). */}
+                {!contextDashboard && subTeams.length > 0 && (
                   <div className="pro-card p-6">
                     <h3 className="text-lg font-semibold text-gray-900 mb-1">
                       Teams in this {contextTypeLabel(selectedTeam.team_type) || 'context'} ({subTeams.length})
