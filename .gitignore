@@ -54,3 +54,6 @@ test-results/
 *.pem
 *.key
 *.crt
+
+.vercel
+.env*.local
