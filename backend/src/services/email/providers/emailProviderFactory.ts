@@ -2,6 +2,7 @@ import { env } from '../../../config/env';
 import { EmailProvider } from './emailProvider.interface';
 import { ConsoleEmailProvider } from './consoleEmailProvider';
 import { ResendEmailProvider } from './resendEmailProvider';
+import { SmtpEmailProvider } from './smtpEmailProvider';
 
 // The one place that decides which EmailProvider implementation is
 // active, based on the EMAIL_PROVIDER env var (config/env.ts).
@@ -16,6 +17,14 @@ export const getEmailProvider = (): EmailProvider => {
     return cachedProvider;
   }
 
+  console.log('EMAIL DEBUG:', {
+  provider: env.emailProvider,
+  hasHost: !!process.env.SMTP_HOST,
+  hasPort: !!process.env.SMTP_PORT,
+  hasUser: !!process.env.SMTP_USER,
+  hasPass: !!process.env.SMTP_PASS,
+});
+
   switch (env.emailProvider) {
     // Milestone 55: RESEND_API_KEY is read directly here (not added to
     // config/env.ts) -- this is the one place that already decides which
@@ -28,6 +37,21 @@ export const getEmailProvider = (): EmailProvider => {
       cachedProvider = process.env.RESEND_API_KEY
         ? new ResendEmailProvider(process.env.RESEND_API_KEY)
         : new ConsoleEmailProvider();
+      break;
+    // Temporary E2E-testing provider (see smtpEmailProvider.ts) -- not a
+    // production option. Falls back to ConsoleEmailProvider if any of the
+    // four required variables is missing, matching the 'resend' case's
+    // same "degrade, don't crash" precedent above.
+    case 'smtp':
+      cachedProvider =
+        process.env.SMTP_HOST && process.env.SMTP_PORT && process.env.SMTP_USER && process.env.SMTP_PASS
+          ? new SmtpEmailProvider(
+              process.env.SMTP_HOST,
+              parseInt(process.env.SMTP_PORT, 10),
+              process.env.SMTP_USER,
+              process.env.SMTP_PASS
+            )
+          : new ConsoleEmailProvider();
       break;
     case 'console':
     default:

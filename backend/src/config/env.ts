@@ -20,7 +20,7 @@ const isProduction = process.env.NODE_ENV === 'production';
 
 export const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
-  port: parseInt(process.env.PORT || '3001', 10),
+  port: parseInt(process.env.PORT || '30018', 10),
   databaseUrl: process.env.DATABASE_URL,
   jwtSecret: process.env.JWT_SECRET,
   groqApiKey: process.env.GROQ_API_KEY,
