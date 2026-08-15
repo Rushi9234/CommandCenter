@@ -13,40 +13,64 @@ afterAll(async () => {
   await pgPool.end();
 });
 
-describe('POST /api/logs -- one log per user per day (Milestone 24)', () => {
-  it('rejects a second sequential submission on the same day with the existing message', async () => {
-    const { token } = await registerAndLogin('logdup_seq');
+describe('POST /api/logs -- multiple entries per day', () => {
+  it('allows multiple sequential submissions on the same day', async () => {
+    const { token } = await registerAndLogin('log_multi_seq');
 
-    await request(app).post('/api/logs').set(authHeader(token)).send({ entryText: 'First entry of the day, over ten characters.' }).expect(201);
+    const first = await request(app)
+      .post('/api/logs')
+      .set(authHeader(token))
+      .send({
+        entryText: 'First entry of the day, over ten characters.',
+      })
+      .expect(201);
 
     const second = await request(app)
       .post('/api/logs')
       .set(authHeader(token))
-      .send({ entryText: 'Second entry attempt, also over ten characters.' });
+      .send({
+        entryText: 'Second entry of the same day.',
+      })
+      .expect(201);
 
-    expect(second.status).toBe(400);
-    expect(second.body.error).toBe('Log already submitted for today');
+    expect(first.body.success).toBe(true);
+    expect(second.body.success).toBe(true);
+    expect(first.body.data.log.log_id).not.toBe(second.body.data.log.log_id);
   });
 
-  it('resolves two concurrent submissions as exactly one 201 and one 400 with the existing message', async () => {
-    const { token } = await registerAndLogin('logdup_race');
+  it('allows concurrent submissions on the same day', async () => {
+    const { token } = await registerAndLogin('log_multi_race');
 
     const [first, second] = await Promise.all([
-      request(app).post('/api/logs').set(authHeader(token)).send({ entryText: 'Racing entry attempt number one here.' }),
-      request(app).post('/api/logs').set(authHeader(token)).send({ entryText: 'Racing entry attempt number two here.' }),
+      request(app)
+        .post('/api/logs')
+        .set(authHeader(token))
+        .send({
+          entryText: 'Concurrent entry number one.',
+        }),
+
+      request(app)
+        .post('/api/logs')
+        .set(authHeader(token))
+        .send({
+          entryText: 'Concurrent entry number two.',
+        }),
     ]);
 
-    const statuses = [first.status, second.status].sort();
-    expect(statuses).toEqual([201, 400]);
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
 
-    const failed = first.status === 400 ? first : second;
-    expect(failed.body.error).toBe('Log already submitted for today');
-
-    // Confirm the database itself only ever held one row for the day --
-    // the constraint, not luck, is what decided the outcome.
     const rows = await pgPool.query(
-      "SELECT COUNT(*) AS count FROM daily_logs WHERE user_id = (SELECT user_id FROM users WHERE username LIKE 'logdup_race%') AND log_date = CURRENT_DATE"
+      `SELECT COUNT(*) AS count
+       FROM daily_logs
+       WHERE user_id = (
+         SELECT user_id
+         FROM users
+         WHERE username LIKE 'log_multi_race%'
+       )
+       AND log_date = CURRENT_DATE`
     );
-    expect(Number(rows.rows[0].count)).toBe(1);
+
+    expect(Number(rows.rows[0].count)).toBe(2);
   });
 });
