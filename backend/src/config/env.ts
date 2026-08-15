@@ -24,6 +24,7 @@ export const env = {
   databaseUrl: process.env.DATABASE_URL,
   jwtSecret: process.env.JWT_SECRET,
   groqApiKey: process.env.GROQ_API_KEY,
+  geminiApiKey: process.env.GEMINI_API_KEY,
   // Milestone 13: which AIProvider implementation ai.service.ts's factory
   // (modules/ai/providers/aiProviderFactory.ts) selects. 'groq' (the free
   // default) if unset. 'none' makes zero external requests. Business

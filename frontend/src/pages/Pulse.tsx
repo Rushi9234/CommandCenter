@@ -133,9 +133,19 @@ export default function Pulse() {
     if (!selectedTeam || newEntryText.trim().length === 0) return;
 
     setAddingEntry(true);
+
     try {
       const response = await api.createWorkEntry(selectedTeam, newEntryText);
-      setWorkEntries([...workEntries, response.data.data]);
+
+      // A new entry changes the day's source data, so any previous AI
+      // summary is now stale. Clear it instead of allowing an outdated
+      // summary to be submitted.
+      setWorkEntries((currentEntries) => [
+        ...currentEntries,
+        response.data.data,
+      ]);
+      setDraftSummary(null);
+      setConfirmedSummary('');
       setNewEntryText('');
     } catch (error: any) {
       if (error.response?.status === 409) {
@@ -566,7 +576,7 @@ export default function Pulse() {
                       disabled={summarizing}
                       className="btn-secondary text-sm disabled:opacity-50"
                     >
-                      {summarizing ? 'Generating...' : 'Get AI Summary'}
+                      {summarizing ? 'Generating summary...' : "✨ Summarize Today's Work"}
                     </button>
                   )}
 

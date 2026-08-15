@@ -6,6 +6,18 @@ import { getAIProvider } from './providers/aiProviderFactory';
 // aiProviderFactory for whichever AIProvider is configured (AI_PROVIDER
 // env var) and calls its generateCompletion(). Swapping providers, or
 // adding a new one later, never touches this file.
+interface ProjectAnalysis {
+  suggested_tasks: Array<{
+    title: string;
+    description: string;
+    priority: 'high' | 'medium' | 'low';
+    estimated_hours: number;
+  }>;
+  tech_stack: string[];
+  risks: string[];
+  timeline_estimate: string;
+  team_size_recommendation: number;
+}
 
 interface LogAnalysis {
   tasks_identified: string[];
@@ -16,6 +28,73 @@ interface LogAnalysis {
   blockers_detected: string[];
   quality_score: number;
 }
+
+interface ProductivityInsights {
+  strengths: string[];
+  improvements: string[];
+  recommendations: string[];
+  overall_assessment: string;
+}
+
+const parseAIJson = <T>(content: string): T => {
+  if (!content || typeof content !== 'string') {
+    throw new Error('AI returned an empty response');
+  }
+
+  let cleaned = content.trim();
+
+  // Remove markdown code fences
+  cleaned = cleaned
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+
+  // Extract JSON object
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
+    throw new Error('AI response does not contain valid JSON object');
+  }
+
+  cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+
+  // Attempt 1: normal JSON
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    // Continue with repair attempts
+  }
+
+  // Attempt 2: remove trailing commas
+  try {
+    const repaired = cleaned
+      .replace(/,\s*([}\]])/g, '$1');
+
+    return JSON.parse(repaired) as T;
+  } catch {
+    // Continue
+  }
+
+  // Attempt 3: repair common unescaped newlines
+  try {
+    const repaired = cleaned
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/,\s*([}\]])/g, '$1');
+
+    return JSON.parse(repaired) as T;
+  } catch {
+    // Continue
+  }
+
+  console.error(
+    '[AI] Failed to parse JSON response:',
+    JSON.stringify(content)
+  );
+
+  throw new Error('Failed to parse AI response');
+};
 
 const callAI = (messages: { role: string; content: string }[], options: { temperature?: number; max_tokens?: number } = {}) => {
   return getAIProvider().generateCompletion(messages, options);
@@ -44,15 +123,10 @@ Note: ${AI_DISCLAIMERS.ANALYSIS}`;
 
   try {
     const content = await callAI([{ role: 'user', content: prompt }], { max_tokens: 800 });
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    }
-
-    throw new Error('Failed to parse AI response');
+    return parseAIJson<LogAnalysis>(content);
   } catch (error) {
     console.error('AI Analysis Error:', error);
+
     return {
       tasks_identified: [],
       sentiment_score: 0,
@@ -121,12 +195,7 @@ Return ONLY valid JSON:
 
   try {
     const content = await callAI([{ role: 'user', content: prompt }], { max_tokens: 1500 });
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    }
-    throw new Error('Failed to parse AI response');
+    return parseAIJson<ProjectAnalysis>(content);
   } catch (error) {
     console.error('AI Project Analysis Error:', error);
     return {
@@ -158,12 +227,8 @@ Return ONLY valid JSON:
 
   try {
     const content = await callAI([{ role: 'user', content: prompt }], { temperature: 0.8, max_tokens: 300 });
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    }
-    throw new Error('Failed to parse AI response');
+    console.log('AI SUGGESTIONS RAW RESPONSE:', JSON.stringify(content));
+    return parseAIJson(content);
   } catch (error) {
     console.error('AI Suggestions Error:', error);
     return {
@@ -189,12 +254,7 @@ Return ONLY valid JSON:
 
   try {
     const content = await callAI([{ role: 'user', content: prompt }], { max_tokens: 400 });
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    }
-    throw new Error('Failed to parse AI response');
+    return parseAIJson<ProductivityInsights>(content);
   } catch (error) {
     console.error('AI Insights Error:', error);
     return {
@@ -261,12 +321,7 @@ Return ONLY valid JSON:
 
   try {
     const content = await callAI([{ role: 'user', content: prompt }], { max_tokens: 400 });
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    }
-    return { suggestions: [], root_cause: '', estimated_time: '' };
+    return parseAIJson(content);
   } catch (error) {
     console.error('AI Blocker Analysis Error:', error);
     return { suggestions: [], root_cause: '', estimated_time: '' };
@@ -285,28 +340,94 @@ Return ONLY valid JSON:
 // confirm/edit it before anything is written, enforced at the service
 // layer, not here.
 export const generateWorkSummary = async (entries: string[]): Promise<string> => {
-  const sanitizedEntries = entries.map((e) => maskPII(e));
+  const sanitizedEntries = entries
+    .filter((e) => e && e.trim().length > 0)
+    .map((e) => maskPII(e.trim()));
 
-  const prompt = `Summarize today's work log entries into a concise, professional summary (2-4 sentences or a short bullet list).
+  if (sanitizedEntries.length === 0) {
+    return '';
+  }
 
-Entries (in chronological order):
+  const prompt = `You are generating a professional end-of-day work report.
+
+Analyze ALL of the work log entries below.
+
+IMPORTANT RULES:
+1. Include ALL meaningful work completed during the day.
+2. Do NOT ignore earlier entries.
+3. Combine related entries intelligently instead of repeating them.
+4. Do NOT invent work that is not present in the entries.
+5. The final result must be concise and professional.
+6. The bullet_points array MUST contain 3 to 7 points when enough information exists.
+7. Each bullet point must describe one concrete piece of work, achievement, fix, decision, or progress.
+8. Do NOT write paragraphs inside bullet_points.
+9. Do NOT return markdown.
+10. Return ONLY valid JSON.
+
+Work log entries in chronological order:
 ${sanitizedEntries.map((e, i) => `${i + 1}. ${e}`).join('\n')}
 
-Return ONLY the summary text, no preamble, no JSON.
+Return exactly this JSON structure:
+
+{
+  "summary": "One short sentence describing the overall work completed today.",
+  "bullet_points": [
+    "Completed or worked on ...",
+    "Fixed or resolved ...",
+    "Updated or implemented ...",
+    "Tested or verified ..."
+  ]
+}
 
 Note: ${AI_DISCLAIMERS.SUGGESTION}`;
 
   try {
-    const content = await callAI([{ role: 'user', content: prompt }], { max_tokens: 400 });
-    return content?.trim() || sanitizedEntries.join(' | ');
+    const content = await callAI(
+      [{ role: 'user', content: prompt }],
+      {
+        temperature: 0.2,
+        max_tokens: 600,
+      }
+    );
+    console.log('AI WORK SUMMARY RAW RESPONSE:', JSON.stringify(content));
+
+    const result = parseAIJson<{
+      summary?: string;
+      bullet_points?: string[];
+    }>(content);
+
+    const summary =
+      typeof result.summary === 'string'
+        ? result.summary.trim()
+        : '';
+
+    const bulletPoints = Array.isArray(result.bullet_points)
+      ? result.bullet_points
+          .filter((point: unknown) => typeof point === 'string')
+          .map((point: string) => point.trim())
+          .filter(Boolean)
+      : [];
+
+    if (!summary && bulletPoints.length === 0) {
+      throw new Error('AI returned an empty work summary');
+    }
+
+    const formattedBullets = bulletPoints
+      .map((point: string) => `• ${point.replace(/^[-•*]\s*/, '')}`)
+      .join('\n');
+
+    if (summary && formattedBullets) {
+      return `${summary}\n\n${formattedBullets}`;
+    }
+
+    return summary || formattedBullets;
   } catch (error) {
     console.error('AI Work Summary Error:', error);
-    // Milestone 49: a safe, always-available fallback -- joining the raw
-    // entries verbatim -- rather than failing the request outright. The
-    // user reviews and can edit/rewrite this before confirming either
-    // way, so a degraded (non-AI) draft is still a usable starting point,
-    // not a broken feature.
-    return sanitizedEntries.join(' | ');
+
+    // Safe fallback if AI is unavailable.
+    return sanitizedEntries
+      .map((entry) => `• ${entry}`)
+      .join('\n');
   }
 };
 
@@ -339,12 +460,7 @@ Return ONLY valid JSON:
 
   try {
     const content = await callAI([{ role: 'user', content: prompt }], { max_tokens: 500 });
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    }
-    return { summary: '', highlights: [], blockers: [], team_mood: 'neutral' };
+    return parseAIJson(content);
   } catch (error) {
     console.error('AI Standup Error:', error);
     return { summary: 'Unable to generate standup', highlights: [], blockers: [], team_mood: 'neutral' };

@@ -1,3 +1,10 @@
+interface StandupAIResult {
+  summary: string;
+  highlights: string[];
+  blockers: string[];
+  team_mood: string;
+}
+
 import { logsRepository } from './logs.repository';
 import { teamsRepository } from '../teams/teams.repository';
 import { usersRepository } from '../users/users.repository';
@@ -138,8 +145,8 @@ export class LogsService {
     // per-subject-consent design this milestone deliberately doesn't take
     // on -- see the M32 report's "residual risk" note.
     const aiEnabled = await privacyService.isAiEnabledForUser(userId);
-    const standup = aiEnabled
-      ? await generateStandup(logs, members)
+    const standup: StandupAIResult = aiEnabled
+      ? await generateStandup(logs, members) as StandupAIResult
       : { summary: AI_DISABLED_MESSAGE, highlights: [], blockers: [], team_mood: 'neutral' };
 
     return { ...standup, logs, generated_at: new Date().toISOString() };

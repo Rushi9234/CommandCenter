@@ -1,3 +1,9 @@
+interface BlockerAIResult {
+  suggestions: string[];
+  root_cause: string;
+  estimated_time: string;
+}
+
 import { blockersRepository } from './blockers.repository';
 import { teamsRepository } from '../teams/teams.repository';
 import { usersRepository } from '../users/users.repository';
@@ -8,7 +14,7 @@ import { privacyService, AI_DISABLED_MESSAGE } from '../privacy/privacy.service'
 
 async function generateBlockerSuggestions(title: string, description: string, type: string, attempted: string): Promise<string[]> {
   try {
-    const result = await analyzeBlocker(title, description, type, attempted);
+    const result = await analyzeBlocker(title, description, type, attempted) as BlockerAIResult;
     return result.suggestions || [];
   } catch {
     return [];
