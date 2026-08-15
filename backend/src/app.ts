@@ -47,7 +47,33 @@ app.use(helmet());
 // current frontend doesn't use cookies yet (it sends the legacy bearer
 // token instead), so this has no effect on it -- it only matters once
 // something actually relies on the cookie-based flow.
-app.use(cors({ origin: env.frontendUrl, credentials: true }));
+const allowedOrigins = [
+  'https://commandcenter-sand.vercel.app',
+  env.frontendUrl,
+];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests without an Origin header
+      // (Postman, server-to-server requests, etc.)
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
+
+app.options('*', cors());
 app.use(express.json());
 app.use(cookieParser());
 
