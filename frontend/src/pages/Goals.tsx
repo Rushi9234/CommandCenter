@@ -46,13 +46,45 @@ export default function Goals() {
 
   const handleCreateGoal = async (e: React.FormEvent) => {
     e.preventDefault();
+
     try {
-      await api.createGoal(newGoal);
+      const payload = {
+        title: newGoal.title.trim(),
+        description: newGoal.description.trim() || undefined,
+        goalType: newGoal.goalType || undefined,
+        parentGoalId: newGoal.parentGoalId || undefined,
+        targetDate: newGoal.targetDate || undefined,
+        teamId: newGoal.teamId || undefined,
+      };
+
+      console.log('========== CREATE GOAL PAYLOAD ==========');
+      console.log(payload);
+      console.log('parentGoalId:', JSON.stringify(payload.parentGoalId));
+      console.log('teamId:', JSON.stringify(payload.teamId));
+      console.log('==========================================');
+
+      await api.createGoal(payload);
+
       setShowCreateModal(false);
-      setNewGoal({ title: '', description: '', goalType: 'project', parentGoalId: '', targetDate: '', teamId: '' });
+
+      setNewGoal({
+        title: '',
+        description: '',
+        goalType: 'project',
+        parentGoalId: '',
+        targetDate: '',
+        teamId: '',
+      });
+
       loadGoals();
     } catch (error: any) {
-      alert(error.response?.data?.error || 'Failed to create goal');
+      console.error('Create goal error:', error.response?.data);
+
+      alert(
+        error.response?.data?.error ||
+        error.response?.data?.message ||
+        'Failed to create goal'
+      );
     }
   };
 
