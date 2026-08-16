@@ -49,19 +49,25 @@ export default function Goals() {
 
     try {
       const payload = {
-        title: newGoal.title.trim(),
-        description: newGoal.description.trim() || undefined,
-        goalType: newGoal.goalType || undefined,
-        parentGoalId: newGoal.parentGoalId || undefined,
-        targetDate: newGoal.targetDate || undefined,
-        teamId: newGoal.teamId || undefined,
+        title: newGoal.title,
+        description: newGoal.description,
+        goalType: newGoal.goalType,
+
+        // Do NOT send empty string for UUID fields
+        ...(newGoal.parentGoalId
+          ? { parentGoalId: newGoal.parentGoalId }
+          : {}),
+
+        ...(newGoal.teamId
+          ? { teamId: newGoal.teamId }
+          : {}),
+
+        ...(newGoal.targetDate
+          ? { targetDate: newGoal.targetDate }
+          : {}),
       };
 
-      console.log('========== CREATE GOAL PAYLOAD ==========');
-      console.log(payload);
-      console.log('parentGoalId:', JSON.stringify(payload.parentGoalId));
-      console.log('teamId:', JSON.stringify(payload.teamId));
-      console.log('==========================================');
+      console.log('Creating goal with payload:', payload);
 
       await api.createGoal(payload);
 
@@ -76,7 +82,7 @@ export default function Goals() {
         teamId: '',
       });
 
-      loadGoals();
+      await loadGoals();
     } catch (error: any) {
       console.error('Create goal error:', error.response?.data);
 
