@@ -226,7 +226,7 @@ Return ONLY valid JSON:
 }`;
 
   try {
-    const content = await callAI([{ role: 'user', content: prompt }], { temperature: 0.8, max_tokens: 300 });
+    const content = await callAI([{ role: 'user', content: prompt }], { temperature: 0.2, max_tokens: 600 });
     console.log('AI SUGGESTIONS RAW RESPONSE:', JSON.stringify(content));
     return parseAIJson(content);
   } catch (error) {
