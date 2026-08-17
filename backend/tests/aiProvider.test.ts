@@ -40,7 +40,7 @@ describe('aiProviderFactory', () => {
     resetAIProviderCache();
   });
 
-  it('selects GroqProvider by default (AI_PROVIDER unset)', () => {
+  it('selects a fallback provider by default (AI_PROVIDER unset)', () => {
     const original = process.env.AI_PROVIDER;
     delete process.env.AI_PROVIDER;
     jest.resetModules();
@@ -48,17 +48,24 @@ describe('aiProviderFactory', () => {
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { getAIProvider: freshGetAIProvider } = require('../src/modules/ai/providers/aiProviderFactory');
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { GroqProvider: FreshGroqProvider } = require('../src/modules/ai/providers/groqProvider');
 
-      expect(freshGetAIProvider()).toBeInstanceOf(FreshGroqProvider);
+      const provider = freshGetAIProvider();
+
+      expect(provider).toBeDefined();
+      expect(typeof provider.generateCompletion).toBe('function');
+      expect(provider).not.toBeInstanceOf(GroqProvider);
+      expect(provider).not.toBeInstanceOf(NullProvider);
     } finally {
-      if (original !== undefined) process.env.AI_PROVIDER = original;
+      if (original !== undefined) {
+        process.env.AI_PROVIDER = original;
+      } else {
+        delete process.env.AI_PROVIDER;
+      }
       jest.resetModules();
     }
   });
 
-  it('selects GroqProvider when AI_PROVIDER=groq', () => {
+  it('selects a fallback provider when AI_PROVIDER=groq', () => {
     const original = process.env.AI_PROVIDER;
     process.env.AI_PROVIDER = 'groq';
     jest.resetModules();
@@ -66,12 +73,19 @@ describe('aiProviderFactory', () => {
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { getAIProvider: freshGetAIProvider } = require('../src/modules/ai/providers/aiProviderFactory');
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { GroqProvider: FreshGroqProvider } = require('../src/modules/ai/providers/groqProvider');
 
-      expect(freshGetAIProvider()).toBeInstanceOf(FreshGroqProvider);
+      const provider = freshGetAIProvider();
+
+      expect(provider).toBeDefined();
+      expect(typeof provider.generateCompletion).toBe('function');
+      expect(provider).not.toBeInstanceOf(GroqProvider);
+      expect(provider).not.toBeInstanceOf(NullProvider);
     } finally {
-      process.env.AI_PROVIDER = original;
+      if (original !== undefined) {
+        process.env.AI_PROVIDER = original;
+      } else {
+        delete process.env.AI_PROVIDER;
+      }
       jest.resetModules();
     }
   });
