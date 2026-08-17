@@ -5,7 +5,7 @@ import { AIProvider, AIMessage, AICompletionOptions } from './aiProvider.interfa
 // stays isolated in this provider. Business logic never depends on
 // Groq-specific details.
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODEL = 'llama-3.1-8b-instant';
+const GROQ_MODEL = 'openai/gpt-oss-20b';
 
 export class GroqProvider implements AIProvider {
   async generateCompletion(

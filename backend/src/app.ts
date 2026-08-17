@@ -55,8 +55,6 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests without an Origin header
-      // (Postman, server-to-server requests, etc.)
       if (!origin) {
         return callback(null, true);
       }
@@ -69,11 +67,9 @@ app.use(
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
   })
 );
-
-app.options('*', cors());
 app.use(express.json());
 app.use(cookieParser());
 

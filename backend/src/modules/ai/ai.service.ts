@@ -283,7 +283,7 @@ User: ${sanitizedMessage}
 Assistant: ${AI_DISCLAIMERS.SUGGESTION}`;
 
   try {
-    const content = await callAI([{ role: 'user', content: prompt }], { max_tokens: 150 });
+    const content = await callAI([{ role: 'user', content: prompt }], { max_tokens: 400 });
     return content || 'I apologize, I could not generate a response.';
   } catch (error) {
     console.error('AI Chat Error:', error);
