@@ -16,7 +16,7 @@ afterAll(async () => {
 });
 
 const createGoal = (token: string, teamId?: string, parentGoalId?: string) =>
-  request(app).post('/api/goals').set(authHeader(token)).send({ title: 'M40 Test Goal', teamId, parentGoalId });
+  request(app).post('/api/goals').set(authHeader(token)).send({ title: 'M40 Test Goal', goalType: 'project', teamId, parentGoalId });
 
 const createProject = async (token: string, teamId: string) => {
   const res = await request(app).post('/api/projects').set(authHeader(token)).send({ projectName: 'M40 Project', teamId }).expect(201);

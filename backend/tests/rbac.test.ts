@@ -147,7 +147,7 @@ describe('Tasks -- inherit project write/read authorization', () => {
 });
 
 describe('Goals -- write access excludes viewer, read access includes viewer', () => {
-  const createGoal = (token: string, teamId: string) => request(app).post('/api/goals').set(authHeader(token)).send({ title: 'RBAC Test Goal', teamId });
+  const createGoal = (token: string, teamId: string) => request(app).post('/api/goals').set(authHeader(token)).send({ title: 'RBAC Test Goal', goalType: 'project', teamId });
 
   it('allows owner/admin/manager/member to create; rejects viewer and non-member', async () => {
     const { teamId, owner, admin, manager, member, viewer, nonMember } = await buildTeamWithRoles();

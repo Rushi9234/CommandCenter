@@ -21,6 +21,7 @@ import contextDashboardRoutes from '../modules/contextDashboard/contextDashboard
 import leaderboardRoutes from '../modules/leaderboard/leaderboard.routes';
 import privacyRoutes from '../modules/privacy/privacy.routes';
 import aiRoutes from '../modules/ai/ai.routes';
+import realtimeRoutes from '../realtime/realtime.routes';
 
 const router = Router();
 
@@ -54,5 +55,6 @@ router.use('/', contextDashboardRoutes);
 router.use('/', leaderboardRoutes);
 router.use('/', privacyRoutes);
 router.use('/ai', aiRoutes);
+router.use('/', realtimeRoutes);
 
 export default router;

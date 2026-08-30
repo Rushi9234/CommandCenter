@@ -171,8 +171,12 @@ export class TeamsRepository {
   }
 
   async getUserTeams(userId: string) {
+    // tm.role is the caller's own membership role on each team, exposed as
+    // my_role -- lets the frontend (Goals' review/approve UI) know whether
+    // the caller is a leader (owner/admin) of a given team without a
+    // second request per team.
     const text = `
-      SELECT t.* FROM teams t
+      SELECT t.*, tm.role AS my_role FROM teams t
       INNER JOIN team_members tm ON t.team_id = tm.team_id
       WHERE tm.user_id = $1
       ORDER BY t.created_at DESC

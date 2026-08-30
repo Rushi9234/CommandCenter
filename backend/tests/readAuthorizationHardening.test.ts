@@ -168,3 +168,81 @@ describe('Milestone 41 -- read authorization regression across resource types', 
     expect(res.status).toBe(403);
   });
 });
+
+// ---------------------------------------------------------------------------
+// GET /projects/:projectId/details -- privacy fix (Projects UX +
+// reliability pass): a non-member used to get a soft-denied 200 carrying
+// project_name/status/priority/is_public for ANY project ID, private or
+// not. A private project must now hard-reject; a public project's summary
+// fields stay visible (same fields GET /projects/public already exposes
+// to any authenticated user by design).
+// ---------------------------------------------------------------------------
+
+describe('Projects UX + reliability pass -- GET /projects/:projectId/details privacy fix', () => {
+  const createProject = (token: string, body: Record<string, any>) =>
+    request(app).post('/api/projects').set(authHeader(token)).send(body);
+
+  it('a non-member cannot retrieve a PRIVATE project\'s details -- hard 403, not a soft-denied summary', async () => {
+    const owner = await registerAndLogin('projects_details_private_owner');
+    const outsider = await registerAndLogin('projects_details_private_outsider');
+    const teamId = await createTeam(owner.token, `ProjDetailsPrivate_${Date.now()}`);
+    const projectRes = await createProject(owner.token, {
+      projectName: 'Private Project',
+      teamId,
+      isPublic: false,
+    }).expect(201);
+    const projectId = projectRes.body.data.project_id;
+
+    const res = await request(app).get(`/api/projects/${projectId}/details`).set(authHeader(outsider.token));
+
+    expect(res.status).toBe(403);
+    // The old soft-denial leaked these fields in a 200 body -- confirm
+    // none of it is present in the rejected response.
+    const serialized = JSON.stringify(res.body);
+    expect(serialized).not.toMatch(/Private Project/);
+  });
+
+  it('a team member (non-creator) CAN retrieve the private project\'s full details', async () => {
+    const owner = await registerAndLogin('projects_details_member_owner');
+    const member = await registerAndLogin('projects_details_member_viewer');
+    const teamId = await createTeam(owner.token, `ProjDetailsMember_${Date.now()}`);
+    await addMember(owner.token, teamId, member.userId, 'member').expect(200);
+    const projectRes = await createProject(owner.token, {
+      projectName: 'Team Private Project',
+      teamId,
+      isPublic: false,
+    }).expect(201);
+    const projectId = projectRes.body.data.project_id;
+
+    const res = await request(app).get(`/api/projects/${projectId}/details`).set(authHeader(member.token)).expect(200);
+
+    expect(res.body.data.project_name).toBe('Team Private Project');
+    expect(res.body.data.access_denied).toBe(false);
+  });
+
+  it('a non-member CAN still see a PUBLIC project\'s summary fields (regression -- discoverability is unaffected)', async () => {
+    const owner = await registerAndLogin('projects_details_public_owner');
+    const outsider = await registerAndLogin('projects_details_public_outsider');
+    const teamId = await createTeam(owner.token, `ProjDetailsPublic_${Date.now()}`);
+    const projectRes = await createProject(owner.token, {
+      projectName: 'Public Project',
+      teamId,
+      isPublic: true,
+    }).expect(201);
+    const projectId = projectRes.body.data.project_id;
+
+    const res = await request(app).get(`/api/projects/${projectId}/details`).set(authHeader(outsider.token)).expect(200);
+
+    expect(res.body.data.project_name).toBe('Public Project');
+    expect(res.body.data.access_denied).toBe(true);
+  });
+
+  it('a nonexistent project ID still returns 404, not 403 (regression -- existence check unaffected)', async () => {
+    const { token } = await registerAndLogin('projects_details_notfound');
+    const res = await request(app)
+      .get('/api/projects/00000000-0000-0000-0000-000000000000/details')
+      .set(authHeader(token));
+
+    expect(res.status).toBe(404);
+  });
+});

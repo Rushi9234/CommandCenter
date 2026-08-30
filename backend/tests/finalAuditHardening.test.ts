@@ -67,7 +67,8 @@ describe('Milestone 42 -- POST /teams closes the missing parentTeamId destinatio
 // ---------------------------------------------------------------------------
 
 describe('Milestone 42 -- POST /goals closes the missing parentGoalId destination-authorization check', () => {
-  const createGoal = (token: string, body: Record<string, any>) => request(app).post('/api/goals').set(authHeader(token)).send(body);
+  const createGoal = (token: string, body: Record<string, any>) =>
+    request(app).post('/api/goals').set(authHeader(token)).send({ goalType: 'project', ...body });
 
   it('rejects creating a goal nested under a goal in a team the caller has no write access to, and no goal is created', async () => {
     const ownerA = await registerAndLogin('m42_goals_owner_a');

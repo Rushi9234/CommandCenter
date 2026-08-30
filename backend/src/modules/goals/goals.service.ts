@@ -62,7 +62,7 @@ export class GoalsService {
   // Milestone 5: base gate (requireTeamRoleIfSpecified + canAccessTeam)
   // moved to goals.routes.ts.
   async getGoals(userId: string, teamId?: string, goalType?: string) {
-    let goals = teamId ? await goalsRepository.getTeamGoals(teamId) : await goalsRepository.getUserGoals(userId);
+    let goals = teamId ? await goalsRepository.getTeamGoals(teamId, userId) : await goalsRepository.getUserGoals(userId);
 
     if (goalType) {
       goals = goals.filter((g: any) => g.goal_type === goalType);
@@ -72,7 +72,7 @@ export class GoalsService {
   }
 
   async getGoalHierarchy(userId: string, teamId?: string) {
-    const goals = teamId ? await goalsRepository.getTeamGoals(teamId) : await goalsRepository.getUserGoals(userId);
+    const goals = teamId ? await goalsRepository.getTeamGoals(teamId, userId) : await goalsRepository.getUserGoals(userId);
 
     const rootGoals = goals.filter((g: any) => !g.parent_goal_id);
     const childrenIndex = buildChildrenIndex(goals);
@@ -119,7 +119,23 @@ export class GoalsService {
     // up "completed" with no completion timestamp, or "not completed"
     // with a stale one left over from a previous completion.
     if (updates.status === 'completed') {
+      // Review workflow: a TEAM goal cannot go straight to "completed"
+      // through this generic update -- that would let any writer declare
+      // final completion unilaterally, which is exactly what the
+      // submit-for-review / approve workflow exists to prevent. A
+      // personal (teamless) goal has no leader to approve it, so it keeps
+      // the original direct-completion behavior unchanged.
+      const current = await goalsRepository.getGoal(goalId);
+      if (current?.team_id) {
+        throw new ForbiddenError(
+          'Team goals must be submitted for review and approved by a team leader before they can be marked completed. Use "Submit for Review" instead.'
+        );
+      }
       updates.completed_at = new Date();
+      // Milestone: status='completed' must always imply progress=100 --
+      // avoids the "Completed at 35%" contradiction the same way
+      // completed_at's own derivation avoids a missing/stale timestamp.
+      updates.progress = 100;
     } else if (updates.status) {
       updates.completed_at = null;
     }
@@ -133,6 +149,110 @@ export class GoalsService {
 
   getGoalProgress(goalId: string) {
     return goalsRepository.calculateGoalProgress(goalId);
+  }
+
+  // --- Review workflow -------------------------------------------------
+  // Member submits work, saying what they actually want signed off
+  // (requestedStatus -- defaults to the goal's OWN current status, i.e.
+  // "just acknowledge where this stands," not completion) ->
+  // status='pending_review' -> team leader (owner/admin) approves, which
+  // applies requested_status VERBATIM (only 'completed' produces
+  // progress=100 + completed_at), or returns it to an in-progress state.
+  //
+  // Corrective fix: approveReview (previously named approveCompletion)
+  // used to unconditionally set status='completed' for ANY approval --
+  // a member requesting sign-off on a normal 40%->60% progress bump
+  // would have their goal silently finalized the moment a leader clicked
+  // Approve, with no way to approve "yes, that progress is fine, keep
+  // going" without also completing it. requested_status is what actually
+  // fixes this: it's the one piece of information submitForReview was
+  // missing, and approveReview now branches on it instead of assuming
+  // every review is a completion request.
+  //
+  // Authorization for the leader-only actions is enforced at the route
+  // level (isTeamLeader), same pattern as canWriteGoal/canAccessGoal
+  // above -- this class never trusts a caller-supplied role, only what
+  // the DB says the caller's team membership actually is.
+
+  async submitForReview(userId: string, goalId: string, requestedStatus?: string) {
+    const goal = await goalsRepository.getGoal(goalId);
+    if (!goal) {
+      throw new BadRequestError('Goal not found');
+    }
+    if (!goal.team_id) {
+      throw new BadRequestError('Only team goals go through review -- personal goals can be marked completed directly.');
+    }
+    if (goal.status === 'completed') {
+      throw new BadRequestError('This goal is already completed.');
+    }
+    if (goal.status === 'pending_review') {
+      throw new BadRequestError('This goal has already been submitted for review.');
+    }
+
+    return goalsRepository.updateGoal(goalId, {
+      status: 'pending_review',
+      // No explicit request means "sign off on the current progress/
+      // stage" -- re-affirming the goal's own status, never completion.
+      requested_status: requestedStatus || goal.status,
+      submitted_for_review_by: userId,
+      submitted_for_review_at: new Date(),
+    });
+  }
+
+  async approveReview(userId: string, goalId: string) {
+    const goal = await goalsRepository.getGoal(goalId);
+    if (!goal) {
+      throw new BadRequestError('Goal not found');
+    }
+    if (goal.status !== 'pending_review') {
+      throw new BadRequestError('This goal is not currently awaiting review.');
+    }
+
+    const requested = goal.requested_status || 'active';
+    const isCompletionRequest = requested === 'completed';
+
+    const updates: Record<string, any> = {
+      status: requested,
+      approved_by: userId,
+      approved_at: new Date(),
+      requested_status: null,
+      submitted_for_review_by: null,
+      submitted_for_review_at: null,
+    };
+
+    // Only an actual completion request may produce completed + 100 --
+    // approving a normal progress/stage sign-off must never imply
+    // finished, avoiding the "Completed at 35%" contradiction from the
+    // other direction (approving something that was never asked to be
+    // completed).
+    if (isCompletionRequest) {
+      updates.progress = 100;
+      updates.completed_at = new Date();
+    }
+
+    return goalsRepository.updateGoal(goalId, updates);
+  }
+
+  async returnGoal(userId: string, goalId: string, targetStatus?: string) {
+    const goal = await goalsRepository.getGoal(goalId);
+    if (!goal) {
+      throw new BadRequestError('Goal not found');
+    }
+    if (goal.status !== 'pending_review') {
+      throw new BadRequestError('This goal is not currently awaiting review.');
+    }
+
+    return goalsRepository.updateGoal(goalId, {
+      status: targetStatus || 'active',
+      // Clear the submission/request markers -- it's been sent back, so
+      // "waiting for review, submitted by X, requesting Y" would be
+      // stale/misleading once it's back in an in-progress state.
+      // approved_by/approved_at are left alone: this is a rejection, not
+      // an approval, so nothing here.
+      requested_status: null,
+      submitted_for_review_by: null,
+      submitted_for_review_at: null,
+    });
   }
 }
 

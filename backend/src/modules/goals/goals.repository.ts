@@ -1,6 +1,18 @@
 import { query, queryOne, buildSetClause } from '../../db/client';
 
-const GOAL_UPDATABLE_COLUMNS = ['title', 'description', 'goal_type', 'status', 'progress', 'parent_goal_id', 'target_date', 'completed_at'];
+// goal_type deliberately excluded: updateGoalSchema no longer accepts it
+// (see that file's comment -- there is no type-editing UI, so the schema
+// stopped pretending the capability exists). Leaving it in this allowlist
+// would be dead/misleading now that zod's validate() middleware strips any
+// goal_type key from the body before this is ever consulted.
+const GOAL_UPDATABLE_COLUMNS = [
+  'title', 'description', 'status', 'progress', 'parent_goal_id', 'target_date', 'completed_at',
+  // Review-workflow columns -- never taken directly from a request body
+  // (excluded from updateGoalSchema, same treatment as completed_at).
+  // Only goals.service.ts's submitForReview/approveCompletion/returnGoal
+  // pass these, after their own dedicated authorization checks.
+  'submitted_for_review_by', 'submitted_for_review_at', 'approved_by', 'approved_at', 'requested_status',
+];
 
 // Moved verbatim from the old databaseService.ts (goal methods).
 export class GoalsRepository {
@@ -44,24 +56,47 @@ export class GoalsRepository {
     return queryOne<any>(text, [goalId]);
   }
 
+  // submitted_by_name/approved_by_name: display names for the review
+  // workflow's "submitted by X" / "approved by Y" UI -- both NULL for a
+  // goal that has never gone through review. created_by_name: same
+  // pattern, for the creator/timestamp visibility fix -- created_by is
+  // NOT NULL on goals, but this stays a LEFT JOIN for consistency with
+  // the other two rather than assuming referential integrity can never
+  // glitch. my_team_role: the caller's own role on the goal's team (NULL
+  // for a personal/teamless goal), lets the frontend show leader-only
+  // review controls without a second request per goal.
   async getUserGoals(userId: string) {
     const text = `
-      SELECT * FROM goals
-      WHERE created_by = $1 OR team_id IN (
+      SELECT g.*, tm.role AS my_team_role,
+        cu.full_name AS created_by_name,
+        su.full_name AS submitted_by_name, au.full_name AS approved_by_name
+      FROM goals g
+      LEFT JOIN team_members tm ON tm.team_id = g.team_id AND tm.user_id = $1
+      LEFT JOIN users cu ON cu.user_id = g.created_by
+      LEFT JOIN users su ON su.user_id = g.submitted_for_review_by
+      LEFT JOIN users au ON au.user_id = g.approved_by
+      WHERE g.created_by = $1 OR g.team_id IN (
         SELECT team_id FROM team_members WHERE user_id = $1
       )
-      ORDER BY created_at DESC
+      ORDER BY g.created_at DESC
     `;
     return query<any>(text, [userId]);
   }
 
-  async getTeamGoals(teamId: string) {
+  async getTeamGoals(teamId: string, userId?: string) {
     const text = `
-      SELECT * FROM goals
-      WHERE team_id = $1
-      ORDER BY created_at DESC
+      SELECT g.*, tm.role AS my_team_role,
+        cu.full_name AS created_by_name,
+        su.full_name AS submitted_by_name, au.full_name AS approved_by_name
+      FROM goals g
+      LEFT JOIN team_members tm ON tm.team_id = g.team_id AND tm.user_id = $2
+      LEFT JOIN users cu ON cu.user_id = g.created_by
+      LEFT JOIN users su ON su.user_id = g.submitted_for_review_by
+      LEFT JOIN users au ON au.user_id = g.approved_by
+      WHERE g.team_id = $1
+      ORDER BY g.created_at DESC
     `;
-    return query<any>(text, [teamId]);
+    return query<any>(text, [teamId, userId || null]);
   }
 
   async updateGoal(goalId: string, updates: Record<string, any>) {
@@ -210,6 +245,23 @@ export class GoalsRepository {
         created_by = $2 OR
         team_id IN (SELECT team_id FROM team_members WHERE user_id = $2 AND role != 'viewer')
       )
+    `;
+    const result = await queryOne(text, [goalId, userId]);
+    return result !== null;
+  }
+
+  // Review-workflow gate: "leader" == owner or admin of the goal's OWN
+  // team (never the creator, unlike canWriteGoal above -- final
+  // completion sign-off is a team-authority check, not an authorship
+  // check). Matches the same owner/admin split Teams.tsx already treats
+  // as the leadership tier (coordinator dashboard access). A goal with no
+  // team_id (personal goal) has no leader and always returns false here --
+  // the review workflow does not apply to personal goals.
+  async isTeamLeader(userId: string, goalId: string): Promise<boolean> {
+    const text = `
+      SELECT g.goal_id FROM goals g
+      INNER JOIN team_members tm ON tm.team_id = g.team_id
+      WHERE g.goal_id = $1 AND tm.user_id = $2 AND tm.role IN ('owner', 'admin')
     `;
     const result = await queryOne(text, [goalId, userId]);
     return result !== null;

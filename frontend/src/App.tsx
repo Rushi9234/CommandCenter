@@ -15,18 +15,30 @@ import Grid from './pages/Grid';
 import SOSHub from './pages/SOSHub';
 import ExecutiveBrief from './pages/ExecutiveBrief';
 
+// Milestone: on a hard refresh, useAuth's token is briefly null before its
+// own effect reads localStorage (see useAuth.tsx). Deciding isAuthenticated
+// during that gap used to redirect an already logged-in user to /login,
+// which then immediately redirected on to /pulse once the real token
+// showed up -- silently losing whatever route (e.g. /teams) they refreshed
+// on. Rendering nothing until isInitializing clears avoids acting on that
+// transient value.
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isInitializing } = useAuth();
+  if (isInitializing) return null;
   return isAuthenticated ? <>{children}</> : <Navigate to="/login" />;
 }
 
-function AppRoutes() {
-  const { isAuthenticated } = useAuth();
+function PublicOnlyRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, isInitializing } = useAuth();
+  if (isInitializing) return null;
+  return isAuthenticated ? <Navigate to="/pulse" /> : <>{children}</>;
+}
 
+function AppRoutes() {
   return (
     <Routes>
-      <Route path="/login" element={isAuthenticated ? <Navigate to="/pulse" /> : <Login />} />
-      <Route path="/register" element={isAuthenticated ? <Navigate to="/pulse" /> : <Register />} />
+      <Route path="/login" element={<PublicOnlyRoute><Login /></PublicOnlyRoute>} />
+      <Route path="/register" element={<PublicOnlyRoute><Register /></PublicOnlyRoute>} />
       <Route path="/verify-email" element={<VerifyEmail />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />

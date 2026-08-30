@@ -33,3 +33,18 @@ export const getGoalProgress = async (req: AuthRequest, res: Response) => {
   const progress = await goalsService.getGoalProgress(req.params.goalId);
   ok(res, progress);
 };
+
+export const submitGoalForReview = async (req: AuthRequest, res: Response) => {
+  const goal = await goalsService.submitForReview(req.user!.userId, req.params.goalId, req.body?.requestedStatus);
+  ok(res, goal, 'Goal submitted for review');
+};
+
+export const approveGoal = async (req: AuthRequest, res: Response) => {
+  const goal = await goalsService.approveReview(req.user!.userId, req.params.goalId);
+  ok(res, goal, 'Goal review approved');
+};
+
+export const returnGoal = async (req: AuthRequest, res: Response) => {
+  const goal = await goalsService.returnGoal(req.user!.userId, req.params.goalId, req.body?.status);
+  ok(res, goal, 'Goal returned for further work');
+};

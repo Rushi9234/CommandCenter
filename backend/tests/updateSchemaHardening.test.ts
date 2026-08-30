@@ -19,7 +19,7 @@ afterAll(async () => {
 
 describe('Milestone 35 -- PUT /goals/:goalId hardened update schema', () => {
   const createGoal = (token: string, teamId?: string) =>
-    request(app).post('/api/goals').set(authHeader(token)).send({ title: 'M35 Goal', teamId });
+    request(app).post('/api/goals').set(authHeader(token)).send({ title: 'M35 Goal', goalType: 'project', teamId });
 
   const getGoalRow = async (goalId: string) => (await pgPool.query('SELECT * FROM goals WHERE goal_id = $1', [goalId])).rows[0];
 
@@ -125,6 +125,85 @@ describe('Milestone 35 -- PUT /goals/:goalId hardened update schema', () => {
 
     const row = await getGoalRow(goalId);
     expect(row.status).toBe('planning');
+  });
+
+  // Goals UX cleanup phase, item 5: updateGoalSchema used to validate
+  // goal_type against a stale 4-value enum left over from before the
+  // create form's type list grew -- nothing in the UI has ever sent
+  // goal_type on an update (there is no type-editing UI at all), so this
+  // was dead, misleading validation. Removed rather than widened, since
+  // the architecture genuinely doesn't support editing a goal's type
+  // after creation. This proves the current, honest behavior: a goal_type
+  // key on the request body is silently ignored (same as any other
+  // unrecognized field), not applied, and does not error the request.
+  it('goal-type schema drift: silently ignores a goal_type field on update, leaving the stored type unchanged (no type-editing UI exists)', async () => {
+    const { token } = await registerAndLogin('m_goaltype_drift');
+    const goalRes = await createGoal(token);
+    const goalId = goalRes.body.data.goal_id;
+    expect(goalRes.body.data.goal_type).toBe('project');
+
+    const res = await request(app)
+      .put(`/api/goals/${goalId}`)
+      .set(authHeader(token))
+      .send({ status: 'active', goal_type: 'research' })
+      .expect(200);
+    expect(res.body.data.status).toBe('active');
+    expect(res.body.data.goal_type).toBe('project');
+
+    const row = await getGoalRow(goalId);
+    expect(row.goal_type).toBe('project');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Goals UX cleanup phase, item 4: goalType requiredness
+// ---------------------------------------------------------------------------
+
+describe('Goals UX cleanup -- POST /goals goalType is genuinely required', () => {
+  it('rejects goal creation when goalType is missing entirely', async () => {
+    const { token } = await registerAndLogin('m_goaltype_missing');
+
+    const res = await request(app).post('/api/goals').set(authHeader(token)).send({ title: 'No type goal' });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects goal creation when goalType is an empty string', async () => {
+    const { token } = await registerAndLogin('m_goaltype_empty');
+
+    const res = await request(app).post('/api/goals').set(authHeader(token)).send({ title: 'Empty type goal', goalType: '' });
+    expect(res.status).toBe(400);
+  });
+
+  it('accepts every currently-supported predefined goal type', async () => {
+    const { token } = await registerAndLogin('m_goaltype_valid');
+
+    for (const goalType of ['project', 'research', 'academic', 'personal', 'team', 'milestone', 'task', 'performance']) {
+      const res = await request(app).post('/api/goals').set(authHeader(token)).send({ title: `Type ${goalType}`, goalType });
+      expect(res.status).toBe(201);
+      expect(res.body.data.goal_type).toBe(goalType);
+    }
+  });
+
+  it('accepts a custom "Other" type as free text, matching the frontend\'s custom-type behavior', async () => {
+    const { token } = await registerAndLogin('m_goaltype_custom');
+
+    const res = await request(app)
+      .post('/api/goals')
+      .set(authHeader(token))
+      .send({ title: 'Custom type goal', goalType: 'Hackathon Prep' })
+      .expect(201);
+    expect(res.body.data.goal_type).toBe('Hackathon Prep');
+  });
+
+  it('still accepts a legacy type value not present in the current create-form dropdown (goal_type has no DB-level enum)', async () => {
+    const { token } = await registerAndLogin('m_goaltype_legacy');
+
+    const res = await request(app)
+      .post('/api/goals')
+      .set(authHeader(token))
+      .send({ title: 'Legacy type goal', goalType: 'company' })
+      .expect(201);
+    expect(res.body.data.goal_type).toBe('company');
   });
 });
 

@@ -280,4 +280,13 @@ export const updateGoal = (goalId: string, data: any) =>
 export const deleteGoal = (goalId: string) =>
   api.delete(`/goals/${goalId}`);
 
+export const submitGoalForReview = (goalId: string, requestedStatus?: string) =>
+  api.post(`/goals/${goalId}/submit-review`, requestedStatus ? { requestedStatus } : {});
+
+export const approveGoal = (goalId: string) =>
+  api.post(`/goals/${goalId}/approve`);
+
+export const returnGoal = (goalId: string, status?: string) =>
+  api.post(`/goals/${goalId}/return`, status ? { status } : {});
+
 export default api;

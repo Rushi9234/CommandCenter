@@ -131,7 +131,7 @@ describe('Pulse — Daily Work (Milestone 52)', () => {
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'team-a' } });
     await waitFor(() => expect(screen.getByText('Did stuff')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByText('Get AI Summary'));
+    fireEvent.click(screen.getByRole('button', { name: /Summarize Today's Work/ }));
 
     await waitFor(() => expect(api.summarizeWork).toHaveBeenCalledWith('team-a'));
     const textarea = await screen.findByDisplayValue('You did stuff today.');
@@ -151,7 +151,7 @@ describe('Pulse — Daily Work (Milestone 52)', () => {
     await waitFor(() => screen.getByRole('combobox'));
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'team-a' } });
     await waitFor(() => screen.getByText('Did stuff'));
-    fireEvent.click(screen.getByText('Get AI Summary'));
+    fireEvent.click(screen.getByRole('button', { name: /Summarize Today's Work/ }));
     await screen.findByDisplayValue('Draft summary.');
 
     fireEvent.click(screen.getByText("Submit Today's Work"));

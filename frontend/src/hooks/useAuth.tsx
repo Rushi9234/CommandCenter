@@ -25,6 +25,7 @@ interface AuthContextType {
   completeEmailVerification: (token: string) => Promise<void>;
   logout: () => void;
   isAuthenticated: boolean;
+  isInitializing: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -32,15 +33,25 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  // Milestone: `token` starts null on every fresh page load (including a
+  // browser refresh) and only picks up the real value once this effect
+  // reads localStorage. Routing decisions that ran on isAuthenticated
+  // during that one-render gap saw "logged out" even for an already
+  // logged-in user, which is what sent a refresh on e.g. /teams through
+  // ProtectedRoute -> /login -> (once the effect resolved) -> /pulse.
+  // isInitializing lets routing wait for the real value instead of
+  // reacting to this transient false.
+  const [isInitializing, setIsInitializing] = useState(true);
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
     const storedUser = localStorage.getItem('user');
-    
+
     if (storedToken && storedUser) {
       setToken(storedToken);
       setUser(JSON.parse(storedUser));
     }
+    setIsInitializing(false);
   }, []);
 
   // Milestone 55: the one place that actually establishes a session
@@ -101,7 +112,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, register, completeEmailVerification, logout, isAuthenticated: !!token }}>
+    <AuthContext.Provider value={{ user, token, login, register, completeEmailVerification, logout, isAuthenticated: !!token, isInitializing }}>
       {children}
     </AuthContext.Provider>
   );

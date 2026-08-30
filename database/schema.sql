@@ -160,7 +160,20 @@ CREATE TABLE goals (
     target_date TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    completed_at TIMESTAMP
+    completed_at TIMESTAMP,
+    -- Migration 1786700000000: review workflow for team goals -- a member
+    -- submits for review, a team owner/admin (leader) approves or returns
+    -- it. Always NULL for personal (teamless) goals, which skip this
+    -- workflow entirely.
+    submitted_for_review_by UUID REFERENCES users(user_id),
+    submitted_for_review_at TIMESTAMP,
+    approved_by UUID REFERENCES users(user_id),
+    approved_at TIMESTAMP,
+    -- Migration 1786800000000: what the submitter is actually requesting
+    -- ('completed' for a real completion request; any other status value
+    -- for "please sign off on this stage/progress, not finished yet").
+    -- approve() applies this verbatim instead of always completing.
+    requested_status VARCHAR(50)
 );
 
 -- Team invites table
@@ -257,8 +270,12 @@ CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens(token_hash);
 -- Added by backend/migrations/1786050608547_add-tasks-created-by-index.sql (Milestone 10)
 CREATE INDEX idx_tasks_created_by ON tasks(created_by);
 
--- Added by backend/migrations/1786134769436_add-daily-logs-unique-constraint.sql (Milestone 24)
--- Closes a race condition: logs.service.ts's createLog() only enforced
--- "one log per day" with a check-then-insert in application code, with a
--- slow AI call in between -- this is the actual enforcement.
-ALTER TABLE daily_logs ADD CONSTRAINT daily_logs_user_id_log_date_unique UNIQUE (user_id, log_date);
+-- Milestone 24's backend/migrations/1786134769436_add-daily-logs-unique-constraint.sql
+-- added a UNIQUE(user_id, log_date) constraint here, but it was later
+-- dropped by backend/migrations/1786600000000_allow-multiple-daily-logs.sql
+-- (multiple daily log entries per user are intentional -- log_id
+-- identifies each entry, log_date remains available for history/streaks/
+-- reporting). This snapshot previously still had the since-removed
+-- constraint, which made a CI database provisioned from this file (see
+-- .github/workflows/ci.yml) reject a second same-day log with a stale
+-- 409 that the real, migration-tracked database does not produce.

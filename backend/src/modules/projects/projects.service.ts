@@ -2,7 +2,7 @@ import { projectsRepository } from './projects.repository';
 import { tasksRepository } from './tasks.repository';
 import { usersRepository } from '../users/users.repository';
 import { analyzeProjectWithAI } from '../ai/ai.service';
-import { NotFoundError, BadRequestError } from '../../common/errors';
+import { NotFoundError, BadRequestError, ForbiddenError } from '../../common/errors';
 import { privacyService, AI_DISABLED_MESSAGE } from '../privacy/privacy.service';
 
 export class ProjectsService {
@@ -21,6 +21,18 @@ export class ProjectsService {
       }));
   }
 
+  // Privacy fix (Projects UX + reliability pass): a non-member used to get
+  // a "soft-denied" 200 response carrying project_name/status/priority/
+  // is_public for ANY project ID, private or not -- a real info leak, not
+  // just an incomplete payload, since it confirmed the project's existence
+  // and identity to a caller with no access to it. A PUBLIC project's
+  // summary fields are still returned here: GET /projects/public already
+  // exposes the exact same fields for every public project to any
+  // authenticated user by design (getAllPublicProjects below), so this
+  // isn't a new exposure, only privacy -- not discoverability -- is being
+  // closed. A genuinely private project now gets a hard 403, matching how
+  // canWriteProject/isProjectCreator are enforced everywhere else in this
+  // module, instead of a degraded-but-still-informative 200.
   async getProjectDetails(projectId: string, userId: string) {
     const project = await projectsRepository.getProject(projectId);
     if (!project) {
@@ -28,8 +40,11 @@ export class ProjectsService {
     }
 
     const canAccess = await projectsRepository.canAccessProject(userId, projectId);
+    if (canAccess) {
+      return { ...project, access_denied: false };
+    }
 
-    if (!canAccess) {
+    if (project.is_public) {
       return {
         project_id: project.project_id,
         project_name: project.project_name,
@@ -41,7 +56,7 @@ export class ProjectsService {
       };
     }
 
-    return { ...project, access_denied: false };
+    throw new ForbiddenError('Access denied to this project');
   }
 
   createProject(userId: string, body: any) {

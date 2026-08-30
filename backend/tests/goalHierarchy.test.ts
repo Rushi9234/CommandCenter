@@ -14,7 +14,7 @@ afterAll(async () => {
 });
 
 const createGoal = (token: string, teamId?: string) =>
-  request(app).post('/api/goals').set(authHeader(token)).send({ title: 'M30 Test Goal', teamId });
+  request(app).post('/api/goals').set(authHeader(token)).send({ title: 'M30 Test Goal', goalType: 'project', teamId });
 
 const updateGoal = (token: string, goalId: string, body: Record<string, any>) =>
   request(app).put(`/api/goals/${goalId}`).set(authHeader(token)).send(body);

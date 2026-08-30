@@ -2,6 +2,7 @@ import { teamsRepository } from './teams.repository';
 import { usersRepository } from '../users/users.repository';
 import { sendTeamInviteEmail } from '../../services/emailService';
 import { ForbiddenError, NotFoundError, BadRequestError, ConflictError } from '../../common/errors';
+import { createRealtimeEvent, realtimeProvider } from '../../realtime/inMemoryRealtimeProvider';
 
 // Milestone 47: max_team_size gained real enforcement this milestone --
 // see teams.repository.ts's TEAM_CAPACITY_GATE comment for why the
@@ -336,6 +337,7 @@ export class TeamsService {
     if (!joinRequest) {
       throw new ConflictError('A join request is already pending for this team');
     }
+    realtimeProvider.publish(createRealtimeEvent('join_request.created', { teamId }));
     return joinRequest;
   }
 
@@ -396,6 +398,10 @@ export class TeamsService {
     if (!approved) {
       throw new BadRequestError('This join request has already been processed');
     }
+    realtimeProvider.publish(createRealtimeEvent('join_request.approved', {
+      teamId: approved.team_id,
+      recipientUserId: approved.user_id,
+    }));
   }
 
   async rejectJoinRequest(requestId: string) {
@@ -403,6 +409,10 @@ export class TeamsService {
     if (!rejected) {
       throw new BadRequestError('This join request has already been processed');
     }
+    realtimeProvider.publish(createRealtimeEvent('join_request.rejected', {
+      teamId: rejected.team_id,
+      recipientUserId: rejected.user_id,
+    }));
   }
 
   // Milestone 40: same atomicity fix as removeMember above -- the leave

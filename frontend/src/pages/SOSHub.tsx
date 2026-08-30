@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../hooks/useAuth';
 import * as api from '../services/api';
@@ -14,6 +14,26 @@ export default function SOSHub() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [aiAdvice, setAiAdvice] = useState('');
   const [loading, setLoading] = useState(false);
+  // Cross-section audit fix: none of these existed before -- a fetch in
+  // flight (initial load or team/blocker switch) was visually
+  // indistinguishable from "genuinely nothing here," and a failed load was
+  // silently swallowed (console.error only) with no user-facing signal.
+  // Deliberately NOT set on background poll ticks (only on the
+  // force=true initial/switch/visibility-refresh loads) so the periodic
+  // 5s/3s polling this page already relies on doesn't flash a spinner
+  // every cycle.
+  const [teamsLoading, setTeamsLoading] = useState(true);
+  const [teamsError, setTeamsError] = useState('');
+  const [blockersLoading, setBlockersLoading] = useState(false);
+  const [blockersError, setBlockersError] = useState('');
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesError, setMessagesError] = useState('');
+  const blockersRequestVersion = useRef(0);
+  const messagesRequestVersion = useRef(0);
+  const blockersInFlight = useRef(false);
+  const messagesInFlight = useRef(false);
+  const selectedTeamRef = useRef<any>(null);
+  const selectedBlockerRef = useRef<any>(null);
 
   const [newBlocker, setNewBlocker] = useState({
     title: '',
@@ -22,27 +42,61 @@ export default function SOSHub() {
     severity: 'medium',
   });
 
+  selectedTeamRef.current = selectedTeam;
+  selectedBlockerRef.current = selectedBlocker;
+
   useEffect(() => {
     loadTeams();
   }, []);
 
   useEffect(() => {
     if (selectedTeam) {
-      loadBlockers();
-      const interval = setInterval(loadBlockers, 5000);
+      const requestVersion = ++blockersRequestVersion.current;
+      setBlockers([]);
+      loadBlockers(selectedTeam.team_id, requestVersion, true);
+      const interval = setInterval(() => {
+        loadBlockers(selectedTeam.team_id, requestVersion);
+      }, 5000);
       return () => clearInterval(interval);
     }
   }, [selectedTeam]);
 
   useEffect(() => {
     if (selectedBlocker) {
-      loadMessages();
-      const interval = setInterval(loadMessages, 3000);
+      const requestVersion = ++messagesRequestVersion.current;
+      setMessages([]);
+      setAiAdvice('');
+      loadMessages(selectedBlocker.blocker_id, requestVersion, true);
+      const interval = setInterval(() => {
+        loadMessages(selectedBlocker.blocker_id, requestVersion);
+      }, 3000);
       return () => clearInterval(interval);
     }
   }, [selectedBlocker]);
 
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+
+      const team = selectedTeamRef.current;
+      const blocker = selectedBlockerRef.current;
+      if (team) {
+        const requestVersion = ++blockersRequestVersion.current;
+        void loadBlockers(team.team_id, requestVersion, true);
+      }
+      if (blocker) {
+        const requestVersion = ++messagesRequestVersion.current;
+        void loadMessages(blocker.blocker_id, requestVersion, true);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
+
   const loadTeams = async () => {
+    setTeamsLoading(true);
+    setTeamsError('');
     try {
       const response = await api.getMyTeams();
       setTeams(response.data.data);
@@ -51,26 +105,81 @@ export default function SOSHub() {
       }
     } catch (error) {
       console.error('Failed to load teams:', error);
+      setTeamsError('Failed to load your teams. Please try again.');
+    } finally {
+      setTeamsLoading(false);
     }
   };
 
-  const loadBlockers = async () => {
-    if (!selectedTeam) return;
+  const loadBlockers = async (teamId: string, requestVersion: number, force = false) => {
+    if (!teamId || document.hidden || blockersInFlight.current && !force) return;
+    if (blockersInFlight.current) return;
+    blockersInFlight.current = true;
+    if (force) {
+      setBlockersLoading(true);
+      setBlockersError('');
+    }
     try {
-      const response = await api.getTeamBlockers(selectedTeam.team_id);
-      setBlockers(response.data.data);
+      const response = await api.getTeamBlockers(teamId);
+      if (
+        !document.hidden &&
+        selectedTeamRef.current?.team_id === teamId &&
+        blockersRequestVersion.current === requestVersion
+      ) {
+        setBlockers(response.data.data);
+      }
     } catch (error) {
       console.error('Failed to load blockers:', error);
+      if (force && selectedTeamRef.current?.team_id === teamId) {
+        setBlockersError('Failed to load blockers. Please try again.');
+      }
+    } finally {
+      blockersInFlight.current = false;
+      if (force) setBlockersLoading(false);
+      const currentTeam = selectedTeamRef.current;
+      if (
+        currentTeam &&
+        (currentTeam.team_id !== teamId || blockersRequestVersion.current !== requestVersion) &&
+        !document.hidden
+      ) {
+        void loadBlockers(currentTeam.team_id, blockersRequestVersion.current, true);
+      }
     }
   };
 
-  const loadMessages = async () => {
-    if (!selectedBlocker) return;
+  const loadMessages = async (blockerId: string, requestVersion: number, force = false) => {
+    if (!blockerId || document.hidden || messagesInFlight.current && !force) return;
+    if (messagesInFlight.current) return;
+    messagesInFlight.current = true;
+    if (force) {
+      setMessagesLoading(true);
+      setMessagesError('');
+    }
     try {
-      const response = await api.getMessages(selectedBlocker.blocker_id);
-      setMessages(response.data.data);
+      const response = await api.getMessages(blockerId);
+      if (
+        !document.hidden &&
+        selectedBlockerRef.current?.blocker_id === blockerId &&
+        messagesRequestVersion.current === requestVersion
+      ) {
+        setMessages(response.data.data);
+      }
     } catch (error) {
       console.error('Failed to load messages:', error);
+      if (force && selectedBlockerRef.current?.blocker_id === blockerId) {
+        setMessagesError('Failed to load messages. Please try again.');
+      }
+    } finally {
+      messagesInFlight.current = false;
+      if (force) setMessagesLoading(false);
+      const currentBlocker = selectedBlockerRef.current;
+      if (
+        currentBlocker &&
+        (currentBlocker.blocker_id !== blockerId || messagesRequestVersion.current !== requestVersion) &&
+        !document.hidden
+      ) {
+        void loadMessages(currentBlocker.blocker_id, messagesRequestVersion.current, true);
+      }
     }
   };
 
@@ -82,7 +191,7 @@ export default function SOSHub() {
       await api.createBlocker({ ...newBlocker, teamId: selectedTeam.team_id });
       setShowCreateModal(false);
       setNewBlocker({ title: '', description: '', blockerType: 'technical', severity: 'medium' });
-      loadBlockers();
+      loadBlockers(selectedTeam.team_id, blockersRequestVersion.current, true);
     } catch (error: any) {
       alert(error.response?.data?.error || 'Failed to create blocker');
     } finally {
@@ -96,7 +205,7 @@ export default function SOSHub() {
     try {
       await api.sendMessage(selectedBlocker.blocker_id, newMessage);
       setNewMessage('');
-      loadMessages();
+      loadMessages(selectedBlocker.blocker_id, messagesRequestVersion.current, true);
     } catch (error: any) {
       alert(error.response?.data?.error || 'Failed to send message');
     }
@@ -107,7 +216,7 @@ export default function SOSHub() {
     try {
       await api.updateBlocker(selectedBlocker.blocker_id, { status: 'resolved' });
       setSelectedBlocker(null);
-      loadBlockers();
+      loadBlockers(selectedTeam.team_id, blockersRequestVersion.current, true);
     } catch (error: any) {
       alert(error.response?.data?.error || 'Failed to resolve blocker');
     }
@@ -157,46 +266,82 @@ export default function SOSHub() {
           <div className="lg:col-span-1">
             <div className="pro-card p-4 mb-4">
               <h2 className="text-sm font-semibold text-gray-900 mb-3">Your Teams</h2>
-              <div className="space-y-2">
-                {teams.map((team) => (
-                  <button
-                    key={team.team_id}
-                    onClick={() => { setSelectedTeam(team); setSelectedBlocker(null); }}
-                    className={`w-full text-left p-3 rounded-lg transition-all ${
-                      selectedTeam?.team_id === team.team_id
-                        ? 'bg-blue-50 border-2 border-blue-500'
-                        : 'hover:bg-gray-50 border-2 border-transparent'
-                    }`}
-                  >
-                    <div className="font-medium text-gray-900">{team.team_name}</div>
-                  </button>
-                ))}
-              </div>
+              {teamsLoading ? (
+                <div role="status" className="text-center text-gray-500 py-4 text-sm">
+                  <div className="spinner w-5 h-5 mx-auto mb-2"></div>
+                  Loading teams...
+                </div>
+              ) : teamsError ? (
+                <div role="alert" className="text-center py-4">
+                  <p className="text-red-600 text-sm mb-2">{teamsError}</p>
+                  <button type="button" onClick={loadTeams} className="btn-secondary text-xs">Retry</button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {teams.map((team) => (
+                    <button
+                      key={team.team_id}
+                      onClick={() => { setSelectedTeam(team); setSelectedBlocker(null); }}
+                      className={`w-full text-left p-3 rounded-lg transition-all ${
+                        selectedTeam?.team_id === team.team_id
+                          ? 'bg-blue-50 border-2 border-blue-500'
+                          : 'hover:bg-gray-50 border-2 border-transparent'
+                      }`}
+                    >
+                      <div className="font-medium text-gray-900">{team.team_name}</div>
+                    </button>
+                  ))}
+                  {teams.length === 0 && (
+                    <p className="text-sm text-gray-500 text-center py-4">You're not on any teams yet.</p>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="pro-card p-4">
               <h2 className="text-sm font-semibold text-gray-900 mb-3">Active Blockers</h2>
-              <div className="space-y-2">
-                {blockers.filter(b => b.status !== 'resolved').map((blocker) => (
+              {blockersLoading ? (
+                <div role="status" className="text-center text-gray-500 py-4 text-sm">
+                  <div className="spinner w-5 h-5 mx-auto mb-2"></div>
+                  Loading blockers...
+                </div>
+              ) : blockersError ? (
+                <div role="alert" className="text-center py-4">
+                  <p className="text-red-600 text-sm mb-2">{blockersError}</p>
                   <button
-                    key={blocker.blocker_id}
-                    onClick={() => setSelectedBlocker(blocker)}
-                    className={`w-full text-left p-3 rounded-lg transition-all ${
-                      selectedBlocker?.blocker_id === blocker.blocker_id
-                        ? 'bg-blue-50 border-2 border-blue-500'
-                        : 'hover:bg-gray-50 border-2 border-transparent'
-                    }`}
+                    type="button"
+                    onClick={() => selectedTeam && loadBlockers(selectedTeam.team_id, blockersRequestVersion.current, true)}
+                    className="btn-secondary text-xs"
                   >
-                    <div className="font-medium text-gray-900 text-sm">{blocker.title}</div>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className={`badge badge-${getSeverityColor(blocker.severity)} text-xs`}>
-                        {blocker.severity}
-                      </span>
-                      <span className="text-xs text-gray-500">{blocker.message_count} msgs</span>
-                    </div>
+                    Retry
                   </button>
-                ))}
-              </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {blockers.filter(b => b.status !== 'resolved').map((blocker) => (
+                    <button
+                      key={blocker.blocker_id}
+                      onClick={() => setSelectedBlocker(blocker)}
+                      className={`w-full text-left p-3 rounded-lg transition-all ${
+                        selectedBlocker?.blocker_id === blocker.blocker_id
+                          ? 'bg-blue-50 border-2 border-blue-500'
+                          : 'hover:bg-gray-50 border-2 border-transparent'
+                      }`}
+                    >
+                      <div className="font-medium text-gray-900 text-sm">{blocker.title}</div>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className={`badge badge-${getSeverityColor(blocker.severity)} text-xs`}>
+                          {blocker.severity}
+                        </span>
+                        <span className="text-xs text-gray-500">{blocker.message_count} msgs</span>
+                      </div>
+                    </button>
+                  ))}
+                  {blockers.filter(b => b.status !== 'resolved').length === 0 && (
+                    <p className="text-sm text-gray-500 text-center py-4">No active blockers.</p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -248,28 +393,51 @@ export default function SOSHub() {
                 <div className="pro-card p-6">
                   <h3 className="text-lg font-semibold text-gray-900 mb-4">Discussion</h3>
                   <div className="space-y-3 mb-4 max-h-[400px] overflow-y-auto">
-                    {messages.map((msg) => (
-                      <div
-                        key={msg.message_id}
-                        className={`flex gap-3 ${msg.user_id === user?.user_id ? 'flex-row-reverse' : ''}`}
-                      >
-                        <div className="avatar w-8 h-8 text-xs flex-shrink-0">
-                          {msg.user?.full_name?.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)}
-                        </div>
-                        <div className={`flex-1 ${msg.user_id === user?.user_id ? 'text-right' : ''}`}>
-                          <div className="text-xs text-gray-600 mb-1">
-                            {msg.user?.full_name} • {new Date(msg.created_at).toLocaleTimeString()}
-                          </div>
-                          <div className={`inline-block p-3 rounded-lg ${
-                            msg.user_id === user?.user_id
-                              ? 'bg-blue-600 text-white'
-                              : 'bg-gray-100 text-gray-900'
-                          }`}>
-                            {msg.message_text}
-                          </div>
-                        </div>
+                    {messagesLoading ? (
+                      <div role="status" className="text-center text-gray-500 py-6 text-sm">
+                        <div className="spinner w-5 h-5 mx-auto mb-2"></div>
+                        Loading messages...
                       </div>
-                    ))}
+                    ) : messagesError ? (
+                      <div role="alert" className="text-center py-6">
+                        <p className="text-red-600 text-sm mb-2">{messagesError}</p>
+                        <button
+                          type="button"
+                          onClick={() => selectedBlocker && loadMessages(selectedBlocker.blocker_id, messagesRequestVersion.current, true)}
+                          className="btn-secondary text-xs"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        {messages.map((msg) => (
+                          <div
+                            key={msg.message_id}
+                            className={`flex gap-3 ${msg.user_id === user?.user_id ? 'flex-row-reverse' : ''}`}
+                          >
+                            <div className="avatar w-8 h-8 text-xs flex-shrink-0">
+                              {msg.user?.full_name?.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)}
+                            </div>
+                            <div className={`flex-1 ${msg.user_id === user?.user_id ? 'text-right' : ''}`}>
+                              <div className="text-xs text-gray-600 mb-1">
+                                {msg.user?.full_name} • {new Date(msg.created_at).toLocaleTimeString()}
+                              </div>
+                              <div className={`inline-block p-3 rounded-lg ${
+                                msg.user_id === user?.user_id
+                                  ? 'bg-blue-600 text-white'
+                                  : 'bg-gray-100 text-gray-900'
+                              }`}>
+                                {msg.message_text}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                        {messages.length === 0 && (
+                          <p className="text-sm text-gray-500 text-center py-6">No messages yet. Start the discussion below.</p>
+                        )}
+                      </>
+                    )}
                   </div>
 
                   <form onSubmit={handleSendMessage} className="flex gap-2">

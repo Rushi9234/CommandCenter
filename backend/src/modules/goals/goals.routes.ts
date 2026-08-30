@@ -6,7 +6,7 @@ import { requireAccess } from '../../common/middleware/requireAccess';
 import { requireTeamRoleIfSpecified, teamIdFromBody, teamIdFromQuery } from '../../common/middleware/requireTeamRole';
 import { goalsRepository } from './goals.repository';
 import * as goalsController from './goals.controller';
-import { createGoalSchema, updateGoalSchema } from './goals.dto';
+import { createGoalSchema, updateGoalSchema, returnGoalSchema, submitReviewSchema } from './goals.dto';
 
 // Milestone 5 review: viewer is documented as read-only -- READ_ROLES
 // covers list/hierarchy GETs, WRITE_ROLES gates creation (canWriteGoal
@@ -58,6 +58,32 @@ router.delete(
   validateUuidParams('goalId'),
   requireAccess((req) => goalsRepository.canWriteGoal(req.user!.userId, req.params.goalId), 'Access denied to this goal'),
   asyncHandler(goalsController.deleteGoal)
+);
+
+// Review workflow -- any writer can submit; only a team leader (owner or
+// admin of the goal's OWN team, per isTeamLeader) can approve or return.
+router.post(
+  '/goals/:goalId/submit-review',
+  authenticate,
+  validateUuidParams('goalId'),
+  requireAccess((req) => goalsRepository.canWriteGoal(req.user!.userId, req.params.goalId), 'Access denied to this goal'),
+  validate(submitReviewSchema),
+  asyncHandler(goalsController.submitGoalForReview)
+);
+router.post(
+  '/goals/:goalId/approve',
+  authenticate,
+  validateUuidParams('goalId'),
+  requireAccess((req) => goalsRepository.isTeamLeader(req.user!.userId, req.params.goalId), 'Only a team owner or admin can approve goal completion'),
+  asyncHandler(goalsController.approveGoal)
+);
+router.post(
+  '/goals/:goalId/return',
+  authenticate,
+  validateUuidParams('goalId'),
+  requireAccess((req) => goalsRepository.isTeamLeader(req.user!.userId, req.params.goalId), 'Only a team owner or admin can return a goal for changes'),
+  validate(returnGoalSchema),
+  asyncHandler(goalsController.returnGoal)
 );
 
 export default router;

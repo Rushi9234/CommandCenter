@@ -173,19 +173,19 @@ describe('Milestone 46 -- goal hierarchy tree-building regression (O(n) rewrite)
     const owner = await registerAndLogin('m46_tree_owner');
     const teamId = await createTeam(owner.token, `M46_Tree_${Date.now()}`);
 
-    const root = (await request(app).post('/api/goals').set(authHeader(owner.token)).send({ title: 'Root', teamId }).expect(201)).body
+    const root = (await request(app).post('/api/goals').set(authHeader(owner.token)).send({ title: 'Root', goalType: 'project', teamId }).expect(201)).body
       .data;
     const child = (
       await request(app)
         .post('/api/goals')
         .set(authHeader(owner.token))
-        .send({ title: 'Child', teamId, parentGoalId: root.goal_id })
+        .send({ title: 'Child', goalType: 'project', teamId, parentGoalId: root.goal_id })
         .expect(201)
     ).body.data;
     await request(app)
       .post('/api/goals')
       .set(authHeader(owner.token))
-      .send({ title: 'Grandchild', teamId, parentGoalId: child.goal_id })
+      .send({ title: 'Grandchild', goalType: 'project', teamId, parentGoalId: child.goal_id })
       .expect(201);
 
     const res = await request(app).get(`/api/goals/hierarchy?teamId=${teamId}`).set(authHeader(owner.token)).expect(200);

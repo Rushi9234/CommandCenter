@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import * as api from '../services/api';
 import { useAuth } from '../hooks/useAuth';
+import { useRealtime } from '../hooks/useRealtime';
+import { RealtimeEvent } from '../services/realtime';
 
 export default function Teams() {
   const { user } = useAuth();
@@ -15,8 +17,28 @@ export default function Teams() {
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [showDiscoverModal, setShowDiscoverModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  // Settings-save server-truth sync: the modal used to bind its inputs
+  // directly to `selectedTeam` (onChange mutated it in place), so every
+  // keystroke immediately updated the shared detail-pane state -- a
+  // failed save left that unsaved edit stuck there permanently, and even
+  // a successful save was never actually confirmed against the server
+  // response. A separate draft decouples "what the user is typing" from
+  // "what's confirmed displayed"; only a successful save (via its
+  // response, see handleUpdateSettings) is allowed to update
+  // selectedTeam/teams.
+  const [settingsDraft, setSettingsDraft] = useState<{ team_name: string; description: string; is_public: boolean } | null>(null);
   const [showJoinByIdModal, setShowJoinByIdModal] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [teamDetailsLoading, setTeamDetailsLoading] = useState(false);
+  // The CALLER's own role in the currently selected team -- drives which
+  // management controls are shown (Settings/Invite/role changes/member
+  // removal/join-request review). Sourced from the members list response
+  // we already fetch, never guessed or assumed.
+  const [myRole, setMyRole] = useState<string | null>(null);
+  const [parentTeam, setParentTeam] = useState<any>(null);
+  const [allTeamsLoading, setAllTeamsLoading] = useState(true);
+  const [discoverError, setDiscoverError] = useState('');
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
@@ -69,11 +91,29 @@ export default function Teams() {
 
   const [myJoinRequests, setMyJoinRequests] = useState<any[]>([]);
 
+  // Stale-response race fix (sync/loading audit): selectTeam is a
+  // multi-stage async flow (members -> join-requests -> parent -> sub-teams
+  // + submissions -> dashboard). Without this, a slower response for a
+  // team the user has already switched away from could apply its data
+  // after a faster response for the newly-selected team, showing the
+  // wrong team's members/requests/etc. Every selectTeam() call bumps this
+  // version; each stage checks it's still current before applying a
+  // response, same pattern already proven in SOSHub.tsx's
+  // blockersRequestVersion/messagesRequestVersion.
+  const selectTeamRequestVersion = useRef(0);
+
   useEffect(() => {
-    loadTeams();
-    loadInvites();
-    loadAllTeams();
-    loadMyJoinRequests();
+    // Step 7: getAllTeams' result only feeds the Discover Teams modal, not
+    // the main page -- it doesn't belong in the batch that gates
+    // initialLoading. A slow/stuck Discover fetch used to block the
+    // user's own team list from ever rendering, even though that data
+    // (loadTeams) might already be back. It still loads on mount (so the
+    // modal has data ready if opened immediately), just independently.
+    void loadAllTeams();
+    (async () => {
+      await Promise.allSettled([loadTeams(), loadInvites(), loadMyJoinRequests()]);
+      setInitialLoading(false);
+    })();
   }, []);
 
   const loadMyJoinRequests = async () => {
@@ -84,6 +124,18 @@ export default function Teams() {
       console.error('Failed to load my join requests:', error);
     }
   };
+
+  useRealtime((event: RealtimeEvent) => {
+    if (!event.type.startsWith('join_request.')) return;
+
+    void loadMyJoinRequests();
+    if (event.type === 'join_request.approved') {
+      void loadTeams();
+    }
+    if (selectedTeam && event.teamId === selectedTeam.team_id) {
+      void selectTeam(selectedTeam);
+    }
+  });
 
   const loadTeams = async () => {
     try {
@@ -98,11 +150,16 @@ export default function Teams() {
   };
 
   const loadAllTeams = async () => {
+    setAllTeamsLoading(true);
+    setDiscoverError('');
     try {
       const response = await api.getAllTeams();
       setAllTeams(response.data.data);
     } catch (error) {
       console.error('Failed to load all teams:', error);
+      setDiscoverError('Failed to load teams. Please try again.');
+    } finally {
+      setAllTeamsLoading(false);
     }
   };
 
@@ -116,38 +173,95 @@ export default function Teams() {
   };
 
   const selectTeam = async (team: any) => {
+    // Every call gets its own version; a stage only applies its response
+    // if this is still the most recent selectTeam() invocation by the
+    // time that response arrives. isCurrent() is checked freshly at each
+    // stage (not just once) since a newer selectTeam() call can start at
+    // any point while this one is still awaiting a later stage.
+    const requestVersion = ++selectTeamRequestVersion.current;
+    const isCurrent = () => selectTeamRequestVersion.current === requestVersion;
+
     setSelectedTeam(team);
+    // Milestone: previously only subTeams/workSubmissions/contextDashboard
+    // were cleared here -- teamMembers/joinRequests were left as-is, so
+    // switching teams showed the PREVIOUS team's member list and pending
+    // requests under the new team's header until the new fetch resolved.
+    setTeamMembers([]);
+    setJoinRequests([]);
     setSubTeams([]);
     setWorkSubmissions([]);
     setContextDashboard(null);
+    setParentTeam(null);
+    setTeamDetailsLoading(true);
     let myMembership: any = null;
     try {
-      const [membersRes, requestsRes] = await Promise.all([
-        api.getTeamMembers(team.team_id),
-        api.getJoinRequests(team.team_id),
-      ]);
+      // Milestone: getJoinRequests is owner/admin-only on the backend
+      // (requireTeamRole) -- calling it for a plain member/viewer always
+      // 403s. That's harmless today only because the catch below swallows
+      // it silently, but it's a wasted round trip and a logged error on
+      // every single team switch for most users. Only fetch it once we
+      // know (from the members list we already have to fetch anyway)
+      // that the caller is actually authorized to see it.
+      const membersRes = await api.getTeamMembers(team.team_id);
+      if (!isCurrent()) return;
       setTeamMembers(membersRes.data.data);
-      setJoinRequests(requestsRes.data.data);
       myMembership = membersRes.data.data.find((m: any) => m.user_id === user?.user_id);
+      setMyRole(myMembership?.role || null);
+
+      if (myMembership && (myMembership.role === 'owner' || myMembership.role === 'admin')) {
+        try {
+          const requestsRes = await api.getJoinRequests(team.team_id);
+          if (!isCurrent()) return;
+          setJoinRequests(requestsRes.data.data);
+        } catch (error) {
+          console.error('Failed to load join requests:', error);
+        }
+      }
     } catch (error) {
       console.error('Failed to load team data:', error);
+    } finally {
+      if (isCurrent()) setTeamDetailsLoading(false);
     }
+
+    if (!isCurrent()) return;
+
+    // Hierarchy: resolve the parent team's name via the same
+    // membership-free preview endpoint already used for "Join with Team
+    // ID" -- no new backend surface, and it's exactly the safe-fields
+    // shape needed here (team_name/team_type, nothing sensitive).
+    if (team.parent_team_id) {
+      try {
+        const parentRes = await api.getTeamPreview(team.parent_team_id);
+        if (isCurrent()) setParentTeam(parentRes.data.data);
+      } catch (error) {
+        console.error('Failed to load parent team:', error);
+      }
+    }
+
+    if (!isCurrent()) return;
 
     // Milestone 50: best-effort, additive context data -- a failure here
     // (e.g. a normal team with no sub-teams, or nobody has submitted
     // today) must never break the rest of the team view, so each is
     // caught independently rather than sharing the Promise.all above.
-    try {
-      const subTeamsRes = await api.getSubTeams(team.team_id);
-      setSubTeams(subTeamsRes.data.data);
-    } catch (error) {
-      console.error('Failed to load sub-teams:', error);
+    // Milestone: these two are independent of each other, so run them in
+    // parallel via allSettled instead of sequential awaits -- same
+    // per-call error handling as before, just no longer waiting for one
+    // to finish before starting the other.
+    const [subTeamsResult, submissionsResult] = await Promise.allSettled([
+      api.getSubTeams(team.team_id),
+      api.getTeamWorkSubmissions(team.team_id),
+    ]);
+    if (!isCurrent()) return;
+    if (subTeamsResult.status === 'fulfilled') {
+      setSubTeams(subTeamsResult.value.data.data);
+    } else {
+      console.error('Failed to load sub-teams:', subTeamsResult.reason);
     }
-    try {
-      const submissionsRes = await api.getTeamWorkSubmissions(team.team_id);
-      setWorkSubmissions(submissionsRes.data.data);
-    } catch (error) {
-      console.error('Failed to load work submissions:', error);
+    if (submissionsResult.status === 'fulfilled') {
+      setWorkSubmissions(submissionsResult.value.data.data);
+    } else {
+      console.error('Failed to load work submissions:', submissionsResult.reason);
     }
 
     // Milestone 51: only attempt the coordinator dashboard when the
@@ -156,14 +270,15 @@ export default function Teams() {
     // route), this check just avoids firing a request that would only
     // ever come back 403 for a plain member/viewer.
     if (myMembership && (myMembership.role === 'owner' || myMembership.role === 'admin')) {
+      if (!isCurrent()) return;
       setDashboardLoading(true);
       try {
         const dashboardRes = await api.getContextDashboard(team.team_id);
-        setContextDashboard(dashboardRes.data.data);
+        if (isCurrent()) setContextDashboard(dashboardRes.data.data);
       } catch (error) {
         console.error('Failed to load context dashboard:', error);
       } finally {
-        setDashboardLoading(false);
+        if (isCurrent()) setDashboardLoading(false);
       }
     }
   };
@@ -276,24 +391,90 @@ export default function Teams() {
       return;
     }
     setSearchLoading(true);
+    setDiscoverError('');
     try {
       const response = await api.searchTeams(searchQuery);
       setSearchResults(response.data.data);
     } catch (error) {
       console.error('Search failed:', error);
-      alert('Failed to search teams. Please try again.');
+      setDiscoverError('Failed to search teams. Please try again.');
     } finally {
       setSearchLoading(false);
+    }
+  };
+
+  // Mutation refetch scoping: removeMember/updateMemberRole/approve-
+  // reject-JoinRequest all used to call the FULL selectTeam() cascade
+  // (members + join-requests + parent-preview + sub-teams + submissions +
+  // dashboard) even though each of these mutations only ever changes
+  // team_members and/or join_requests rows on THIS team -- confirmed by
+  // reading teams.controller.ts, where all four endpoints return
+  // `ok(res, undefined, ...)` (no body to patch from, so a scoped refetch
+  // is required rather than a local patch). Sub-teams/work-submissions/
+  // coordinator-dashboard/parent-team-preview are never affected by any
+  // of these four mutations, so refetching them was always wasted work.
+  // Reuses selectTeamRequestVersion (the same ref selectTeam() itself
+  // uses) rather than a second, competing race-protection mechanism --
+  // bumping it here correctly invalidates any older in-flight selectTeam
+  // cascade or scoped refetch for this team, and is itself invalidated if
+  // the user switches teams (or another mutation fires) before this
+  // resolves.
+  const refetchTeamMembers = async (teamId: string) => {
+    const requestVersion = ++selectTeamRequestVersion.current;
+    try {
+      const membersRes = await api.getTeamMembers(teamId);
+      if (selectTeamRequestVersion.current !== requestVersion) return;
+      setTeamMembers(membersRes.data.data);
+      const myMembership = membersRes.data.data.find((m: any) => m.user_id === user?.user_id);
+      setMyRole(myMembership?.role || null);
+    } catch (error) {
+      console.error('Failed to refresh team members:', error);
+    }
+  };
+
+  const refetchJoinRequests = async (teamId: string) => {
+    const requestVersion = ++selectTeamRequestVersion.current;
+    try {
+      const requestsRes = await api.getJoinRequests(teamId);
+      if (selectTeamRequestVersion.current !== requestVersion) return;
+      setJoinRequests(requestsRes.data.data);
+    } catch (error) {
+      console.error('Failed to refresh join requests:', error);
+    }
+  };
+
+  // Approving a join request both adds a member AND clears that request
+  // from the pending list -- both genuinely change, so both are
+  // refetched, in parallel, under a single shared version so one doesn't
+  // invalidate the other.
+  const refetchTeamMembersAndJoinRequests = async (teamId: string) => {
+    const requestVersion = ++selectTeamRequestVersion.current;
+    const [membersResult, requestsResult] = await Promise.allSettled([
+      api.getTeamMembers(teamId),
+      api.getJoinRequests(teamId),
+    ]);
+    if (selectTeamRequestVersion.current !== requestVersion) return;
+    if (membersResult.status === 'fulfilled') {
+      setTeamMembers(membersResult.value.data.data);
+      const myMembership = membersResult.value.data.data.find((m: any) => m.user_id === user?.user_id);
+      setMyRole(myMembership?.role || null);
+    } else {
+      console.error('Failed to refresh team members:', membersResult.reason);
+    }
+    if (requestsResult.status === 'fulfilled') {
+      setJoinRequests(requestsResult.value.data.data);
+    } else {
+      console.error('Failed to refresh join requests:', requestsResult.reason);
     }
   };
 
   const handleRemoveMember = async (userId: string) => {
     if (!selectedTeam) return;
     if (!confirm('Are you sure you want to remove this member?')) return;
-    
+
     try {
       await api.removeTeamMember(selectedTeam.team_id, userId);
-      selectTeam(selectedTeam);
+      await refetchTeamMembers(selectedTeam.team_id);
     } catch (error: any) {
       alert(error.response?.data?.error || 'Failed to remove member');
     }
@@ -303,7 +484,7 @@ export default function Teams() {
     if (!selectedTeam) return;
     try {
       await api.updateMemberRole(selectedTeam.team_id, userId, newRole);
-      selectTeam(selectedTeam);
+      await refetchTeamMembers(selectedTeam.team_id);
     } catch (error: any) {
       alert(error.response?.data?.error || 'Failed to update role');
     }
@@ -322,7 +503,7 @@ export default function Teams() {
   const handleApproveJoinRequest = async (requestId: string) => {
     try {
       await api.approveJoinRequest(requestId);
-      if (selectedTeam) selectTeam(selectedTeam);
+      if (selectedTeam) await refetchTeamMembersAndJoinRequests(selectedTeam.team_id);
     } catch (error: any) {
       alert(error.response?.data?.error || 'Failed to approve request');
     }
@@ -331,7 +512,7 @@ export default function Teams() {
   const handleRejectJoinRequest = async (requestId: string) => {
     try {
       await api.rejectJoinRequest(requestId);
-      if (selectedTeam) selectTeam(selectedTeam);
+      if (selectedTeam) await refetchJoinRequests(selectedTeam.team_id);
     } catch (error: any) {
       alert(error.response?.data?.error || 'Failed to reject request');
     }
@@ -350,16 +531,42 @@ export default function Teams() {
 
   const handleUpdateSettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedTeam) return;
+    if (!selectedTeam || !settingsDraft) return;
     setLoading(true);
+    // Server-truth sync: updateTeamSettings' controller returns the full
+    // updated team row (RETURNING * in the repository), and every field
+    // the detail pane and sidebar actually render (team_name,
+    // description, is_public, parent_team_id, team_type, created_at,
+    // team_id) is a plain `teams` column present in that response -- so
+    // the mutation response alone is sufficient server truth. No refetch
+    // (scoped or full) is needed; this also replaces the previous
+    // loadTeams() call, which re-fetched the whole team list but never
+    // re-synced the selected-team detail pane at all (the actual bug --
+    // the pane kept showing whatever the form's local edits happened to
+    // be, not a confirmed server round-trip).
+    //
+    // Reuses selectTeamRequestVersion (the same ref selectTeam() and the
+    // scoped mutation refetches use) so a team switch that happens while
+    // this save is still in flight correctly makes this response stale --
+    // it must not overwrite whatever team the user has since switched to.
+    const requestVersion = ++selectTeamRequestVersion.current;
+    const savedTeamId = selectedTeam.team_id;
     try {
-      await api.updateTeamSettings(selectedTeam.team_id, {
-        team_name: selectedTeam.team_name,
-        description: selectedTeam.description,
-        is_public: selectedTeam.is_public,
+      const response = await api.updateTeamSettings(savedTeamId, {
+        team_name: settingsDraft.team_name,
+        description: settingsDraft.description,
+        is_public: settingsDraft.is_public,
       });
+      const updatedTeam = response.data.data;
       setShowSettingsModal(false);
-      loadTeams();
+      setSettingsDraft(null);
+      // The sidebar list isn't scoped to "which team is currently
+      // selected" -- patching this specific team's entry is correct
+      // regardless of whether the user has since switched away.
+      setTeams((prev) => prev.map((t) => (t.team_id === updatedTeam.team_id ? updatedTeam : t)));
+      if (selectTeamRequestVersion.current === requestVersion) {
+        setSelectedTeam(updatedTeam);
+      }
     } catch (error: any) {
       alert(error.response?.data?.error || 'Failed to update settings');
     } finally {
@@ -470,6 +677,12 @@ export default function Teams() {
       )}
 
       <div className="max-w-7xl mx-auto px-6 py-8">
+        {initialLoading ? (
+          <div role="status" className="pro-card p-12 text-center text-gray-500">
+            <div className="spinner w-6 h-6 mx-auto mb-3"></div>
+            Loading teams...
+          </div>
+        ) : (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* Teams List */}
           <div className="lg:col-span-1">
@@ -540,6 +753,15 @@ export default function Teams() {
                         )}
                       </div>
                       <p className="text-gray-600 mt-2">{selectedTeam.description || 'No description provided'}</p>
+                      {/* Hierarchy (Step 4): derived only from parent_team_id,
+                          which the backend actually returns -- never
+                          fabricated. parentTeam is resolved via the
+                          membership-free preview endpoint in selectTeam. */}
+                      <p className="text-sm text-gray-500 mt-1">
+                        {selectedTeam.parent_team_id
+                          ? `Sub-team of ${parentTeam ? parentTeam.team_name : '…'}`
+                          : 'Independent Team'}
+                      </p>
                       <div className="flex items-center gap-2 mt-1">
                         <span className="text-xs text-gray-400">Team ID:</span>
                         <code className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">{selectedTeam.team_id}</code>
@@ -555,15 +777,38 @@ export default function Teams() {
                       </div>
                     </div>
                     <div className="flex gap-2">
-                      <button onClick={() => setShowSettingsModal(true)} className="btn-secondary">
-                        ⚙️ Settings
-                      </button>
-                      <button onClick={() => setShowInviteModal(true)} className="btn-primary">
-                        📧 Invite
-                      </button>
-                      <button onClick={handleLeaveTeam} className="btn-secondary text-red-600">
-                        🚪 Leave
-                      </button>
+                      {/* Step 2: Settings/Invite are owner/admin-only on the
+                          backend (requireTeamRole) -- a plain member could
+                          never use these, so don't show them. */}
+                      {(myRole === 'owner' || myRole === 'admin') && (
+                        <button
+                          onClick={() => {
+                            setSettingsDraft({
+                              team_name: selectedTeam.team_name,
+                              description: selectedTeam.description || '',
+                              is_public: selectedTeam.is_public,
+                            });
+                            setShowSettingsModal(true);
+                          }}
+                          className="btn-secondary"
+                        >
+                          ⚙️ Settings
+                        </button>
+                      )}
+                      {(myRole === 'owner' || myRole === 'admin') && (
+                        <button onClick={() => setShowInviteModal(true)} className="btn-primary">
+                          📧 Invite
+                        </button>
+                      )}
+                      {/* leaveTeam rejects the owner (ForbiddenError) -- the
+                          owner has no way to leave their own team, only to
+                          transfer/delete it (not yet built), so don't show
+                          an action that would always fail. */}
+                      {myRole !== 'owner' && (
+                        <button onClick={handleLeaveTeam} className="btn-secondary text-red-600">
+                          🚪 Leave
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -691,9 +936,9 @@ export default function Teams() {
                         <span
                           key={member.user_id}
                           className={`badge ${submitted ? 'badge-green' : 'badge-gray'}`}
-                          title={member.user?.full_name}
+                          title={member.full_name}
                         >
-                          {submitted ? '✅' : '⚪'} {member.user?.full_name}
+                          {submitted ? '✅' : '⚪'} {member.full_name}
                         </span>
                       );
                     })}
@@ -704,8 +949,20 @@ export default function Teams() {
                 <div className="pro-card p-6">
                   <h3 className="text-lg font-semibold text-gray-900 mb-4">Team Members</h3>
 
-                  {/* Join Requests */}
-                  {joinRequests.length > 0 && (
+                  {teamDetailsLoading && (
+                    <div role="status" className="text-center text-gray-500 py-8">
+                      <div className="spinner w-5 h-5 mx-auto mb-2"></div>
+                      Loading members...
+                    </div>
+                  )}
+
+                  {/* Join Requests -- also gated on myRole even though
+                      joinRequests is already only ever populated for an
+                      owner/admin caller (selectTeam only fetches it then);
+                      this is defense in depth, not the actual privacy
+                      boundary, which is the backend's requireTeamRole on
+                      GET /teams/:teamId/join-requests. */}
+                  {!teamDetailsLoading && (myRole === 'owner' || myRole === 'admin') && joinRequests.length > 0 && (
                     <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
                       <div className="font-medium text-yellow-900 mb-3">📋 Pending Join Requests ({joinRequests.length})</div>
                       <div className="space-y-2">
@@ -742,7 +999,7 @@ export default function Teams() {
 
                   <div className="space-y-3">
                     <AnimatePresence>
-                      {teamMembers.map((member, index) => (
+                      {!teamDetailsLoading && teamMembers.map((member, index) => (
                         <motion.div
                           key={member.user_id}
                           initial={{ opacity: 0, y: 10 }}
@@ -752,38 +1009,58 @@ export default function Teams() {
                         >
                           <div className="flex items-center gap-3">
                             <div className="avatar w-10 h-10 text-sm">
-                              {getInitials(member.user?.full_name || 'U')}
+                              {getInitials(member.full_name || 'U')}
                             </div>
                             <div>
-                              <div className="font-medium text-gray-900">{member.user?.full_name}</div>
-                              <div className="text-sm text-gray-500">@{member.user?.username}</div>
+                              <div className="font-medium text-gray-900">{member.full_name}</div>
+                              <div className="text-sm text-gray-500">@{member.username}</div>
                             </div>
-                            {member.role === 'owner' && (
-                              <span className="badge badge-yellow">👑 Owner</span>
-                            )}
+                            {/* Step 3: a role badge on every card, not just
+                                owner -- backend role enum is owner/admin/
+                                manager/member/viewer, so this shows
+                                whatever the backend actually says rather
+                                than assuming only two tiers exist. */}
+                            <span className={`badge ${member.role === 'owner' ? 'badge-yellow' : 'badge-gray'}`}>
+                              {member.role === 'owner' && '👑 '}
+                              {member.role.charAt(0).toUpperCase() + member.role.slice(1)}
+                            </span>
                           </div>
 
-                          <div className="flex items-center gap-3">
-                            <select
-                              value={member.role}
-                              onChange={(e) => handleUpdateRole(member.user_id, e.target.value)}
-                              disabled={member.role === 'owner'}
-                              className="input-field text-sm py-1.5"
-                            >
-                              <option value="owner" disabled>Owner</option>
-                              <option value="admin">Admin</option>
-                              <option value="member">Member</option>
-                            </select>
+                          {/* Step 2: same hierarchy rule the backend
+                              enforces (removeTeamMemberIfAuthorized /
+                              updateMemberRoleIfAuthorized) -- the owner is
+                              never manageable by anyone, and an admin
+                              cannot manage another admin (or the owner) --
+                              only the owner can. A plain member/manager/
+                              viewer sees no controls here at all. */}
+                          {(() => {
+                            const canManage =
+                              (myRole === 'owner' || myRole === 'admin') &&
+                              member.role !== 'owner' &&
+                              (member.role !== 'admin' || myRole === 'owner');
+                            if (!canManage) return null;
+                            return (
+                              <div className="flex items-center gap-3">
+                                <select
+                                  value={member.role}
+                                  onChange={(e) => handleUpdateRole(member.user_id, e.target.value)}
+                                  className="input-field text-sm py-1.5"
+                                >
+                                  <option value="admin">Admin</option>
+                                  <option value="manager">Manager</option>
+                                  <option value="member">Member</option>
+                                  <option value="viewer">Viewer</option>
+                                </select>
 
-                            {member.role !== 'owner' && (
-                              <button
-                                onClick={() => handleRemoveMember(member.user_id)}
-                                className="text-red-600 hover:text-red-700 text-sm font-medium"
-                              >
-                                Remove
-                              </button>
-                            )}
-                          </div>
+                                <button
+                                  onClick={() => handleRemoveMember(member.user_id)}
+                                  className="text-red-600 hover:text-red-700 text-sm font-medium"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            );
+                          })()}
                         </motion.div>
                       ))}
                     </AnimatePresence>
@@ -806,6 +1083,7 @@ export default function Teams() {
             )}
           </div>
         </div>
+        )}
       </div>
 
       {/* Create Team Modal */}
@@ -1017,10 +1295,26 @@ export default function Teams() {
               </div>
 
               <div className="space-y-3">
-                {searchLoading ? (
-                  <div className="text-center py-8">
+                {/* Step 5: LOADING / ERROR / EMPTY / RESULTS as four
+                    distinct states -- searchLoading covers an active
+                    search, allTeamsLoading covers the initial (or a
+                    retried) unfiltered load, so "No teams available"
+                    can never render while either is still in flight. */}
+                {(searchQuery ? searchLoading : allTeamsLoading) ? (
+                  <div role="status" className="text-center py-8">
                     <div className="spinner w-6 h-6 mx-auto mb-2"></div>
-                    <p className="text-gray-500">Searching teams...</p>
+                    <p className="text-gray-500">{searchQuery ? 'Searching teams...' : 'Loading teams...'}</p>
+                  </div>
+                ) : discoverError ? (
+                  <div role="alert" className="text-center py-8">
+                    <p className="text-red-600 mb-3">{discoverError}</p>
+                    <button
+                      type="button"
+                      onClick={searchQuery ? handleSearch : loadAllTeams}
+                      className="btn-secondary"
+                    >
+                      Retry
+                    </button>
                   </div>
                 ) : (searchQuery ? searchResults : allTeams).length === 0 ? (
                   <p className="text-center text-gray-500 py-8">
@@ -1036,8 +1330,23 @@ export default function Teams() {
                     >
                       <div className="flex items-start justify-between">
                         <div className="flex-1">
-                          <h3 className="font-semibold text-gray-900">{team.team_name}</h3>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className="font-semibold text-gray-900">{team.team_name}</h3>
+                            {team.team_type && team.team_type !== 'main' && (
+                              <span className="badge badge-blue text-xs">
+                                {contextTypeEmoji(team.team_type)} {contextTypeLabel(team.team_type)}
+                              </span>
+                            )}
+                          </div>
                           <p className="text-sm text-gray-600 mt-1">{team.description || 'No description'}</p>
+                          {/* Hierarchy: only shown when the backend actually
+                              gave us a parent_team_id -- we don't resolve
+                              the parent's name here (that would mean one
+                              extra request per discover-result row), just
+                              surface that it's a sub-team. */}
+                          <p className="text-xs text-gray-400 mt-1">
+                            {team.parent_team_id ? 'Sub-team' : 'Independent Team'}
+                          </p>
                           <div className="flex items-center gap-3 mt-2">
                             {team.owner && (
                               <span className="text-xs text-gray-500">
@@ -1151,7 +1460,7 @@ export default function Teams() {
 
       {/* Team Settings Modal */}
       <AnimatePresence>
-        {showSettingsModal && selectedTeam && (
+        {showSettingsModal && selectedTeam && settingsDraft && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
@@ -1168,8 +1477,8 @@ export default function Teams() {
                   </label>
                   <input
                     type="text"
-                    value={selectedTeam.team_name}
-                    onChange={(e) => setSelectedTeam({ ...selectedTeam, team_name: e.target.value })}
+                    value={settingsDraft.team_name}
+                    onChange={(e) => setSettingsDraft({ ...settingsDraft, team_name: e.target.value })}
                     className="input-field"
                     required
                   />
@@ -1180,8 +1489,8 @@ export default function Teams() {
                     Description
                   </label>
                   <textarea
-                    value={selectedTeam.description}
-                    onChange={(e) => setSelectedTeam({ ...selectedTeam, description: e.target.value })}
+                    value={settingsDraft.description}
+                    onChange={(e) => setSettingsDraft({ ...settingsDraft, description: e.target.value })}
                     className="input-field resize-none"
                     rows={3}
                   />
@@ -1191,8 +1500,8 @@ export default function Teams() {
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
                       type="checkbox"
-                      checked={selectedTeam.is_public}
-                      onChange={(e) => setSelectedTeam({ ...selectedTeam, is_public: e.target.checked })}
+                      checked={settingsDraft.is_public}
+                      onChange={(e) => setSettingsDraft({ ...settingsDraft, is_public: e.target.checked })}
                       className="w-4 h-4 text-blue-600"
                     />
                     <span className="text-sm font-medium text-gray-700">Public team (discoverable)</span>
@@ -1208,7 +1517,7 @@ export default function Teams() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setShowSettingsModal(false)}
+                    onClick={() => { setShowSettingsModal(false); setSettingsDraft(null); }}
                     className="btn-secondary flex-1"
                   >
                     Cancel
