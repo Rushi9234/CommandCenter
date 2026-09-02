@@ -1,21 +1,12 @@
-import { Link, useLocation } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { useState, useRef, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import NotificationBell from './NotificationBell';
 
 export default function Navigation() {
-  const location = useLocation();
   const { user, logout } = useAuth();
-
-  const navItems = [
-    { path: '/pulse', label: 'Daily Logs' },
-    { path: '/projects', label: 'Projects' },
-    { path: '/teams', label: 'Teams' },
-    { path: '/goals', label: 'Goals' },
-    { path: '/leaderboard', label: 'Leaderboard' },
-    { path: '/help', label: 'Help Center' },
-    { path: '/analytics', label: 'Analytics' },
-  ];
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const getInitials = (name: string) => {
     return name
@@ -26,73 +17,79 @@ export default function Navigation() {
       .slice(0, 2);
   };
 
-  return (
-    <nav className="bg-white border-b border-gray-200 sticky top-0 z-50 shadow-sm">
-      <div className="max-w-7xl mx-auto px-6">
-        <div className="flex items-center justify-between h-16">
-          {/* Logo */}
-          <Link to="/pulse" className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-md">
-              <span className="text-white font-bold text-sm">CC</span>
-            </div>
-            <span className="text-xl font-bold text-gray-900">CommandCenter</span>
-          </Link>
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setAccountMenuOpen(false);
+      }
+    };
 
-          {/* Navigation Items */}
-          <div className="flex items-center gap-1">
-            {navItems.map((item) => {
-              const isActive = location.pathname === item.path;
-              return (
-                <Link
-                  key={item.path}
-                  to={item.path}
-                  className="relative"
-                >
-                  <motion.div
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    className={`px-4 py-2 rounded-lg transition-colors ${
-                      isActive
-                        ? 'bg-blue-50 text-blue-700 font-medium'
-                        : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                    }`}
-                  >
-                    <span className="text-sm font-medium">{item.label}</span>
-                  </motion.div>
-                  {isActive && (
-                    <motion.div
-                      layoutId="activeTab"
-                      className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600"
-                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                    />
-                  )}
-                </Link>
-              );
-            })}
+    if (accountMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [accountMenuOpen]);
+
+  return (
+    <header className="bg-white border-b border-gray-200 sticky top-0 z-40 shadow-sm">
+      <div className="px-6 h-16 flex items-center justify-between">
+        {/* Left: Branding (mostly for mobile, sidebar has it on desktop) */}
+        <Link to="/pulse" className="flex items-center gap-2 lg:hidden">
+          <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-lg flex items-center justify-center">
+            <span className="text-white font-bold text-xs">CC</span>
+          </div>
+          <span className="text-sm font-bold text-gray-900">CC</span>
+        </Link>
+
+        {/* Center: Space for global search (placeholder) */}
+        <div className="flex-1 hidden md:flex justify-center" />
+
+        {/* Right: Notification Bell + User Menu */}
+        <div className="flex items-center gap-4">
+          <div data-tour-target="notifications">
+            <NotificationBell />
           </div>
 
-          {/* User Menu */}
-          <div className="flex items-center gap-4">
-            <NotificationBell />
-
-            <div className="text-right hidden sm:block">
-              <div className="text-sm font-medium text-gray-900">{user?.full_name}</div>
-              <div className="text-xs text-gray-500 capitalize">{user?.role}</div>
-            </div>
-
-            <div className="avatar w-10 h-10 text-sm">
-              {getInitials(user?.full_name || 'User')}
-            </div>
-
+          <div ref={menuRef} className="relative">
             <button
-              onClick={logout}
-              className="btn-ghost text-sm"
+              onClick={() => setAccountMenuOpen(!accountMenuOpen)}
+              className="flex items-center gap-2 hover:bg-gray-100 rounded-lg p-2 transition-colors"
+              aria-label="Account menu"
+              data-tour-target="profile"
             >
-              Sign out
+              <div className="text-right hidden sm:block">
+                <div className="text-sm font-medium text-gray-900">{user?.full_name}</div>
+                <div className="text-xs text-gray-500 capitalize">{user?.role}</div>
+              </div>
+
+              <div className="avatar w-10 h-10 text-sm bg-gradient-to-br from-blue-500 to-indigo-600 text-white">
+                {getInitials(user?.full_name || 'User')}
+              </div>
             </button>
+
+            {accountMenuOpen && (
+              <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
+                <Link
+                  to="/profile"
+                  onClick={() => setAccountMenuOpen(false)}
+                  className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  My Profile
+                </Link>
+                <button
+                  onClick={() => {
+                    setAccountMenuOpen(false);
+                    logout();
+                  }}
+                  className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
-    </nav>
+    </header>
   );
 }

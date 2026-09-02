@@ -2,6 +2,9 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import Navigation from './components/Navigation';
+import Sidebar from './components/Sidebar';
+import SpotlightTour from './components/SpotlightTour';
+import { useQuickOverview } from './hooks/useQuickOverview';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import VerifyEmail from './pages/VerifyEmail';
@@ -14,6 +17,7 @@ import Goals from './pages/Goals';
 import Grid from './pages/Grid';
 import SOSHub from './pages/SOSHub';
 import ExecutiveBrief from './pages/ExecutiveBrief';
+import Profile from './pages/Profile';
 
 // Milestone: on a hard refresh, useAuth's token is briefly null before its
 // own effect reads localStorage (see useAuth.tsx). Deciding isAuthenticated
@@ -22,10 +26,28 @@ import ExecutiveBrief from './pages/ExecutiveBrief';
 // showed up -- silently losing whatever route (e.g. /teams) they refreshed
 // on. Rendering nothing until isInitializing clears avoids acting on that
 // transient value.
+function ProtectedLayoutWithWalkthrough({ children }: { children: React.ReactNode }) {
+  const { isOpen, onClose } = useQuickOverview();
+  return (
+    <div className="flex flex-col h-screen">
+      <SpotlightTour isOpen={isOpen} onClose={onClose} />
+      <Sidebar />
+      <Navigation />
+      <main className="flex-1 overflow-auto lg:ml-64">
+        {children}
+      </main>
+    </div>
+  );
+}
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isInitializing } = useAuth();
   if (isInitializing) return null;
-  return isAuthenticated ? <>{children}</> : <Navigate to="/login" />;
+  return isAuthenticated ? (
+    <ProtectedLayoutWithWalkthrough>{children}</ProtectedLayoutWithWalkthrough>
+  ) : (
+    <Navigate to="/login" />
+  );
 }
 
 function PublicOnlyRoute({ children }: { children: React.ReactNode }) {
@@ -47,72 +69,74 @@ function AppRoutes() {
         path="/pulse"
         element={
           <ProtectedRoute>
-            <Navigation />
             <Pulse />
           </ProtectedRoute>
         }
       />
-      
+
       <Route
         path="/projects"
         element={
           <ProtectedRoute>
-            <Navigation />
             <Projects />
           </ProtectedRoute>
         }
       />
-      
+
       <Route
         path="/teams"
         element={
           <ProtectedRoute>
-            <Navigation />
             <Teams />
           </ProtectedRoute>
         }
       />
-      
+
       <Route
         path="/goals"
         element={
           <ProtectedRoute>
-            <Navigation />
             <Goals />
           </ProtectedRoute>
         }
       />
-      
+
       <Route
         path="/leaderboard"
         element={
           <ProtectedRoute>
-            <Navigation />
             <Grid />
           </ProtectedRoute>
         }
       />
-      
+
       <Route
         path="/help"
         element={
           <ProtectedRoute>
-            <Navigation />
             <SOSHub />
           </ProtectedRoute>
         }
       />
-      
+
       <Route
         path="/analytics"
         element={
           <ProtectedRoute>
-            <Navigation />
             <ExecutiveBrief />
           </ProtectedRoute>
         }
       />
-      
+
+      <Route
+        path="/profile"
+        element={
+          <ProtectedRoute>
+            <Profile />
+          </ProtectedRoute>
+        }
+      />
+
       <Route path="/" element={<Navigate to="/pulse" />} />
     </Routes>
   );
