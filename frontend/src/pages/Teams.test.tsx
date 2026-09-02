@@ -27,6 +27,15 @@ vi.mock('../hooks/useRealtime', () => ({
   },
 }));
 
+// Mock useTeamsGuide for Teams component
+vi.mock('../hooks/useTeamsGuide', () => ({
+  useTeamsGuide: vi.fn(() => ({
+    isOpen: false,
+    onClose: vi.fn(),
+    onReopenGuide: vi.fn(),
+  })),
+}));
+
 const mockUseAuth = useAuth as unknown as ReturnType<typeof vi.fn>;
 
 const FAKE_USER = { user_id: 'user-1', full_name: 'Ada Lovelace', role: 'member' };
@@ -65,6 +74,17 @@ const renderTeams = (user: any = FAKE_USER, initialEntries: string[] = ['/teams'
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Mock matchMedia for SpotlightTour component
+  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  }));
   vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [TEAM_A] } } as any);
   vi.mocked(api.getAllTeams).mockResolvedValue({ data: { data: [] } } as any);
   vi.mocked(api.getMyInvites).mockResolvedValue({ data: { data: [] } } as any);
@@ -1447,6 +1467,107 @@ describe('Teams — Discover Teams hierarchy', () => {
     // any of its parent names yet.
     await new Promise((r) => setTimeout(r, 10));
     expect(vi.mocked(api.getTeamPreview).mock.calls.filter((c) => c[0] === 'never-opened-parent').length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bug fix: Members list empty-state message (BUG-001)
+describe('Teams — members list empty-state', () => {
+  it('loaded team with one or more members shows normal member list', async () => {
+    vi.mocked(api.getTeamMembers).mockResolvedValue({
+      data: { data: [OWNER_MEMBER, BOB_MEMBER] },
+    } as any);
+    renderTeams();
+
+    // Should show both members
+    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.getByText('Bob Smith')).toBeInTheDocument();
+    expect(screen.queryByText('No members to display yet.')).not.toBeInTheDocument();
+  });
+
+  it('loaded team with zero visible members shows empty-state message', async () => {
+    vi.mocked(api.getTeamMembers).mockResolvedValue({
+      data: { data: [] },
+    } as any);
+    renderTeams();
+
+    expect(await screen.findByText('No members to display yet.')).toBeInTheDocument();
+  });
+
+  it('while members are still loading, empty-state is not shown (loading spinner shown instead)', async () => {
+    let resolveMembers: any;
+    vi.mocked(api.getTeamMembers).mockReturnValue(
+      new Promise((resolve) => {
+        resolveMembers = resolve;
+      }) as any
+    );
+    vi.mocked(api.getSubTeams).mockResolvedValue({ data: { data: [] } } as any);
+    vi.mocked(api.getTeamWorkSubmissions).mockResolvedValue({ data: { data: [] } } as any);
+    vi.mocked(api.getContextDashboard).mockRejectedValue(new Error('Not authorized'));
+
+    renderTeams();
+
+    // While loading, no empty-state; spinner should be visible instead
+    await new Promise((r) => setTimeout(r, 10));
+    expect(screen.queryByText('No members to display yet.')).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toBeInTheDocument(); // Loading spinner
+
+    // Resolve with empty list
+    resolveMembers({ data: { data: [] } });
+    expect(await screen.findByText('No members to display yet.')).toBeInTheDocument();
+  });
+
+  it('members request failure silently handled; empty-state not shown while loading, shown after load fails', async () => {
+    vi.mocked(api.getTeamMembers).mockRejectedValue(new Error('Network error'));
+    vi.mocked(api.getSubTeams).mockResolvedValue({ data: { data: [] } } as any);
+    vi.mocked(api.getTeamWorkSubmissions).mockResolvedValue({ data: { data: [] } } as any);
+    vi.mocked(api.getContextDashboard).mockRejectedValue(new Error('Not authorized'));
+
+    renderTeams();
+
+    // After load fails (teamDetailsLoading becomes false), since getTeamMembers
+    // had no response, teamMembers stays empty. The component shows empty-state
+    // (current behavior: silently fail with no error message)
+    expect(await screen.findByText('No members to display yet.')).toBeInTheDocument();
+  });
+
+  it('retry continues to work after empty state', async () => {
+    vi.mocked(api.getTeamMembers).mockResolvedValue({
+      data: { data: [] },
+    } as any);
+    renderTeams();
+    await screen.findByText('No members to display yet.');
+
+    vi.mocked(api.getTeamMembers).mockResolvedValue({
+      data: { data: [OWNER_MEMBER] },
+    } as any);
+
+    // Simulate a retry by selecting the same team again
+    const teamButton = screen.getByRole('button', { name: 'Select Team Alpha' });
+    fireEvent.click(teamButton);
+
+    await screen.findByText('Ada Lovelace');
+    expect(screen.queryByText('No members to display yet.')).not.toBeInTheDocument();
+  });
+
+  it('existing Teams hierarchy/sidebar/selection behavior is unaffected', async () => {
+    vi.mocked(api.getMyTeams).mockResolvedValue({
+      data: { data: [TEAM_A, TEAM_B] },
+    } as any);
+    vi.mocked(api.getTeamMembers).mockResolvedValue({
+      data: { data: [] },
+    } as any);
+    renderTeams();
+
+    // Sidebar should still render teams normally
+    expect(await screen.findByRole('button', { name: 'Select Team Alpha' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Select Team Beta' })).toBeInTheDocument();
+
+    // Switching teams should still work
+    fireEvent.click(screen.getByRole('button', { name: 'Select Team Beta' }));
+    await waitFor(() => {
+      expect(api.getTeamMembers).toHaveBeenCalledWith('team-b');
+    });
   });
 });
 

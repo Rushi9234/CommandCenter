@@ -206,12 +206,17 @@ describe('Goals — goal-type filtering', () => {
     renderGoals();
     await screen.findByText('Company direction');
 
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(filterName) }));
+    // Open More Filters dropdown to access non-primary filters
+    const moreFiltersBtn = screen.getByRole('button', { name: /More Filters/ });
+    fireEvent.click(moreFiltersBtn);
+
+    // Click the specific filter from the dropdown
+    const filterBtn = screen.getByText(new RegExp(`[🏢🏛️📁🎯] ${filterName}`));
+    fireEvent.click(filterBtn);
 
     for (const visibleGoal of visibleGoals) {
       expect(screen.getByText(visibleGoal)).toBeInTheDocument();
     }
-    expect(screen.getByRole('button', { name: new RegExp(filterName) })).toHaveClass('bg-blue-600');
   });
 });
 
@@ -935,5 +940,51 @@ describe('Goals — notification deep-link destination', () => {
 
     await screen.findByText('Company direction');
     expect(await screen.findByText(/no longer available/i)).toBeInTheDocument();
+  });
+});
+
+describe('Goals — Filter UX (Primary filters + More Filters dropdown)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [TEAM_A] } } as any);
+    vi.mocked(api.getGoals).mockResolvedValue({ data: { data: FLAT_GOALS } } as any);
+    vi.mocked(api.getGoalHierarchy).mockResolvedValue({ data: { data: [COMPANY_GOAL] } } as any);
+  });
+
+  it('displays primary filter buttons: All, Team, Personal', async () => {
+    renderGoals();
+
+    await screen.findByText('Company direction');
+    expect(screen.getByRole('button', { name: 'All' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Team/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Personal/ })).toBeInTheDocument();
+  });
+
+  it('shows "More Filters" dropdown button containing additional options', async () => {
+    renderGoals();
+
+    await screen.findByText('Company direction');
+    expect(screen.getByRole('button', { name: /More Filters/ })).toBeInTheDocument();
+
+    // Open the dropdown and verify additional options are present
+    const moreFiltersBtn = screen.getByRole('button', { name: /More Filters/ });
+    fireEvent.click(moreFiltersBtn);
+
+    // Additional filters should now be visible in the dropdown with their icons
+    expect(screen.getByText('🏢 Company')).toBeInTheDocument();
+    expect(screen.getByText('🏛️ Department')).toBeInTheDocument();
+  });
+
+  it('All/Team/Personal primary filters work correctly', async () => {
+    renderGoals();
+
+    await screen.findByText('Company direction');
+    expect(screen.getByRole('button', { name: 'All' })).toBeInTheDocument();
+
+    const teamBtn = screen.getByRole('button', { name: /Team/ });
+    fireEvent.click(teamBtn);
+
+    // Should show team goals and highlight the Team button
+    expect(screen.getByRole('button', { name: /Team/ })).toHaveClass('bg-blue-600');
   });
 });

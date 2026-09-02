@@ -86,7 +86,7 @@ describe('Pulse — Daily Work (Milestone 52)', () => {
     await waitFor(() => expect(screen.getByText('No entries yet today for this team.')).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText('What did you work on?'), { target: { value: 'Fixed the bug' } });
-    fireEvent.click(screen.getByText('Add Entry'));
+    fireEvent.click(screen.getByText('Post Update'));
 
     await waitFor(() => expect(api.createWorkEntry).toHaveBeenCalledWith('team-a', 'Fixed the bug'));
     expect(await screen.findByText('Fixed the bug')).toBeInTheDocument();
@@ -103,24 +103,24 @@ describe('Pulse — Daily Work (Milestone 52)', () => {
 
     const input = screen.getByPlaceholderText('What did you work on?');
     fireEvent.change(input, { target: { value: 'First thing' } });
-    fireEvent.click(screen.getByText('Add Entry'));
+    fireEvent.click(screen.getByText('Post Update'));
     await screen.findByText('First thing');
 
     fireEvent.change(input, { target: { value: 'Second thing' } });
-    fireEvent.click(screen.getByText('Add Entry'));
+    fireEvent.click(screen.getByText('Post Update'));
     await screen.findByText('Second thing');
 
     expect(screen.getByText('First thing')).toBeInTheDocument();
     expect(api.createWorkEntry).toHaveBeenCalledTimes(2);
   });
 
-  it('disables Add Entry for empty entry text', async () => {
+  it('disables Post Update button for empty entry text', async () => {
     renderPulse();
     await waitFor(() => screen.getByRole('combobox'));
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'team-a' } });
     await waitFor(() => screen.getByText('No entries yet today for this team.'));
 
-    expect(screen.getByText('Add Entry')).toBeDisabled();
+    expect(screen.getByText('Post Update')).toBeDisabled();
   });
 
   it('generates and displays an editable AI summary once entries exist', async () => {
@@ -198,7 +198,7 @@ describe('Pulse — Daily Work (Milestone 52)', () => {
     await waitFor(() => screen.getByText('No entries yet today for this team.'));
 
     fireEvent.change(screen.getByPlaceholderText('What did you work on?'), { target: { value: 'Racing entry' } });
-    fireEvent.click(screen.getByText('Add Entry'));
+    fireEvent.click(screen.getByText('Post Update'));
 
     await waitFor(() => expect(screen.getByText("Today's work submitted")).toBeInTheDocument());
     expect(screen.getByText('Submitted from another tab.')).toBeInTheDocument();
@@ -214,7 +214,7 @@ describe('Pulse — Daily Work (Milestone 52)', () => {
     await waitFor(() => screen.getByText('No entries yet today for this team.'));
 
     fireEvent.change(screen.getByPlaceholderText('What did you work on?'), { target: { value: 'x' } });
-    fireEvent.click(screen.getByText('Add Entry'));
+    fireEvent.click(screen.getByText('Post Update'));
 
     await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('Entry text is required'));
     expect(screen.getByText('No entries yet today for this team.')).toBeInTheDocument();
@@ -230,7 +230,7 @@ describe('Pulse — Daily Work (Milestone 52)', () => {
     await waitFor(() => screen.getByText('No entries yet today for this team.'));
 
     fireEvent.change(screen.getByPlaceholderText('What did you work on?'), { target: { value: 'x' } });
-    fireEvent.click(screen.getByText('Add Entry'));
+    fireEvent.click(screen.getByText('Post Update'));
 
     await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('Insufficient permissions'));
     alertSpy.mockRestore();
@@ -352,7 +352,7 @@ describe('Pulse — Personal Daily Work History (Milestone 53)', () => {
     await screen.findByText('No past submissions yet for this team.');
 
     fireEvent.change(screen.getByPlaceholderText('What did you work on?'), { target: { value: 'Fixed the bug' } });
-    fireEvent.click(screen.getByText('Add Entry'));
+    fireEvent.click(screen.getByText('Post Update'));
 
     await waitFor(() => expect(api.createWorkEntry).toHaveBeenCalledWith('team-a', 'Fixed the bug'));
     expect(await screen.findByText('Fixed the bug')).toBeInTheDocument();
@@ -362,5 +362,57 @@ describe('Pulse — Personal Daily Work History (Milestone 53)', () => {
     renderPulse();
     await waitFor(() => expect(api.getMyLogs).toHaveBeenCalledWith(30));
     expect(screen.getByText('Add New Log')).toBeInTheDocument();
+  });
+});
+
+describe('Pulse — UX Terminology (Team Updates, Post Update)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getMyLogs).mockResolvedValue({ data: { data: [] } } as any);
+    vi.mocked(api.getLogSuggestions).mockResolvedValue({ data: { data: null } } as any);
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [TEAM_A, TEAM_B] } } as any);
+    vi.mocked(api.getTeamWorkSubmissions).mockResolvedValue({ data: { data: [] } } as any);
+    vi.mocked(api.getTodaysWorkEntries).mockResolvedValue({ data: { data: [] } } as any);
+    vi.mocked(api.getWorkHistory).mockResolvedValue({ data: { data: [] } } as any);
+  });
+
+  it('displays "Team Updates" section heading', async () => {
+    render(<Pulse />);
+    await waitFor(() => screen.getByRole('combobox'));
+    expect(screen.getByText('Team Updates')).toBeInTheDocument();
+  });
+
+  it('displays "Post Update" button instead of "Post Update"', async () => {
+    vi.mocked(api.createWorkEntry).mockResolvedValue({ data: { data: { entry_id: 'e1', entry_text: 'Test' } } } as any);
+    render(<Pulse />);
+    await waitFor(() => screen.getByRole('combobox'));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'team-a' } });
+
+    await waitFor(() => expect(screen.getByText('Post Update')).toBeInTheDocument());
+  });
+
+  it('keeps personal logs section unchanged with "Add New Log"', async () => {
+    render(<Pulse />);
+    await waitFor(() => expect(api.getMyLogs).toHaveBeenCalledWith(30));
+    expect(screen.getByText('Add New Log')).toBeInTheDocument();
+  });
+
+  it('shows "Posting..." while adding a team update entry', async () => {
+    let resolveMock: any;
+    vi.mocked(api.createWorkEntry).mockReturnValue(new Promise((resolve) => {
+      resolveMock = resolve;
+    }) as any);
+
+    render(<Pulse />);
+    await waitFor(() => screen.getByRole('combobox'));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'team-a' } });
+    await waitFor(() => screen.getByText('Post Update'));
+
+    fireEvent.change(screen.getByPlaceholderText('What did you work on?'), { target: { value: 'Test work' } });
+    fireEvent.click(screen.getByText('Post Update'));
+
+    await waitFor(() => expect(screen.getByText('Posting...')).toBeInTheDocument());
+
+    resolveMock({ data: { data: { entry_id: 'e1', entry_text: 'Test work' } } });
   });
 });

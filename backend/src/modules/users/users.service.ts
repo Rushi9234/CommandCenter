@@ -1,4 +1,9 @@
+import bcrypt from 'bcrypt';
 import { usersRepository } from './users.repository';
+import { authRepository } from '../auth/auth.repository';
+import { BadRequestError, UnauthorizedError } from '../../common/errors';
+
+const BCRYPT_COST = 12;
 
 export class UsersService {
   // Milestone 41: the repository's SELECT DISTINCT ... ORDER BY requires
@@ -12,6 +17,43 @@ export class UsersService {
 
   getUserById(userId: string) {
     return usersRepository.getUserById(userId);
+  }
+
+  async getProfile(userId: string) {
+    return usersRepository.getProfileById(userId);
+  }
+
+  async updateProfile(userId: string, updates: Record<string, any>) {
+    return usersRepository.updateUser(userId, updates);
+  }
+
+  async changePassword(userId: string, currentPassword: string, newPassword: string) {
+    // Verify new password is different from current
+    const currentHash = await usersRepository.getPasswordHashById(userId);
+    if (!currentHash) {
+      throw new UnauthorizedError('User not found');
+    }
+
+    // Verify current password is correct
+    const isCurrentPasswordCorrect = await bcrypt.compare(currentPassword, currentHash);
+    if (!isCurrentPasswordCorrect) {
+      throw new BadRequestError('Current password is incorrect');
+    }
+
+    // Verify new password is not the same as current
+    const isSamePassword = await bcrypt.compare(newPassword, currentHash);
+    if (isSamePassword) {
+      throw new BadRequestError('New password must be different from current password');
+    }
+
+    // Hash the new password
+    const newPasswordHash = await bcrypt.hash(newPassword, BCRYPT_COST);
+
+    // Update password and revoke all sessions atomically
+    await authRepository.resetPasswordAndRevokeSessions(userId, newPasswordHash, new Date());
+
+    // Return updated profile (without password hash)
+    return usersRepository.getProfileById(userId);
   }
 }
 

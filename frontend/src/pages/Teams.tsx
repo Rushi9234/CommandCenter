@@ -4,11 +4,14 @@ import { motion, AnimatePresence } from 'framer-motion';
 import * as api from '../services/api';
 import { useAuth } from '../hooks/useAuth';
 import { useRealtime } from '../hooks/useRealtime';
+import { useTeamsGuide } from '../hooks/useTeamsGuide';
 import { RealtimeEvent } from '../services/realtime';
 import { buildTeamTree, hasRealParent, TeamTreeNode } from '../utils/teamHierarchy';
+import SpotlightTour from '../components/SpotlightTour';
 
 export default function Teams() {
   const { user } = useAuth();
+  const { isOpen: isTeamsGuideOpen, onClose: onTeamsGuideClose, onReopenGuide: onReopenTeamsGuide } = useTeamsGuide();
   // Notification deep-linking: ?teamId=... selects that team, overriding
   // the default "first team" -- see the dedicated effect below (reacts to
   // searchParams directly, not just mount, so it also works when the user
@@ -928,14 +931,21 @@ export default function Teams() {
               <h1 className="text-2xl font-bold text-gray-900">Teams</h1>
               <p className="text-gray-600 mt-1">Collaborate with your team members</p>
             </div>
-            <div className="flex gap-3">
-              <button onClick={() => setShowDiscoverModal(true)} className="btn-secondary">
+            <div className="flex gap-3 items-center">
+              <button
+                onClick={onReopenTeamsGuide}
+                className="text-sm px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-all"
+                aria-label="How to use Teams guide"
+              >
+                ❓ How to Use Teams
+              </button>
+              <button data-tour-target="teams-discover" onClick={() => setShowDiscoverModal(true)} className="btn-secondary">
                 🔍 Discover Teams
               </button>
-              <button onClick={() => { setShowJoinByIdModal(true); setPreviewedTeam(null); setPreviewError(''); setJoinByIdInput(''); }} className="btn-secondary">
+              <button data-tour-target="teams-join-id" onClick={() => { setShowJoinByIdModal(true); setPreviewedTeam(null); setPreviewError(''); setJoinByIdInput(''); }} className="btn-secondary">
                 🔑 Join with Team ID
               </button>
-              <button onClick={() => setShowCreateModal(true)} className="btn-primary">
+              <button data-tour-target="teams-create" onClick={() => setShowCreateModal(true)} className="btn-primary">
                 + Create Team / Classroom
               </button>
             </div>
@@ -1359,70 +1369,76 @@ export default function Teams() {
 
                   <div className="space-y-3">
                     <AnimatePresence>
-                      {!teamDetailsLoading && teamMembers.map((member, index) => (
-                        <motion.div
-                          key={member.user_id}
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ delay: index * 0.05 }}
-                          className="flex items-center justify-between p-4 pro-card-hover"
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className="avatar w-10 h-10 text-sm">
-                              {getInitials(member.full_name || 'U')}
-                            </div>
-                            <div>
-                              <div className="font-medium text-gray-900">{member.full_name}</div>
-                              <div className="text-sm text-gray-500">@{member.username}</div>
-                            </div>
-                            {/* Step 3: a role badge on every card, not just
-                                owner -- backend role enum is owner/admin/
-                                manager/member/viewer, so this shows
-                                whatever the backend actually says rather
-                                than assuming only two tiers exist. */}
-                            <span className={`badge ${member.role === 'owner' ? 'badge-yellow' : 'badge-gray'}`}>
-                              {member.role === 'owner' && '👑 '}
-                              {member.role.charAt(0).toUpperCase() + member.role.slice(1)}
-                            </span>
-                          </div>
-
-                          {/* Step 2: same hierarchy rule the backend
-                              enforces (removeTeamMemberIfAuthorized /
-                              updateMemberRoleIfAuthorized) -- the owner is
-                              never manageable by anyone, and an admin
-                              cannot manage another admin (or the owner) --
-                              only the owner can. A plain member/manager/
-                              viewer sees no controls here at all. */}
-                          {(() => {
-                            const canManage =
-                              (myRole === 'owner' || myRole === 'admin') &&
-                              member.role !== 'owner' &&
-                              (member.role !== 'admin' || myRole === 'owner');
-                            if (!canManage) return null;
-                            return (
-                              <div className="flex items-center gap-3">
-                                <select
-                                  value={member.role}
-                                  onChange={(e) => handleUpdateRole(member.user_id, e.target.value)}
-                                  className="input-field text-sm py-1.5"
-                                >
-                                  <option value="admin">Admin</option>
-                                  <option value="manager">Manager</option>
-                                  <option value="member">Member</option>
-                                  <option value="viewer">Viewer</option>
-                                </select>
-
-                                <button
-                                  onClick={() => handleRemoveMember(member.user_id)}
-                                  className="text-red-600 hover:text-red-700 text-sm font-medium"
-                                >
-                                  Remove
-                                </button>
+                      {!teamDetailsLoading && teamMembers.length > 0 ? (
+                        teamMembers.map((member, index) => (
+                          <motion.div
+                            key={member.user_id}
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: index * 0.05 }}
+                            className="flex items-center justify-between p-4 pro-card-hover"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="avatar w-10 h-10 text-sm">
+                                {getInitials(member.full_name || 'U')}
                               </div>
-                            );
-                          })()}
-                        </motion.div>
-                      ))}
+                              <div>
+                                <div className="font-medium text-gray-900">{member.full_name}</div>
+                                <div className="text-sm text-gray-500">@{member.username}</div>
+                              </div>
+                              {/* Step 3: a role badge on every card, not just
+                                  owner -- backend role enum is owner/admin/
+                                  manager/member/viewer, so this shows
+                                  whatever the backend actually says rather
+                                  than assuming only two tiers exist. */}
+                              <span className={`badge ${member.role === 'owner' ? 'badge-yellow' : 'badge-gray'}`}>
+                                {member.role === 'owner' && '👑 '}
+                                {member.role.charAt(0).toUpperCase() + member.role.slice(1)}
+                              </span>
+                            </div>
+
+                            {/* Step 2: same hierarchy rule the backend
+                                enforces (removeTeamMemberIfAuthorized /
+                                updateMemberRoleIfAuthorized) -- the owner is
+                                never manageable by anyone, and an admin
+                                cannot manage another admin (or the owner) --
+                                only the owner can. A plain member/manager/
+                                viewer sees no controls here at all. */}
+                            {(() => {
+                              const canManage =
+                                (myRole === 'owner' || myRole === 'admin') &&
+                                member.role !== 'owner' &&
+                                (member.role !== 'admin' || myRole === 'owner');
+                              if (!canManage) return null;
+                              return (
+                                <div className="flex items-center gap-3">
+                                  <select
+                                    value={member.role}
+                                    onChange={(e) => handleUpdateRole(member.user_id, e.target.value)}
+                                    className="input-field text-sm py-1.5"
+                                  >
+                                    <option value="admin">Admin</option>
+                                    <option value="manager">Manager</option>
+                                    <option value="member">Member</option>
+                                    <option value="viewer">Viewer</option>
+                                  </select>
+
+                                  <button
+                                    onClick={() => handleRemoveMember(member.user_id)}
+                                    className="text-red-600 hover:text-red-700 text-sm font-medium"
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              );
+                            })()}
+                          </motion.div>
+                        ))
+                      ) : !teamDetailsLoading && teamMembers.length === 0 ? (
+                        <div className="text-center py-8 text-gray-500">
+                          No members to display yet.
+                        </div>
+                      ) : null}
                     </AnimatePresence>
                   </div>
                 </div>
@@ -1463,7 +1479,7 @@ export default function Teams() {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     What are you creating? *
                   </label>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-3 gap-2" data-tour-target="teams-type-selector">
                     {CONTEXT_TYPES.map((ct) => (
                       <button
                         key={ct.value}
@@ -1877,6 +1893,38 @@ export default function Teams() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Teams Contextual Quick Guide */}
+      <SpotlightTour
+        isOpen={isTeamsGuideOpen}
+        onClose={onTeamsGuideClose}
+        steps={[
+          {
+            id: 'teams-step-1',
+            title: 'Find a Team',
+            text: "Already part of a team? Search it and jump in.",
+            targetSelector: '[data-tour-target="teams-discover"]',
+          },
+          {
+            id: 'teams-step-2',
+            title: 'Got a Team ID?',
+            text: "Paste it. Join in seconds.",
+            targetSelector: '[data-tour-target="teams-join-id"]',
+          },
+          {
+            id: 'teams-step-3',
+            title: 'Want to create one?',
+            text: "Building a class, project, or your own crew? Start here.",
+            targetSelector: '[data-tour-target="teams-create"]',
+          },
+          {
+            id: 'teams-step-4',
+            title: 'What should I create?',
+            text: "Choose the type that fits: a Normal Team for your group, a Subject/Classroom for educational settings, or a Hackathon for competitions and events.",
+            targetSelector: '[data-tour-target="teams-type-selector"]',
+          },
+        ]}
+      />
     </div>
   );
 }

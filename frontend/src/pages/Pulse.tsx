@@ -492,7 +492,7 @@ export default function Pulse() {
               className="pro-card p-6"
             >
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-semibold text-gray-900">Daily Work</h2>
+                <h2 className="text-xl font-semibold text-gray-900">Team Updates</h2>
                 <select
                   value={selectedTeam}
                   onChange={(e) => setSelectedTeam(e.target.value)}
@@ -566,7 +566,7 @@ export default function Pulse() {
                       disabled={addingEntry || newEntryText.trim().length === 0}
                       className="btn-secondary text-sm disabled:opacity-50"
                     >
-                      {addingEntry ? 'Adding...' : 'Add Entry'}
+                      {addingEntry ? 'Posting...' : 'Post Update'}
                     </button>
                   </div>
 

@@ -298,6 +298,16 @@ export const approveGoalCreation = (goalId: string) =>
 export const rejectGoalCreation = (goalId: string) =>
   api.post(`/goals/${goalId}/reject-creation`);
 
+// Profile
+export const getMyProfile = () =>
+  api.get('/users/me');
+
+export const updateMyProfile = (data: Record<string, any>) =>
+  api.put('/users/me/profile', data);
+
+export const changePassword = (currentPassword: string, newPassword: string) =>
+  api.post('/users/me/change-password', { current_password: currentPassword, new_password: newPassword });
+
 // Notifications
 export const getMyNotifications = (limit = 20, offset = 0) =>
   api.get(`/notifications?limit=${limit}&offset=${offset}`);

@@ -36,6 +36,7 @@ export default function Goals() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedTeam, setSelectedTeam] = useState<string>('');
   const [selectedGoalType, setSelectedGoalType] = useState('all');
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
   const [teams, setTeams] = useState<any[]>([]);
   // Notification deep-linking: ?teamId=&goalId= selects the team and
   // scrolls to/highlights the specific goal, once. highlightedGoalId
@@ -740,7 +741,8 @@ export default function Goals() {
           ))}
         </select>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Primary filters */}
           <button
             type="button"
             onClick={() => setSelectedGoalType('all')}
@@ -750,53 +752,55 @@ export default function Goals() {
           </button>
           <button
             type="button"
-            onClick={() => setSelectedGoalType('company')}
-            className={`px-4 py-2 border rounded-lg ${selectedGoalType === 'company' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-gray-300 hover:bg-gray-50'}`}
+            onClick={() => setSelectedGoalType('team')}
+            className={`px-4 py-2 border rounded-lg ${selectedGoalType === 'team' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-gray-300 hover:bg-gray-50'}`}
           >
-            🏢 Company
+            👥 Team
           </button>
           <button
             type="button"
-            onClick={() => setSelectedGoalType('department')}
-            className={`px-4 py-2 border rounded-lg ${selectedGoalType === 'department' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-gray-300 hover:bg-gray-50'}`}
+            onClick={() => setSelectedGoalType('personal')}
+            className={`px-4 py-2 border rounded-lg ${selectedGoalType === 'personal' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-gray-300 hover:bg-gray-50'}`}
           >
-            🏛️ Department
+            🙋 Personal
           </button>
-          <button
-            type="button"
-            onClick={() => setSelectedGoalType('project')}
-            className={`px-4 py-2 border rounded-lg ${selectedGoalType === 'project' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-gray-300 hover:bg-gray-50'}`}
-          >
-            📁 Project
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelectedGoalType('milestone')}
-            className={`px-4 py-2 border rounded-lg ${selectedGoalType === 'milestone' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-gray-300 hover:bg-gray-50'}`}
-          >
-            🎯 Milestone
-          </button>
-          {/* Reconciled with the Create Goal form's type list (goal_type is
-              free text, so these are additive filters, not a competing
-              system) -- Company/Department above are kept for goals
-              created before this list existed. */}
-          {[
-            { value: 'research', label: '🔬 Research' },
-            { value: 'academic', label: '🎓 Academic' },
-            { value: 'personal', label: '🙋 Personal' },
-            { value: 'team', label: '👥 Team' },
-            { value: 'task', label: '✅ Task' },
-            { value: 'performance', label: '📈 Performance' },
-          ].map((t) => (
+
+          {/* More Filters dropdown */}
+          <div className="relative">
             <button
-              key={t.value}
               type="button"
-              onClick={() => setSelectedGoalType(t.value)}
-              className={`px-4 py-2 border rounded-lg ${selectedGoalType === t.value ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-gray-300 hover:bg-gray-50'}`}
+              onClick={() => setShowMoreFilters(!showMoreFilters)}
+              className="px-4 py-2 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 text-sm"
             >
-              {t.label}
+              More Filters ▼
             </button>
-          ))}
+            {showMoreFilters && (
+              <div className="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-lg z-10 min-w-max">
+                {[
+                  { value: 'company', label: '🏢 Company' },
+                  { value: 'department', label: '🏛️ Department' },
+                  { value: 'project', label: '📁 Project' },
+                  { value: 'milestone', label: '🎯 Milestone' },
+                  { value: 'research', label: '🔬 Research' },
+                  { value: 'academic', label: '🎓 Academic' },
+                  { value: 'task', label: '✅ Task' },
+                  { value: 'performance', label: '📈 Performance' },
+                ].map((t) => (
+                  <button
+                    key={t.value}
+                    type="button"
+                    onClick={() => {
+                      setSelectedGoalType(t.value);
+                      setShowMoreFilters(false);
+                    }}
+                    className={`block w-full text-left px-4 py-2 hover:bg-gray-50 ${selectedGoalType === t.value ? 'bg-blue-50 text-blue-700 font-medium' : ''}`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

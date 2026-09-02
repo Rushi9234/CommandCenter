@@ -8,7 +8,7 @@ interface TourStep {
   targetSelector?: string;
 }
 
-const TOUR_STEPS: TourStep[] = [
+const DEFAULT_TOUR_STEPS: TourStep[] = [
   {
     id: 'welcome',
     title: 'Welcome to CommandCenter',
@@ -91,16 +91,17 @@ interface CardPosition {
 interface SpotlightTourProps {
   isOpen: boolean;
   onClose: () => void;
+  steps?: TourStep[];
 }
 
-export default function SpotlightTour({ isOpen, onClose }: SpotlightTourProps) {
+export default function SpotlightTour({ isOpen, onClose, steps = DEFAULT_TOUR_STEPS }: SpotlightTourProps) {
   const [currentStep, setCurrentStep] = useState(0);
   const [targetRect, setTargetRect] = useState<Rect | null>(null);
   const [cardPosition, setCardPosition] = useState<CardPosition | null>(null);
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  const step = TOUR_STEPS[currentStep];
-  const isLastStep = currentStep === TOUR_STEPS.length - 1;
+  const step = steps[currentStep];
+  const isLastStep = currentStep === steps.length - 1;
 
   // Find and measure target element
   useEffect(() => {
@@ -195,7 +196,7 @@ export default function SpotlightTour({ isOpen, onClose }: SpotlightTourProps) {
   }, [isOpen, targetRect]);
 
   const handleNext = () => {
-    if (currentStep < TOUR_STEPS.length - 1) {
+    if (currentStep < steps.length - 1) {
       setCurrentStep(currentStep + 1);
     }
   };
@@ -291,7 +292,7 @@ export default function SpotlightTour({ isOpen, onClose }: SpotlightTourProps) {
             >
               {/* Step counter */}
               <div className="text-sm text-gray-500 mb-3">
-                {currentStep + 1} / {TOUR_STEPS.length}
+                {currentStep + 1} / {steps.length}
               </div>
 
               {/* Title */}
@@ -304,7 +305,7 @@ export default function SpotlightTour({ isOpen, onClose }: SpotlightTourProps) {
 
               {/* Progress dots */}
               <div className="flex gap-1 mb-6">
-                {TOUR_STEPS.map((_, idx) => (
+                {steps.map((_: TourStep, idx: number) => (
                   <div
                     key={idx}
                     className={`h-1.5 w-1.5 rounded-full transition-colors ${
@@ -376,7 +377,7 @@ export default function SpotlightTour({ isOpen, onClose }: SpotlightTourProps) {
             >
               {/* Step counter */}
               <div className="text-sm text-gray-500 mb-3">
-                {currentStep + 1} / {TOUR_STEPS.length}
+                {currentStep + 1} / {steps.length}
               </div>
 
               {/* Title */}
@@ -389,7 +390,7 @@ export default function SpotlightTour({ isOpen, onClose }: SpotlightTourProps) {
 
               {/* Progress dots */}
               <div className="flex gap-1 mb-6 justify-center">
-                {TOUR_STEPS.map((_, idx) => (
+                {steps.map((_: TourStep, idx: number) => (
                   <div
                     key={idx}
                     className={`h-1.5 w-1.5 rounded-full transition-colors ${

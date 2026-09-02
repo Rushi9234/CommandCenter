@@ -1,11 +1,30 @@
 import { query, queryOne, buildSetClause } from '../../db/client';
 
-const UPDATABLE_COLUMNS = ['impact_score', 'streak_count', 'total_logs', 'privacy_settings', 'notification_preferences'];
+const UPDATABLE_COLUMNS = ['impact_score', 'streak_count', 'total_logs', 'privacy_settings', 'notification_preferences', 'full_name', 'bio', 'pronouns', 'location', 'is_profile_public'];
 
 export class UsersRepository {
   async getUserById(userId: string) {
     const text = 'SELECT * FROM users WHERE user_id = $1';
     return queryOne(text, [userId]);
+  }
+
+  async getProfileById(userId: string) {
+    const text = `
+      SELECT
+        user_id, email, username, full_name, role,
+        bio, pronouns, location, is_profile_public,
+        privacy_settings, notification_preferences,
+        created_at, updated_at, impact_score, streak_count, total_logs, team_id
+      FROM users
+      WHERE user_id = $1
+    `;
+    return queryOne(text, [userId]);
+  }
+
+  async getPasswordHashById(userId: string) {
+    const text = 'SELECT password_hash FROM users WHERE user_id = $1';
+    const result = await queryOne<{ password_hash: string }>(text, [userId]);
+    return result?.password_hash || null;
   }
 
   // Milestone 42: bulk counterpart to getUserById, for callers (e.g.

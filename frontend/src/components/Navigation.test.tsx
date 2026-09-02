@@ -38,11 +38,21 @@ const renderNavigation = (path: string, user = { full_name: 'Ada Lovelace', role
 };
 
 describe('Navigation', () => {
-  it('renders every nav item label', () => {
+  it('renders the minimal header with user info and notification bell', () => {
     renderNavigation('/pulse');
 
+    // Header should show notification bell and user info
+    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.getByText('member')).toBeInTheDocument();
+  });
+
+  it('navigation items are no longer in the header (moved to sidebar)', () => {
+    renderNavigation('/pulse');
+
+    // Navigation labels should NOT be in the header (they're in the sidebar now)
     for (const label of ['Daily Logs', 'Projects', 'Teams', 'Goals', 'Leaderboard', 'Help Center', 'Analytics']) {
-      expect(screen.getByText(label)).toBeInTheDocument();
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
     }
   });
 
@@ -64,6 +74,10 @@ describe('Navigation', () => {
     const logout = vi.fn();
     renderNavigation('/pulse', { full_name: 'Ada Lovelace', role: 'member' }, logout);
 
+    // Open the account menu
+    fireEvent.click(screen.getByText('AL').closest('button')!);
+
+    // Click the Sign out button in the dropdown
     fireEvent.click(screen.getByText('Sign out'));
 
     expect(logout).toHaveBeenCalledTimes(1);
