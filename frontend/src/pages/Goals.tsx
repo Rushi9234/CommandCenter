@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import * as api from '../services/api';
+import { useRealtime, type RealtimeEvent } from '../hooks/useRealtime';
 
 // Deep-link helper: does `goal` or any descendant have this goal_id --
 // used to know whether the target of a notification click is actually
@@ -121,6 +122,18 @@ export default function Goals() {
     loadGoals();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTeam]);
+
+  useRealtime((event: RealtimeEvent) => {
+    if (!event.type.startsWith('goal.')) return;
+    if (event.type === 'goal.created' || event.type === 'goal.updated' ||
+        event.type === 'goal.submitted_for_review' || event.type === 'goal.review_approved' ||
+        event.type === 'goal.returned' || event.type === 'goal.creation_approved' ||
+        event.type === 'goal.creation_rejected') {
+      if (selectedTeam === event.teamId) {
+        loadGoals();
+      }
+    }
+  });
 
   // Scroll to / confirm the deep-linked goal once the hierarchy has
   // actually finished loading -- keyed on the goal ID itself (not a

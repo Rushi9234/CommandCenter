@@ -3,6 +3,7 @@ import { ForbiddenError, BadRequestError } from '../../common/errors';
 import { notificationsService } from '../notifications/notifications.service';
 import { usersRepository } from '../users/users.repository';
 import { teamsRepository } from '../teams/teams.repository';
+import { createRealtimeEvent, realtimeProvider } from '../../realtime/inMemoryRealtimeProvider';
 
 // Milestone 46: used to re-filter the ENTIRE goals array at every node of
 // the tree (children = allGoals.filter(...)) -- O(n) work per node
@@ -99,6 +100,12 @@ export class GoalsService {
           userId
         );
       }
+    }
+
+    try {
+      realtimeProvider.publish(createRealtimeEvent('goal.created', { teamId: body.teamId }));
+    } catch {
+      // Fire-and-forget: don't block on realtime publishing
     }
 
     return goal;
@@ -202,7 +209,19 @@ export class GoalsService {
       updates.completed_at = null;
     }
 
-    return goalsRepository.updateGoal(goalId, updates);
+    const updated = await goalsRepository.updateGoal(goalId, updates);
+
+    // Publish realtime event for goal mutation so other viewers see updates
+    const goal = await goalsRepository.getGoal(goalId);
+    if (goal?.team_id) {
+      try {
+        realtimeProvider.publish(createRealtimeEvent('goal.updated', { teamId: goal.team_id }));
+      } catch {
+        // Fire-and-forget: don't block on realtime publishing
+      }
+    }
+
+    return updated;
   }
 
   async deleteGoal(goalId: string) {
@@ -288,6 +307,12 @@ export class GoalsService {
       );
     }
 
+    try {
+      realtimeProvider.publish(createRealtimeEvent('goal.submitted_for_review', { teamId: goal.team_id }));
+    } catch {
+      // Fire-and-forget: don't block on realtime publishing
+    }
+
     return updated;
   }
 
@@ -348,6 +373,12 @@ export class GoalsService {
       );
     }
 
+    try {
+      realtimeProvider.publish(createRealtimeEvent('goal.review_approved', { teamId: goal.team_id }));
+    } catch {
+      // Fire-and-forget: don't block on realtime publishing
+    }
+
     return updated;
   }
 
@@ -382,6 +413,12 @@ export class GoalsService {
         goalId,
         teamId: goal.team_id,
       });
+    }
+
+    try {
+      realtimeProvider.publish(createRealtimeEvent('goal.returned', { teamId: goal.team_id }));
+    } catch {
+      // Fire-and-forget: don't block on realtime publishing
     }
 
     return updated;
@@ -420,6 +457,12 @@ export class GoalsService {
       teamId: goal.team_id,
     });
 
+    try {
+      realtimeProvider.publish(createRealtimeEvent('goal.creation_approved', { teamId: goal.team_id }));
+    } catch {
+      // Fire-and-forget: don't block on realtime publishing
+    }
+
     return updated;
   }
 
@@ -447,6 +490,12 @@ export class GoalsService {
       goalId,
       teamId: goal.team_id,
     });
+
+    try {
+      realtimeProvider.publish(createRealtimeEvent('goal.creation_rejected', { teamId: goal.team_id }));
+    } catch {
+      // Fire-and-forget: don't block on realtime publishing
+    }
 
     return updated;
   }

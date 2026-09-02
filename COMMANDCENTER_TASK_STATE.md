@@ -1249,23 +1249,37 @@ Frontend:
 ✅ Blocker resolved event only fires when status === 'resolved'  
 ✅ No change to authorization (events carry only teamId, no sensitive data)  
 
-## NEXT PRIORITY (AUTHORITATIVE)
+## POST-COMMIT AUDIT — GOALS REALTIME SYNCHRONIZATION GAP (2026-09-02)
 
-**[P3] Teams.tsx empty-members-list message**
+**Discovery**: The documented P3 (Teams empty-members message) is an architecturally unreachable edge case. Post-commit audit revealed a genuine P2 synchronization issue:
 
-This is the next genuine unresolved work item (all higher-priority P2 tasks are now complete):
+### Goals Page Missing Realtime Updates ❌
 
-1. Current state: When a team is selected with zero members (architecturally unreachable — team always has creator), no message is shown
-2. Scope: Small (add conditional render after members list)
-3. Risk: None
-4. User impact: Very low (unreachable edge case)
+**Problem**: Goals.tsx has NO useRealtime listener, and goals.service.ts publishes NO realtime events for mutations.
 
-### Why not alternatives
+**Impact**: When user A creates/updates/submits/approves/returns a goal while user B views Goals, user B sees stale data until manual refresh.
 
-- **Classroom/Teacher/Coordinator**: Requires explicit design decision, very large scope, blocks other features
-- **Notification retention**: No product requirement yet, low urgency
-- **Goals schema items**: Awaiting design decision
-- **Realtime for Goals/Blockers**: Out of scope (notifications infrastructure covers most cases; goal/blocker mutations emit no realtime events per architecture)
+**Evidence**:
+- Projects.tsx ✅ has useRealtime listener (task.* events)
+- SOSHub.tsx ✅ has useRealtime listener (blocker.* events)
+- Teams.tsx ✅ has useRealtime listener (join_request.* events)
+- Goals.tsx ❌ has NO listener
+
+**Current Status**: All P2 tasks documented as complete except this synchronization gap.
+
+---
+
+## CURRENT TASK: GOALS REALTIME MUTATION SYNCHRONIZATION — STATUS: IN PROGRESS
+
+Implementing realtime event publishing for goal mutations (createGoal, updateGoal, submitForReview, approveReview, returnGoal) and frontend synchronization via useRealtime listener.
+
+Reusing proven pattern from Projects/SOSHub/Teams (no new infrastructure needed).
+
+---
+
+## NEXT PRIORITY (AUTHORITATIVE) — TO BE UPDATED AFTER THIS TASK COMPLETES
+
+Currently: Goals Realtime Mutation Synchronization (P2)
 
 
 TESTING EFFICIENCY RULE
