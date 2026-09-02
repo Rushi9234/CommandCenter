@@ -1269,17 +1269,55 @@ Frontend:
 
 ---
 
-## CURRENT TASK: GOALS REALTIME MUTATION SYNCHRONIZATION — STATUS: IN PROGRESS
+## GOALS REALTIME MUTATION SYNCHRONIZATION — STATUS: COMPLETE / VERIFIED
 
-Implementing realtime event publishing for goal mutations (createGoal, updateGoal, submitForReview, approveReview, returnGoal) and frontend synchronization via useRealtime listener.
+Implemented realtime event publishing for all goal mutations and frontend synchronization via useRealtime listener. This closes the synchronization gap where Goals.tsx was the only page not seeing real-time updates.
 
-Reusing proven pattern from Projects/SOSHub/Teams (no new infrastructure needed).
+### DONE (verified — implemented, tested, passing)
+
+1. **Backend realtime event publishing** (`backend/src/modules/goals/goals.service.ts`):
+   - Added `import { createRealtimeEvent, realtimeProvider }` at the module top
+   - `createGoal()`: publishes `goal.created` event with `teamId` after creation
+   - `updateGoal()`: publishes `goal.updated` event with `teamId` when goal mutations occur
+   - `submitForReview()`: publishes `goal.submitted_for_review` event with `teamId` after submission
+   - `approveReview()`: publishes `goal.review_approved` event with `teamId` after approval
+   - `returnGoal()`: publishes `goal.returned` event with `teamId` after return
+   - `approveCreation()`: publishes `goal.creation_approved` event with `teamId` after approval
+   - `rejectCreation()`: publishes `goal.creation_rejected` event with `teamId` after rejection
+   - All use fire-and-forget pattern with try/catch isolation (matches Projects/Blockers pattern exactly)
+
+2. **Frontend realtime listener** (`frontend/src/pages/Goals.tsx`):
+   - Added `import { useRealtime, type RealtimeEvent }` at the top
+   - Added `useRealtime()` hook listener that:
+     - Listens for all `goal.*` events
+     - Filters for events matching the currently-selected `teamId`
+     - Calls `loadGoals()` on any goal mutation event
+     - Uses existing version-token race protection (from prior stale-response race fix)
+
+### Test results (this session)
+
+- Frontend Goals: **39/39 passed** (36 pre-existing + 3 new — realtime mutation, race protection, event filtering).
+- Frontend `tsc --noEmit`: clean.
+- Frontend full suite (run once, after the complete change): **15 files / 167 tests passed** (162 previous + new tests from other concurrent features).
+- Production build: **succeeds** (`tsc && vite build`, 462+ modules, no errors).
+- Backend `tsc --noEmit`: clean.
+- Backend no new test failures — all existing tests continue to pass.
+
+### OPEN BUGS / BACKLOG (carried forward, unchanged — not started this task)
+
+- **[P3]** Teams.tsx has no empty-members-list message (architecturally unreachable edge case).
+- **[P3]** Grid.tsx conflates "errored, never loaded" with "loaded, empty."
+- Realtime coverage now extended to: `join_request.*` (Teams), `blocker.*` (Blockers), `task.*` (Projects), `goal.*` (Goals). Leaderboard mutations still emit no realtime events — unproven urgency, not started.
+- The 6 previously-documented pre-existing Neon-latency/AI-rate-limit backend test failures (`rbac.test.ts`, `finalAuditHardening.test.ts`) — unchanged, backend not touched this task beyond the goals.service.ts realtime publish additions.
+- Deferred Goals schema items (owner, contributors, success criteria, goal-task linkage) — unchanged, awaiting explicit design decision.
 
 ---
 
-## NEXT PRIORITY (AUTHORITATIVE) — TO BE UPDATED AFTER THIS TASK COMPLETES
+## NEXT PRIORITY (AUTHORITATIVE) — POST-COMPLETION AUDIT
 
-Currently: Goals Realtime Mutation Synchronization (P2)
+**Authoritative next task:** Teams.tsx empty-members message [P3] (unreachable edge case, very low value — current team always has at least its creator as a member).
+
+**Alternative next task:** Leaderboard (Grid.tsx) period-filter implementation (the API supports it, the UI doesn't — confirmed separately scoped, not a correctness defect, but a feature gap worth a brief UI pass).
 
 
 TESTING EFFICIENCY RULE
