@@ -15,6 +15,11 @@ CREATE TABLE users (
     is_verified BOOLEAN DEFAULT false,
     verification_token VARCHAR(255),
     privacy_settings JSONB DEFAULT '{"ai_enabled": true, "sentiment_tracking": true, "leaderboard_visible": true, "analytics_opt_in": true}',
+    -- Migration 1787000000000: notification category preferences, same
+    -- JSONB-settings-object convention as privacy_settings above. All
+    -- categories default ON; a missing/false key means that category is
+    -- suppressed at notification-creation time (server-authoritative).
+    notification_preferences JSONB DEFAULT '{"team_join_request": true, "goal_creation": true, "goal_completion": true, "task_assignment": true, "blocker": true}',
     verification_token_expires TIMESTAMP,
     password_reset_token_hash VARCHAR(255),
     password_reset_expires TIMESTAMP,
@@ -173,7 +178,17 @@ CREATE TABLE goals (
     -- ('completed' for a real completion request; any other status value
     -- for "please sign off on this stage/progress, not finished yet").
     -- approve() applies this verbatim instead of always completing.
-    requested_status VARCHAR(50)
+    requested_status VARCHAR(50),
+    -- Migration 1786900000000: goal CREATION governance, separate from the
+    -- completion-review workflow above. NULL = not a pending/rejected
+    -- proposal (personal goals, leader-created team goals, and every
+    -- pre-existing team goal are all grandfathered as approved via NULL --
+    -- same convention as requested_status). 'pending_approval' = a
+    -- non-leader team member proposed this team goal; 'rejected' = a
+    -- leader declined the proposal.
+    creation_status VARCHAR(50),
+    creation_reviewed_by UUID REFERENCES users(user_id),
+    creation_reviewed_at TIMESTAMP
 );
 
 -- Team invites table
@@ -234,6 +249,28 @@ CREATE TABLE daily_work_submissions (
 
 CREATE INDEX idx_daily_work_entries_user_team_date ON daily_work_entries(user_id, team_id, entry_date);
 CREATE INDEX idx_daily_work_submissions_team_date ON daily_work_submissions(team_id, work_date);
+
+-- Migration 1787000000000: notifications system. user_id CASCADEs (owned
+-- by the recipient); entity-reference columns SET NULL on the referenced
+-- row's deletion so a user's own notification history survives (they are
+-- not owned by the team/project/goal/task/blocker they're about).
+CREATE TABLE notifications (
+    notification_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    category VARCHAR(50) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL,
+    team_id UUID REFERENCES teams(team_id) ON DELETE SET NULL,
+    project_id UUID REFERENCES projects(project_id) ON DELETE SET NULL,
+    goal_id UUID REFERENCES goals(goal_id) ON DELETE SET NULL,
+    task_id UUID REFERENCES tasks(task_id) ON DELETE SET NULL,
+    blocker_id UUID REFERENCES blockers(blocker_id) ON DELETE SET NULL,
+    read_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_notifications_user_created ON notifications(user_id, created_at DESC);
+CREATE INDEX idx_notifications_user_unread ON notifications(user_id, read_at);
 
 -- Indexes for performance
 CREATE INDEX idx_users_email ON users(email);

@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import SOSHub from './SOSHub';
 import { useAuth } from '../hooks/useAuth';
@@ -40,9 +41,13 @@ const deferred = <T,>() => {
   return { promise, resolve };
 };
 
-const renderHub = () => {
+const renderHub = (initialEntries: string[] = ['/help']) => {
   mockUseAuth.mockReturnValue({ user: { user_id: 'user-1' } });
-  return render(<SOSHub />);
+  return render(
+    <MemoryRouter initialEntries={initialEntries}>
+      <SOSHub />
+    </MemoryRouter>
+  );
 };
 
 const setVisibility = (hidden: boolean) => {
@@ -201,5 +206,40 @@ describe('SOS Hub — loading/empty/error states', () => {
     renderHub();
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load your teams');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Notification deep-link destination: ?teamId=&blockerId= selects that
+// team (overriding the default "first team" auto-select) and selects the
+// specific blocker once that team's blockers have actually loaded.
+describe('SOSHub — notification deep-link destination', () => {
+  it('?teamId=team-b selects Team Beta instead of the default first team', async () => {
+    renderHub(['/help?teamId=team-b']);
+
+    await waitFor(() => expect(api.getTeamBlockers).toHaveBeenCalledWith('team-b'));
+    expect(api.getTeamBlockers).not.toHaveBeenCalledWith('team-a');
+  });
+
+  it('?teamId=&blockerId= selects the matching blocker once blockers load', async () => {
+    vi.mocked(api.getTeamBlockers).mockResolvedValue({ data: { data: [BLOCKER_A, BLOCKER_B] } } as any);
+    renderHub(['/help?teamId=team-a&blockerId=blocker-b']);
+
+    expect(await screen.findByRole('heading', { name: 'Team B blocker' })).toBeInTheDocument();
+  });
+
+  it('a deep-linked teamId no longer accessible shows a safe fallback message, not a crash', async () => {
+    renderHub(['/help?teamId=team-removed']);
+
+    expect(await screen.findByText(/no longer have access to that team/i)).toBeInTheDocument();
+    // Falls back to the normal default-selection behavior.
+    await waitFor(() => expect(api.getTeamBlockers).toHaveBeenCalledWith('team-a'));
+  });
+
+  it('a deep-linked blockerId not present in the loaded blockers shows a safe fallback message, not a crash', async () => {
+    vi.mocked(api.getTeamBlockers).mockResolvedValue({ data: { data: [BLOCKER_A] } } as any);
+    renderHub(['/help?teamId=team-a&blockerId=blocker-does-not-exist']);
+
+    expect(await screen.findByText(/no longer available/i)).toBeInTheDocument();
   });
 });

@@ -3,6 +3,7 @@ import { usersRepository } from '../users/users.repository';
 import { sendTeamInviteEmail } from '../../services/emailService';
 import { ForbiddenError, NotFoundError, BadRequestError, ConflictError } from '../../common/errors';
 import { createRealtimeEvent, realtimeProvider } from '../../realtime/inMemoryRealtimeProvider';
+import { notificationsService } from '../notifications/notifications.service';
 
 // Milestone 47: max_team_size gained real enforcement this milestone --
 // see teams.repository.ts's TEAM_CAPACITY_GATE comment for why the
@@ -338,6 +339,22 @@ export class TeamsService {
       throw new ConflictError('A join request is already pending for this team');
     }
     realtimeProvider.publish(createRealtimeEvent('join_request.created', { teamId }));
+
+    const [team, requester] = await Promise.all([teamsRepository.getTeam(teamId), usersRepository.getUserById(userId)]);
+    if (team && requester) {
+      await notificationsService.notifyTeamMembersByRole(
+        teamId,
+        ['owner', 'admin'],
+        {
+          category: 'team.join_request.created',
+          preferenceGroup: 'team_join_request',
+          title: 'New join request',
+          message: `${requester.full_name} requested to join ${team.team_name}`,
+        },
+        userId
+      );
+    }
+
     return joinRequest;
   }
 
@@ -402,6 +419,18 @@ export class TeamsService {
       teamId: approved.team_id,
       recipientUserId: approved.user_id,
     }));
+
+    const team = await teamsRepository.getTeam(approved.team_id);
+    if (team) {
+      await notificationsService.notifyUser({
+        recipientUserId: approved.user_id,
+        category: 'team.join_request.approved',
+        preferenceGroup: 'team_join_request',
+        title: 'Join request approved',
+        message: `Your request to join ${team.team_name} was approved`,
+        teamId: approved.team_id,
+      });
+    }
   }
 
   async rejectJoinRequest(requestId: string) {
@@ -413,6 +442,18 @@ export class TeamsService {
       teamId: rejected.team_id,
       recipientUserId: rejected.user_id,
     }));
+
+    const team = await teamsRepository.getTeam(rejected.team_id);
+    if (team) {
+      await notificationsService.notifyUser({
+        recipientUserId: rejected.user_id,
+        category: 'team.join_request.rejected',
+        preferenceGroup: 'team_join_request',
+        title: 'Join request declined',
+        message: `Your request to join ${team.team_name} was declined`,
+        teamId: rejected.team_id,
+      });
+    }
   }
 
   // Milestone 40: same atomicity fix as removeMember above -- the leave

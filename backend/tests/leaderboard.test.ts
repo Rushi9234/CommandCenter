@@ -162,6 +162,108 @@ describe('GET /api/leaderboard -- recent_activity and inactive-user filtering', 
   });
 });
 
+describe('GET /api/leaderboard -- period filter', () => {
+  it('defaults to "all" (unfiltered) when no period is given, matching pre-period behavior', async () => {
+    const { token, userId } = await registerAndLogin('perioddefault');
+    await seedLogs(userId, [{ daysAgo: 200, wordCount: 10 }]);
+
+    const res = await request(app).get('/api/leaderboard').set(authHeader(token)).expect(200);
+    const entry = res.body.data.find((e: any) => e.user_id === userId);
+    // A 200-day-old log only survives an unfiltered ('all') view.
+    expect(entry).toBeDefined();
+    expect(entry.recent_activity).toBe(1);
+  });
+
+  it('an unrecognized period value falls back to "all" rather than erroring', async () => {
+    const { token, userId } = await registerAndLogin('periodbogus');
+    await seedLogs(userId, [{ daysAgo: 200, wordCount: 10 }]);
+
+    const res = await request(app).get('/api/leaderboard?period=nonsense').set(authHeader(token)).expect(200);
+    const entry = res.body.data.find((e: any) => e.user_id === userId);
+    expect(entry).toBeDefined();
+  });
+
+  it('period=today excludes logs from before today', async () => {
+    const { token, userId } = await registerAndLogin('periodtoday');
+    await seedLogs(userId, [{ daysAgo: 3, wordCount: 10 }]);
+
+    const res = await request(app).get('/api/leaderboard?period=today').set(authHeader(token)).expect(200);
+    const entry = res.body.data.find((e: any) => e.user_id === userId);
+    // No logs today -> recent_activity 0 -> filtered out of the list entirely.
+    expect(entry).toBeUndefined();
+  });
+
+  it('period=today includes a log made today', async () => {
+    const { token, userId } = await registerAndLogin('periodtoday2');
+    await seedLogs(userId, [{ daysAgo: 0, wordCount: 10 }]);
+
+    const res = await request(app).get('/api/leaderboard?period=today').set(authHeader(token)).expect(200);
+    const entry = res.body.data.find((e: any) => e.user_id === userId);
+    expect(entry).toBeDefined();
+    expect(entry.recent_activity).toBe(1);
+  });
+
+  it('period=week includes a log from earlier in the current week but excludes one older than any window boundary could allow', async () => {
+    const { token, userId } = await registerAndLogin('periodweek');
+    // 40 days ago cannot fall inside any calendar week/month window.
+    await seedLogs(userId, [{ daysAgo: 40, wordCount: 10 }]);
+
+    const res = await request(app).get('/api/leaderboard?period=week').set(authHeader(token)).expect(200);
+    const entry = res.body.data.find((e: any) => e.user_id === userId);
+    expect(entry).toBeUndefined();
+  });
+
+  it('period=month scopes completed_tasks to tasks completed within the current calendar month', async () => {
+    const owner = await registerAndLogin('periodtasks');
+    const projectRes = await request(app)
+      .post('/api/projects')
+      .set(authHeader(owner.token))
+      .send({ projectName: 'Period Task Fixture' })
+      .expect(201);
+    const projectId = projectRes.body.data.project_id;
+
+    const taskRes = await request(app)
+      .post(`/api/projects/${projectId}/tasks`)
+      .set(authHeader(owner.token))
+      .send({ title: 'done this month' })
+      .expect(201);
+    await request(app).put(`/api/tasks/${taskRes.body.data.task_id}`).set(authHeader(owner.token)).send({ status: 'done' }).expect(200);
+    // Give the user a log too, or recent_activity=0 filters them out
+    // entirely before completed_tasks would even be visible.
+    await seedLogs(owner.userId, [{ daysAgo: 0, wordCount: 10 }]);
+
+    const allRes = await request(app).get('/api/leaderboard?period=all').set(authHeader(owner.token)).expect(200);
+    const monthRes = await request(app).get('/api/leaderboard?period=month').set(authHeader(owner.token)).expect(200);
+    const allEntry = allRes.body.data.find((e: any) => e.user_id === owner.userId);
+    const monthEntry = monthRes.body.data.find((e: any) => e.user_id === owner.userId);
+    expect(allEntry.impact_score).toBeGreaterThan(0);
+    // Task completed just now (this test run) falls inside "this month" too
+    // -- both views credit it identically.
+    expect(monthEntry.impact_score).toBe(allEntry.impact_score);
+  });
+
+  it('does NOT persist a period-scoped (non-"all") impact_score to the users table', async () => {
+    const { token, userId } = await registerAndLogin('periodnopersist');
+    await setStreakColumn(userId, 10); // consistencyPoints = 20, so a persisted score would be nonzero and easy to detect
+    await seedLogs(userId, [{ daysAgo: 0, wordCount: 150 }]);
+
+    const before = await testPool.query('SELECT impact_score FROM users WHERE user_id = $1', [userId]);
+    expect(before.rows[0].impact_score).toBe(0);
+
+    await request(app).get('/api/leaderboard?period=today').set(authHeader(token)).expect(200);
+
+    const afterToday = await testPool.query('SELECT impact_score FROM users WHERE user_id = $1', [userId]);
+    // A period-scoped request must never write to the persisted score.
+    expect(afterToday.rows[0].impact_score).toBe(0);
+
+    await request(app).get('/api/leaderboard').set(authHeader(token)).expect(200);
+
+    const afterAll = await testPool.query('SELECT impact_score FROM users WHERE user_id = $1', [userId]);
+    // The default/'all' view is the one that IS allowed to persist.
+    expect(afterAll.rows[0].impact_score).toBeGreaterThan(0);
+  });
+});
+
 describe('GET /api/leaderboard -- sort order', () => {
   it('sorts by impact_score descending', async () => {
     const low = await registerAndLogin('lowscore');

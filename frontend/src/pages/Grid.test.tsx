@@ -209,6 +209,153 @@ describe('Grid — initial-load error vs. empty-state distinction ([P3])', () =>
   });
 });
 
+describe('Grid — leaderboard period filter', () => {
+  it('defaults to "All Time" and fetches with the "all" period value', async () => {
+    vi.mocked(api.getLeaderboard).mockResolvedValue({ data: { data: [PLAYER_1] } } as any);
+    renderGrid();
+
+    await waitFor(() => expect(api.getLeaderboard).toHaveBeenCalledWith('all'));
+    const allTimeButton = screen.getByRole('button', { name: 'All Time' });
+    expect(allTimeButton).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('renders exactly the four supported period options', async () => {
+    vi.mocked(api.getLeaderboard).mockResolvedValue({ data: { data: [PLAYER_1] } } as any);
+    renderGrid();
+    await waitFor(() => expect(api.getLeaderboard).toHaveBeenCalledTimes(1));
+
+    const group = screen.getByRole('group', { name: 'Leaderboard time period' });
+    expect(group.querySelectorAll('button').length).toBe(4);
+    ['All Time', 'Today', 'This Week', 'This Month'].forEach((label) => {
+      expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
+    });
+  });
+
+  it('clicking a period option calls getLeaderboard with the correct value and updates the selected state', async () => {
+    vi.mocked(api.getLeaderboard).mockResolvedValue({ data: { data: [PLAYER_1] } } as any);
+    renderGrid();
+    await waitFor(() => expect(api.getLeaderboard).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'This Week' }));
+
+    await waitFor(() => expect(api.getLeaderboard).toHaveBeenCalledWith('week'));
+    expect(screen.getByRole('button', { name: 'This Week' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'All Time' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('clicking the already-selected period does not issue a duplicate request', async () => {
+    vi.mocked(api.getLeaderboard).mockResolvedValue({ data: { data: [PLAYER_1] } } as any);
+    renderGrid();
+    await waitFor(() => expect(api.getLeaderboard).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'All Time' }));
+
+    // Give any accidental async call a chance to fire.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(api.getLeaderboard).toHaveBeenCalledTimes(1);
+  });
+
+  it('a period response that was already in flight when the period changed cannot overwrite the newly-selected period\'s data', async () => {
+    const staleAllRequest = deferred<any>();
+    const freshWeekRequest = deferred<any>();
+    vi.mocked(api.getLeaderboard)
+      .mockReturnValueOnce(staleAllRequest.promise as any) // initial mount ('all')
+      .mockReturnValueOnce(freshWeekRequest.promise as any); // queued follow-up ('week')
+    renderGrid();
+    expect(api.getLeaderboard).toHaveBeenCalledTimes(1);
+
+    // Switch period WHILE the initial 'all' request is still in flight.
+    fireEvent.click(screen.getByRole('button', { name: 'This Week' }));
+    // The queued follow-up must not fire yet -- the in-flight request for
+    // the old period hasn't settled.
+    expect(api.getLeaderboard).toHaveBeenCalledTimes(1);
+
+    // The stale 'all' response resolves first...
+    staleAllRequest.resolve({ data: { data: [PLAYER_1] } });
+    // ...which must immediately trigger the queued 'week' fetch.
+    await waitFor(() => expect(api.getLeaderboard).toHaveBeenCalledTimes(2));
+    expect(api.getLeaderboard).toHaveBeenLastCalledWith('week');
+
+    // The fresh 'week' response resolves after -- it must be the one shown.
+    freshWeekRequest.resolve({ data: { data: [PLAYER_2] } });
+    await waitFor(() => expect(screen.getAllByText('Ada Lovelace').length).toBeGreaterThan(0));
+    expect(screen.queryByText('Top Player')).not.toBeInTheDocument();
+  });
+
+  it('polling uses the currently selected period, not the period selected at mount', async () => {
+    vi.mocked(api.getLeaderboard).mockResolvedValue({ data: { data: [PLAYER_1] } } as any);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderGrid();
+    await vi.waitFor(() => expect(api.getLeaderboard).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'This Month' }));
+    await vi.waitFor(() => expect(api.getLeaderboard).toHaveBeenCalledTimes(2));
+    expect(api.getLeaderboard).toHaveBeenLastCalledWith('month');
+
+    await vi.advanceTimersByTimeAsync(30000);
+
+    expect(api.getLeaderboard).toHaveBeenCalledTimes(3);
+    expect(api.getLeaderboard).toHaveBeenLastCalledWith('month');
+    vi.useRealTimers();
+  });
+
+  it('a period change does not create a second polling interval (30s cadence stays exactly once per tick)', async () => {
+    vi.mocked(api.getLeaderboard).mockResolvedValue({ data: { data: [PLAYER_1] } } as any);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderGrid();
+    await vi.waitFor(() => expect(api.getLeaderboard).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }));
+    await vi.waitFor(() => expect(api.getLeaderboard).toHaveBeenCalledTimes(2));
+
+    await vi.advanceTimersByTimeAsync(30000);
+    // Exactly one more call from the single 30s interval -- not two (which
+    // would indicate a duplicate interval was created).
+    expect(api.getLeaderboard).toHaveBeenCalledTimes(3);
+    vi.useRealTimers();
+  });
+
+  it('changing period while idle (no request in flight) shows loading feedback without blanking the previously loaded leaderboard', async () => {
+    const weekRequest = deferred<any>();
+    vi.mocked(api.getLeaderboard)
+      .mockResolvedValueOnce({ data: { data: [PLAYER_1] } } as any)
+      .mockReturnValueOnce(weekRequest.promise as any);
+    renderGrid();
+    await waitFor(() => expect(screen.getAllByText('Top Player').length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole('button', { name: 'This Week' }));
+
+    await waitFor(() => expect(screen.getByText('Updating…')).toBeInTheDocument());
+    // Previously-loaded results remain visible during the background fetch.
+    expect(screen.getAllByText('Top Player').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Loading rankings...')).not.toBeInTheDocument();
+
+    weekRequest.resolve({ data: { data: [PLAYER_2] } });
+    await waitFor(() => expect(screen.queryByText('Updating…')).not.toBeInTheDocument());
+  });
+
+  it('the period selector remains visible and interactive during the initial-load error state', async () => {
+    vi.mocked(api.getLeaderboard).mockRejectedValue(new Error('network error'));
+    renderGrid();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load leaderboard');
+    expect(screen.getByRole('button', { name: 'This Week' })).toBeInTheDocument();
+  });
+
+  it('changing period during the loaded-empty state fetches the newly selected period correctly', async () => {
+    vi.mocked(api.getLeaderboard)
+      .mockResolvedValueOnce({ data: { data: [] } } as any)
+      .mockResolvedValueOnce({ data: { data: [PLAYER_1] } } as any);
+    renderGrid();
+    await screen.findByText(/No rankings yet/);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }));
+
+    await waitFor(() => expect(api.getLeaderboard).toHaveBeenCalledWith('today'));
+    expect((await screen.findAllByText('Top Player')).length).toBeGreaterThan(0);
+  });
+});
+
 describe('Grid — hidden-tab polling pause', () => {
   it('does not start new polling requests while the tab is hidden', async () => {
     vi.mocked(api.getLeaderboard).mockResolvedValue({ data: { data: [PLAYER_1] } } as any);

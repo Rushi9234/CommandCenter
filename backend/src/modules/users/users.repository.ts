@@ -1,6 +1,6 @@
 import { query, queryOne, buildSetClause } from '../../db/client';
 
-const UPDATABLE_COLUMNS = ['impact_score', 'streak_count', 'total_logs', 'privacy_settings'];
+const UPDATABLE_COLUMNS = ['impact_score', 'streak_count', 'total_logs', 'privacy_settings', 'notification_preferences'];
 
 export class UsersRepository {
   async getUserById(userId: string) {

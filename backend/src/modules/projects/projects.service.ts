@@ -4,6 +4,8 @@ import { usersRepository } from '../users/users.repository';
 import { analyzeProjectWithAI } from '../ai/ai.service';
 import { NotFoundError, BadRequestError, ForbiddenError } from '../../common/errors';
 import { privacyService, AI_DISABLED_MESSAGE } from '../privacy/privacy.service';
+import { notificationsService } from '../notifications/notifications.service';
+import { createRealtimeEvent, realtimeProvider } from '../../realtime/inMemoryRealtimeProvider';
 
 export class ProjectsService {
   async getAllPublicProjects() {
@@ -145,7 +147,7 @@ export class ProjectsService {
   async createTask(projectId: string, body: any, userId: string) {
     await this.validateTaskReferences(projectId, body);
 
-    return tasksRepository.createTask({
+    const task = await tasksRepository.createTask({
       project_id: projectId,
       title: body.title,
       description: body.description || '',
@@ -156,6 +158,68 @@ export class ProjectsService {
       priority: body.priority || 'medium',
       created_by: userId,
     });
+
+    await this.notifyTaskAssignmentChanges(task, { owner: null, reviewer: null, contributors: [] }, userId);
+
+    // Publish realtime event for task creation. The event carries only the
+    // project_id so subscribers can refetch the authoritative task list;
+    // the full task data (including assignments) is fetched server-side.
+    const project = await projectsRepository.getProject(projectId);
+    if (project) {
+      realtimeProvider.publish(createRealtimeEvent('task.created', { teamId: project.team_id }));
+    }
+
+    return task;
+  }
+
+  // Shared by createTask (previous = always empty/null -- any assignment
+  // is new) and updateTask (previous = the pre-update row) so both call
+  // sites use identical "did this assignment actually change" logic
+  // rather than two subtly different implementations. Diffing is
+  // necessary here: neither the create nor the update payload alone says
+  // "this is a NEW assignment" vs "resent the same value" -- confirmed
+  // during this feature's own audit that no such signal exists upstream.
+  private async notifyTaskAssignmentChanges(
+    task: { task_id: string; project_id: string; title: string },
+    previous: { owner: string | null; reviewer: string | null; contributors: string[] },
+    actorUserId: string
+  ) {
+    const project = await projectsRepository.getProject(task.project_id);
+    const teamId = project?.team_id;
+
+    const notifyIfNew = async (role: 'owner' | 'reviewer', newUserId: string | null | undefined, previousUserId: string | null) => {
+      if (!newUserId || newUserId === previousUserId || newUserId === actorUserId) return;
+      await notificationsService.notifyUser({
+        recipientUserId: newUserId,
+        category: `task.${role}_assigned`,
+        preferenceGroup: 'task_assignment',
+        title: role === 'owner' ? 'Task assigned to you' : 'You were assigned as reviewer',
+        message: role === 'owner' ? `You were assigned as owner of "${task.title}"` : `You were assigned as reviewer of "${task.title}"`,
+        taskId: task.task_id,
+        projectId: task.project_id,
+        teamId,
+      });
+    };
+
+    await notifyIfNew('owner', (task as any).owner, previous.owner);
+    await notifyIfNew('reviewer', (task as any).reviewer, previous.reviewer);
+
+    const newContributors: string[] = Array.isArray((task as any).contributors) ? (task as any).contributors : [];
+    const addedContributors = newContributors.filter((id) => !previous.contributors.includes(id) && id !== actorUserId);
+    await Promise.all(
+      addedContributors.map((recipientUserId) =>
+        notificationsService.notifyUser({
+          recipientUserId,
+          category: 'task.contributor_assigned',
+          preferenceGroup: 'task_assignment',
+          title: 'You were added as a contributor',
+          message: `You were added as a contributor on "${task.title}"`,
+          taskId: task.task_id,
+          projectId: task.project_id,
+          teamId,
+        })
+      )
+    );
   }
 
   // Milestone 42: used to fetch each task's owner/reviewer/contributors/
@@ -216,7 +280,7 @@ export class ProjectsService {
   // whichever of owner/reviewer/contributors/dependencies the update
   // actually touches -- the task's own project_id has to be looked up
   // first since, unlike createTask, the route only carries a taskId.
-  async updateTask(taskId: string, updates: Record<string, any>) {
+  async updateTask(taskId: string, updates: Record<string, any>, userId?: string) {
     const task = await tasksRepository.getTask(taskId);
     if (!task) {
       throw new NotFoundError('Task not found');
@@ -230,11 +294,48 @@ export class ProjectsService {
       updates.completed_at = null;
     }
 
-    return tasksRepository.updateTask(taskId, updates);
+    const updated = await tasksRepository.updateTask(taskId, updates);
+
+    if (userId && updated) {
+      await this.notifyTaskAssignmentChanges(
+        updated,
+        {
+          owner: task.owner ?? null,
+          reviewer: task.reviewer ?? null,
+          contributors: Array.isArray(task.contributors) ? task.contributors : [],
+        },
+        userId
+      );
+
+      // Publish realtime event if status changed. Assignment events are
+      // published via notifyTaskAssignmentChanges (which triggers
+      // notification.created events), so we only emit this separate event
+      // for status changes to avoid redundant updates.
+      if (updates.status && task.status !== updates.status) {
+        const project = await projectsRepository.getProject(task.project_id);
+        if (project) {
+          realtimeProvider.publish(createRealtimeEvent('task.status_changed', { teamId: project.team_id }));
+        }
+      }
+    }
+
+    return updated;
   }
 
   async deleteTask(taskId: string) {
+    // Capture the task's project before deletion so we can publish the
+    // realtime event afterward (the entity reference will be gone after
+    // delete, but the notification/event delivery still needs the teamId
+    // to route to the correct subscribers).
+    const task = await tasksRepository.getTask(taskId);
     await tasksRepository.deleteTask(taskId);
+
+    if (task) {
+      const project = await projectsRepository.getProject(task.project_id);
+      if (project) {
+        realtimeProvider.publish(createRealtimeEvent('task.deleted', { teamId: project.team_id }));
+      }
+    }
   }
 
   getMyTasks(userId: string) {

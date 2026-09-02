@@ -1,11 +1,32 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useAuth } from '../hooks/useAuth';
 import { useApiRequest } from '../hooks/useApiRequest';
 import * as api from '../services/api';
 
+// Leaderboard period filter: values match exactly what the backend
+// (leaderboard.controller.ts's VALID_PERIODS) actually supports -- 'all'
+// is the default and matches pre-period behavior byte-for-byte.
+type LeaderboardPeriod = 'all' | 'today' | 'week' | 'month';
+const PERIOD_OPTIONS: { value: LeaderboardPeriod; label: string }[] = [
+  { value: 'all', label: 'All Time' },
+  { value: 'today', label: 'Today' },
+  { value: 'week', label: 'This Week' },
+  { value: 'month', label: 'This Month' },
+];
+
 export default function Grid() {
   const { user } = useAuth();
+  const [period, setPeriod] = useState<LeaderboardPeriod>('all');
+  // Read by the mount-effect's `load()` closure (which only ever runs once,
+  // see the `useEffect(..., [])` below) so a period change is visible to
+  // polling/retry without re-running that effect (which would reset the
+  // 30s interval). Kept in sync with `period` synchronously in
+  // handlePeriodChange, not via a separate effect -- the fetch triggered
+  // by a period change needs the ref to already be current the moment it
+  // fires, and effects run a tick later than the state update itself.
+  const periodRef = useRef(period);
+
   // Milestone 20: adopts the shared useApiRequest hook (proof-of-pattern
   // page) instead of a hand-written loading/data useState pair. Behavior
   // preserved exactly: loading starts true (initialLoading), a failed
@@ -13,8 +34,19 @@ export default function Grid() {
   // screen (the hook never clears `data` on error), and the 30s poll
   // interval is unchanged -- the hook has no polling of its own, this
   // page still owns that.
+  //
+  // requestFn is wrapped in useCallback with an EMPTY dep array (it reads
+  // periodRef, not `period` state directly) so its identity -- and
+  // therefore `execute`'s identity -- never changes across renders. That
+  // keeps the mount effect's `[]` deps safe: nothing about adding the
+  // period filter requires re-running that effect or resetting the 30s
+  // interval.
+  const requestFn = useCallback(
+    () => api.getLeaderboard(periodRef.current).then((response) => response.data.data),
+    []
+  );
   const { data: leaderboardData, loading, error, execute: loadLeaderboard } = useApiRequest<any[]>(
-    () => api.getLeaderboard().then((response) => response.data.data),
+    requestFn,
     { initialLoading: true }
   );
   const leaderboard: any[] = leaderboardData ?? [];
@@ -47,6 +79,16 @@ export default function Grid() {
   // moot anyway since the user is visibly clicking it).
   const loadRef = useRef<(force?: boolean) => void>(() => {});
   const handleRetry = () => loadRef.current(true);
+  // Set ONLY by handlePeriodChange, and only for the narrow case where the
+  // user switches period WHILE a request is already in flight (that
+  // in-flight request is for the OLD period and can't be redirected).
+  // Deliberately a separate flag from `inFlight` itself -- a normal
+  // poll/retry/visibility-return force call must keep its existing
+  // behavior of silently no-op'ing when a request is already in flight
+  // (see the existing "does not start a second request if one is already
+  // in flight when the tab becomes visible" test); only a genuine period
+  // change gets this queued-retry treatment.
+  const periodRefetchPending = useRef(false);
 
   useEffect(() => {
     // Deliberately [] (matching this effect's deps before this
@@ -65,12 +107,26 @@ export default function Grid() {
     // the inFlight guard still applies to a forced call too, so
     // returning to the tab while a request is already in flight (e.g.
     // the initial load hasn't finished yet) never starts a second one.
+    //
+    // Period-filter safety: requestFn (above) always reads periodRef at
+    // the moment IT runs, so every poll tick and every retry already use
+    // whatever period is currently selected -- no separate wiring needed
+    // for that. The one case this guard alone can't handle is a period
+    // change that arrives while a request for the OLD period is still in
+    // flight; that's handled by periodRefetchPending below, not by
+    // changing this function's own logic.
     const load = (force = false) => {
       if ((document.hidden && !force) || inFlight.current) return;
       inFlight.current = true;
       loadLeaderboard()
         .catch((error) => console.error('Failed to load leaderboard:', error))
-        .finally(() => { inFlight.current = false; });
+        .finally(() => {
+          inFlight.current = false;
+          if (periodRefetchPending.current) {
+            periodRefetchPending.current = false;
+            load(true);
+          }
+        });
     };
     loadRef.current = load;
     load(true);
@@ -85,6 +141,31 @@ export default function Grid() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // User-initiated period switch. periodRef is updated synchronously
+  // (not via a useEffect keyed on `period`) so the very next fetch --
+  // whether fired immediately below or queued via periodRefetchPending --
+  // is guaranteed to already see the new value; an effect would only run
+  // on the render after this one, which is too late for the immediate
+  // branch. If a request is already in flight (for the OLD period), it
+  // can't be redirected -- it's flagged to trigger exactly one follow-up
+  // fetch (for the now-current period) the moment it settles, so the
+  // in-flight response's period was chosen before this call and the
+  // follow-up fetch is guaranteed to be the LAST word (see
+  // periodRefetchPending above). This makes it structurally impossible
+  // for a stale, older-period response to overwrite the newly-selected
+  // period's data: the two requests can never be in flight at the same
+  // time in the first place.
+  const handlePeriodChange = (next: LeaderboardPeriod) => {
+    if (next === period) return;
+    setPeriod(next);
+    periodRef.current = next;
+    if (inFlight.current) {
+      periodRefetchPending.current = true;
+    } else {
+      loadRef.current(true);
+    }
+  };
 
   const getInitials = (name: string) => {
     return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
@@ -103,7 +184,7 @@ export default function Grid() {
     <div className="min-h-screen bg-gray-50">
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-6 py-6">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-4">
             <div>
               <h1 className="text-2xl font-bold text-gray-900">The Grid</h1>
               <p className="text-gray-600 mt-1">Team leaderboard and rankings</p>
@@ -113,6 +194,37 @@ export default function Grid() {
                 <div className="text-3xl font-bold text-blue-600">#{myRank}</div>
                 <div className="text-sm text-gray-600">Your Rank</div>
               </div>
+            )}
+          </div>
+          {/* Period filter: a plain, keyboard-accessible button group (not
+              a native <select>) so the current selection is always
+              visibly readable, not hidden behind a closed dropdown --
+              matches the same "clear selected state" requirement the rest
+              of the app's filter/tab UIs already follow. */}
+          <div className="flex items-center flex-wrap gap-3 mt-4">
+            <div role="group" aria-label="Leaderboard time period" className="flex flex-wrap gap-2">
+              {PERIOD_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => handlePeriodChange(opt.value)}
+                  aria-pressed={period === opt.value}
+                  className={`px-3 py-1.5 rounded-full text-sm font-medium transition-all ${
+                    period === opt.value
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            {/* Non-blocking refresh feedback: only shown once something has
+                already loaded, alongside the (still fully visible)
+                previous results -- the blocking full-page spinner below
+                remains reserved for the genuine first-ever load. */}
+            {loading && hasLoadedOnce && (
+              <span className="text-xs text-gray-500" role="status">Updating…</span>
             )}
           </div>
         </div>

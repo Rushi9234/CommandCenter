@@ -1,6 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import * as api from '../services/api';
+
+// Deep-link helper: does `goal` or any descendant have this goal_id --
+// used to know whether the target of a notification click is actually
+// present in the currently-loaded hierarchy before trying to scroll to
+// it (it may have been deleted, or hidden by a stale goal-type filter).
+const treeContainsGoal = (goal: any, goalId: string): boolean => {
+  if (goal.goal_id === goalId) return true;
+  return (goal.children || []).some((child: any) => treeContainsGoal(child, goalId));
+};
 
 const filterGoalTree = (goal: any, selectedGoalType: string): any | null => {
   if (selectedGoalType === 'all') return goal;
@@ -19,12 +29,28 @@ const filterGoalTree = (goal: any, selectedGoalType: string): any | null => {
 };
 
 export default function Goals() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [goals, setGoals] = useState<any[]>([]);
   const [hierarchy, setHierarchy] = useState<any[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedTeam, setSelectedTeam] = useState<string>('');
   const [selectedGoalType, setSelectedGoalType] = useState('all');
   const [teams, setTeams] = useState<any[]>([]);
+  // Notification deep-linking: ?teamId=&goalId= selects the team and
+  // scrolls to/highlights the specific goal, once. highlightedGoalId
+  // drives both the scroll target and a persistent visual ring -- there's
+  // no timer clearing it; it simply stops mattering once the user
+  // switches team/navigates away, and a genuinely re-visited link
+  // re-highlights the same goal again, which is the correct behavior for
+  // "go back to what this notification was about."
+  const [highlightedGoalId, setHighlightedGoalId] = useState<string | null>(null);
+  const [goalDeepLinkError, setGoalDeepLinkError] = useState('');
+  // Track the last-processed values (not a one-shot boolean) so a second,
+  // different notification click while already on /goals -- same route,
+  // no remount -- is still processed rather than permanently ignored
+  // after the first deep link.
+  const lastProcessedDeepLink = useRef<string | null>(null);
+  const lastScrolledGoalId = useRef<string | null>(null);
   // Loading/error granularity fix: getGoals (flat list, feeds only the
   // create-form's "Parent goal" dropdown) and getGoalHierarchy (the
   // page's actual visible content) are independent backend reads with
@@ -66,10 +92,53 @@ export default function Goals() {
     loadTeams();
   }, []);
 
+  // Notification deep-link: reacts to `searchParams` itself, not just
+  // mount -- clicking a Goals notification while already on /goals (same
+  // route, only the query string changes) does not remount this
+  // component, so a mount-only effect would never see a second deep
+  // link. teamId selects the team (the selectedTeam effect below then
+  // loads its goals); goalId is stashed for the scroll/highlight effect
+  // further down. selectedGoalType is forced to 'all' so an active type
+  // filter can never hide the very goal the link points at.
+  useEffect(() => {
+    const teamId = searchParams.get('teamId');
+    const goalId = searchParams.get('goalId');
+    if (!teamId && !goalId) return;
+    const key = `${teamId ?? ''}|${goalId ?? ''}`;
+    if (key === lastProcessedDeepLink.current) return;
+    lastProcessedDeepLink.current = key;
+    if (teamId) setSelectedTeam(teamId);
+    if (goalId) {
+      setHighlightedGoalId(goalId);
+      setGoalDeepLinkError('');
+      setSelectedGoalType('all');
+    }
+    setSearchParams({}, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   useEffect(() => {
     loadGoals();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTeam]);
+
+  // Scroll to / confirm the deep-linked goal once the hierarchy has
+  // actually finished loading -- keyed on the goal ID itself (not a
+  // one-shot boolean) so a second, different deep-linked goal is still
+  // scrolled to, while a hierarchy refresh for the SAME already-scrolled
+  // goal doesn't re-scroll the page out from under the user.
+  useEffect(() => {
+    if (!highlightedGoalId || highlightedGoalId === lastScrolledGoalId.current || hierarchyLoading) return;
+    lastScrolledGoalId.current = highlightedGoalId;
+    const found = hierarchy.some((g) => treeContainsGoal(g, highlightedGoalId));
+    if (!found) {
+      setGoalDeepLinkError("That goal is no longer available, or you don't have access to it.");
+      return;
+    }
+    const el = document.getElementById(`goal-${highlightedGoalId}`);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightedGoalId, hierarchyLoading, hierarchy]);
 
   const loadGoals = async () => {
     const requestVersion = ++loadGoalsVersion.current;
@@ -306,6 +375,35 @@ export default function Goals() {
     }
   };
 
+  // Creation-governance workflow: distinct from submit-review/approve/
+  // return above, which only ever govern marking an already-official team
+  // goal completed. These two govern whether a member-proposed team goal
+  // becomes official at all -- see goals.service.ts's approveCreation/
+  // rejectCreation for the backend half.
+  const handleApproveGoalCreation = async (goalId: string) => {
+    setActionGoalId(goalId);
+    try {
+      await api.approveGoalCreation(goalId);
+      await loadGoals();
+    } catch (error: any) {
+      alert(error.response?.data?.error || 'Failed to approve goal');
+    } finally {
+      setActionGoalId(null);
+    }
+  };
+
+  const handleRejectGoalCreation = async (goalId: string) => {
+    setActionGoalId(goalId);
+    try {
+      await api.rejectGoalCreation(goalId);
+      await loadGoals();
+    } catch (error: any) {
+      alert(error.response?.data?.error || 'Failed to reject goal');
+    } finally {
+      setActionGoalId(null);
+    }
+  };
+
   const handleDeleteGoal = async (goalId: string) => {
     if (!confirm('Are you sure you want to delete this goal?')) return;
 
@@ -364,22 +462,47 @@ export default function Goals() {
     const isCompleted = goal.status === 'completed';
     const busy = actionGoalId === goal.goal_id;
 
+    // Creation governance: NULL/undefined creation_status means "not a
+    // pending/rejected proposal" -- covers personal goals, leader-created
+    // team goals, and every legacy team goal created before this feature
+    // existed (all grandfathered as approved, no backfill required). Only
+    // an explicit 'pending_approval'/'rejected' value changes what this
+    // card shows -- distinct from isPendingReview/isCompleted above,
+    // which govern the separate completion-review workflow.
+    const isCreationPending = goal.creation_status === 'pending_approval';
+    const isCreationRejected = goal.creation_status === 'rejected';
+
+    const isHighlighted = highlightedGoalId === goal.goal_id;
+
     return (
       <motion.div
         key={goal.goal_id}
+        id={`goal-${goal.goal_id}`}
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         className={`mb-3 ${level > 0 ? 'ml-8 border-l-2 border-gray-200 pl-4' : ''}`}
       >
-        <div className="pro-card p-4 hover:shadow-md transition-shadow">
+        <div className={`pro-card p-4 hover:shadow-md transition-shadow ${isHighlighted ? 'ring-2 ring-blue-500' : ''}`}>
           <div className="flex items-start justify-between">
             <div className="flex-1">
               <div className="flex items-center gap-2 mb-2">
                 <span className="text-2xl">{typeIcon}</span>
                 <h3 className="text-lg font-semibold text-gray-900">{goal.title}</h3>
-                <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColors[goal.status] || 'bg-gray-100 text-gray-700'}`}>
-                  {goal.status === 'pending_review' ? 'Waiting for Review' : goal.status}
-                </span>
+                {isCreationPending ? (
+                  <span className="px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+                    Pending Team Approval
+                  </span>
+                ) : isCreationRejected ? (
+                  <span className="px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                    Rejected
+                  </span>
+                ) : (
+                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColors[goal.status] || 'bg-gray-100 text-gray-700'}`}>
+                    {goal.status === 'pending_review'
+                      ? (goal.requested_status === 'completed' ? 'Awaiting Completion Approval' : 'Awaiting Approval')
+                      : goal.status}
+                  </span>
+                )}
               </div>
               <p className="text-sm text-gray-600 mb-3">{goal.description}</p>
 
@@ -398,7 +521,7 @@ export default function Goals() {
                       min={0}
                       max={100}
                       defaultValue={goal.progress || 0}
-                      disabled={isCompleted || isPendingReview || busy}
+                      disabled={isCompleted || isPendingReview || isCreationPending || isCreationRejected || busy}
                       aria-label={`Progress for ${goal.title}`}
                       onBlur={(e) => {
                         const val = Number(e.target.value);
@@ -422,8 +545,19 @@ export default function Goals() {
 
                 {isTeamGoal && isPendingReview && goal.submitted_by_name && (
                   <span className="text-purple-700">
-                    📨 {goal.requested_status === 'completed' ? 'Completion requested' : 'Sign-off requested'} by {goal.submitted_by_name}
+                    📨 {goal.requested_status === 'completed' ? 'Completion approval requested' : 'Approval requested'} by {goal.submitted_by_name}
                     {goal.submitted_for_review_at && ` (${new Date(goal.submitted_for_review_at).toLocaleDateString()})`}
+                  </span>
+                )}
+                {isCreationPending && (
+                  <span className="text-purple-700">
+                    📨 Proposed by {goal.created_by_name || 'a former member'} -- awaiting team leader approval
+                  </span>
+                )}
+                {isCreationRejected && (
+                  <span className="text-red-700">
+                    ✕ Rejected by {goal.creation_reviewed_by_name || 'a team leader'}
+                    {goal.creation_reviewed_at && ` (${new Date(goal.creation_reviewed_at).toLocaleDateString()})`}
                   </span>
                 )}
                 {isTeamGoal && isCompleted && goal.approved_by_name && (
@@ -468,7 +602,31 @@ export default function Goals() {
                 </select>
               )}
 
-              {isTeamGoal && !isPendingReview && !isCompleted && (
+              {isTeamGoal && isCreationPending && isLeader && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => handleApproveGoalCreation(goal.goal_id)}
+                    disabled={busy}
+                    className="btn-primary text-sm disabled:opacity-50"
+                  >
+                    {busy ? 'Working...' : 'Approve Goal'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleRejectGoalCreation(goal.goal_id)}
+                    disabled={busy}
+                    className="btn-secondary text-sm disabled:opacity-50"
+                  >
+                    {busy ? 'Working...' : 'Reject Goal'}
+                  </button>
+                </>
+              )}
+              {isTeamGoal && isCreationPending && !isLeader && (
+                <span className="text-sm text-gray-500 italic">Waiting for team leader approval</span>
+              )}
+
+              {isTeamGoal && !isPendingReview && !isCompleted && !isCreationPending && !isCreationRejected && (
                 <>
                   <select
                     value={goal.status}
@@ -484,10 +642,10 @@ export default function Goals() {
                     type="button"
                     onClick={() => handleSubmitForReview(goal.goal_id, false)}
                     disabled={busy}
-                    title="Ask the team leader to sign off on the current progress/stage -- stays In Progress (or the current status) either way"
+                    title="Ask the team leader to approve the current progress/stage -- stays In Progress (or the current status) either way"
                     className="btn-secondary text-sm disabled:opacity-50"
                   >
-                    {busy ? 'Submitting...' : 'Request Sign-off'}
+                    {busy ? 'Submitting...' : 'Request Approval'}
                   </button>
                   <button
                     type="button"
@@ -496,7 +654,7 @@ export default function Goals() {
                     title="Ask the team leader to verify and mark this goal Completed"
                     className="btn-secondary text-sm disabled:opacity-50"
                   >
-                    {busy ? 'Submitting...' : 'Request Completion'}
+                    {busy ? 'Submitting...' : 'Request Completion Approval'}
                   </button>
                 </>
               )}
@@ -509,7 +667,7 @@ export default function Goals() {
                     disabled={busy}
                     className="btn-primary text-sm disabled:opacity-50"
                   >
-                    {busy ? 'Working...' : '✅ Approve'}
+                    {busy ? 'Working...' : (goal.requested_status === 'completed' ? 'Approve Completion' : 'Approve')}
                   </button>
                   <button
                     type="button"
@@ -517,7 +675,7 @@ export default function Goals() {
                     disabled={busy}
                     className="btn-secondary text-sm disabled:opacity-50"
                   >
-                    ↩ Return
+                    Send Back
                   </button>
                 </>
               )}
@@ -628,6 +786,15 @@ export default function Goals() {
           ))}
         </div>
       </div>
+
+      {goalDeepLinkError && (
+        <div role="alert" className="mb-6 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-800 text-sm flex items-center justify-between">
+          <span>{goalDeepLinkError}</span>
+          <button type="button" onClick={() => setGoalDeepLinkError('')} className="text-yellow-700 hover:text-yellow-900 text-xs underline">
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Main content loading/error/empty is driven by the hierarchy fetch
           -- that's the page's actual visible content. The goals-list

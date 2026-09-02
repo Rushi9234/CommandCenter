@@ -11,6 +11,8 @@ import { tasksRepository } from '../projects/tasks.repository';
 import { analyzeBlocker, generateMentorAdvice } from '../ai/ai.service';
 import { NotFoundError, BadRequestError } from '../../common/errors';
 import { privacyService, AI_DISABLED_MESSAGE } from '../privacy/privacy.service';
+import { notificationsService } from '../notifications/notifications.service';
+import { createRealtimeEvent, realtimeProvider } from '../../realtime/inMemoryRealtimeProvider';
 
 async function generateBlockerSuggestions(title: string, description: string, type: string, attempted: string): Promise<string[]> {
   try {
@@ -69,7 +71,7 @@ export class BlockersService {
     const similarBlockers = await findSimilarBlockers(body.teamId, body.title, body.description);
     const suggestedHelpers = await suggestTeamHelpers(body.teamId);
 
-    return blockersRepository.createBlocker({
+    const blocker = await blockersRepository.createBlocker({
       team_id: body.teamId,
       title: body.title,
       description: body.description || '',
@@ -83,6 +85,33 @@ export class BlockersService {
       similar_blockers: similarBlockers,
       suggested_helpers: suggestedHelpers,
     });
+
+    // Blockers have no individually-addressable assignee (confirmed during
+    // this feature's own audit: no `assignee`/`assigned_to` column exists
+    // anywhere) -- the only meaningful recipient model is the team's
+    // leadership/escalation tier, the same owner/admin/manager grouping
+    // suggestTeamHelpers above already uses for the identical purpose.
+    const creator = await usersRepository.getUserById(userId);
+    if (creator) {
+      await notificationsService.notifyTeamMembersByRole(
+        body.teamId,
+        ['owner', 'admin', 'manager'],
+        {
+          category: 'blocker.created',
+          preferenceGroup: 'blocker',
+          title: 'New blocker reported',
+          message: `${creator.full_name} reported a blocker: "${blocker.title}"`,
+          blockerId: blocker.blocker_id,
+        },
+        userId
+      );
+    }
+
+    // Publish realtime event for blocker creation. The event carries only
+    // the teamId so subscribers can refetch the authoritative blocker list.
+    realtimeProvider.publish(createRealtimeEvent('blocker.created', { teamId: body.teamId }));
+
+    return blocker;
   }
 
   // Milestone 5: base gate (requireAccess + canAccessTeam) moved to
@@ -131,22 +160,45 @@ export class BlockersService {
   // scope against -- mirrors projects.service.ts's updateTask, which
   // already fetches the task first for the identical reason.
   async updateBlocker(blockerId: string, updates: any, userId: string) {
+    let blocker = updates.affected_tasks ? await blockersRepository.getBlocker(blockerId) : null;
     if (updates.affected_tasks) {
-      const blocker = await blockersRepository.getBlocker(blockerId);
       if (!blocker) {
         throw new NotFoundError('Blocker not found');
       }
       await this.validateAffectedTasks(blocker.team_id, updates.affected_tasks);
     }
 
-    if (updates.status === 'resolved') {
+    const resolving = updates.status === 'resolved';
+    if (resolving) {
       updates.resolved_by = userId;
       updates.resolved_at = new Date();
     } else if (updates.status) {
       updates.resolved_by = null;
       updates.resolved_at = null;
     }
-    return blockersRepository.updateBlocker(blockerId, updates);
+
+    const updated = await blockersRepository.updateBlocker(blockerId, updates);
+
+    if (resolving && updated) {
+      blocker = blocker || (await blockersRepository.getBlocker(blockerId));
+      if (blocker && blocker.created_by !== userId) {
+        await notificationsService.notifyUser({
+          recipientUserId: blocker.created_by,
+          category: 'blocker.resolved',
+          preferenceGroup: 'blocker',
+          title: 'Your blocker was resolved',
+          message: `"${updated.title}" was marked resolved`,
+          blockerId,
+          teamId: updated.team_id,
+        });
+      }
+
+      // Publish realtime event for blocker resolution. The event carries
+      // the teamId so subscribers can update/refetch the blocker list.
+      realtimeProvider.publish(createRealtimeEvent('blocker.resolved', { teamId: updated.team_id }));
+    }
+
+    return updated;
   }
 
   sendMessage(blockerId: string, userId: string, messageText: string) {

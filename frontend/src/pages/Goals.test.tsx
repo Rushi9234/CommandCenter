@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import Goals from './Goals';
 import * as api from '../services/api';
@@ -54,7 +55,12 @@ const FLAT_GOALS = [
   COMPANY_GOAL.children[0].children[0].children[0],
 ];
 
-const renderGoals = () => render(<Goals />);
+const renderGoals = (initialEntries: string[] = ['/goals']) =>
+  render(
+    <MemoryRouter initialEntries={initialEntries}>
+      <Goals />
+    </MemoryRouter>
+  );
 
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
@@ -76,6 +82,8 @@ beforeEach(() => {
   vi.mocked(api.submitGoalForReview).mockResolvedValue({ data: { data: {} } } as any);
   vi.mocked(api.approveGoal).mockResolvedValue({ data: { data: {} } } as any);
   vi.mocked(api.returnGoal).mockResolvedValue({ data: { data: {} } } as any);
+  vi.mocked(api.approveGoalCreation).mockResolvedValue({ data: { data: {} } } as any);
+  vi.mocked(api.rejectGoalCreation).mockResolvedValue({ data: { data: {} } } as any);
   vi.spyOn(window, 'alert').mockImplementation(() => undefined);
 });
 
@@ -324,62 +332,62 @@ describe('Goals — team goal progress and review workflow', () => {
     // No direct "Completed" option for a team goal's status select.
     expect(screen.queryByRole('option', { name: 'Completed' })).not.toBeInTheDocument();
 
-    expect(screen.getByRole('button', { name: 'Request Sign-off' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Request Completion' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Request Approval' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Request Completion Approval' })).toBeInTheDocument();
   });
 
-  it('requesting sign-off (not completion) submits without requestedStatus set to completed', async () => {
+  it('requesting approval (not completion) submits without requestedStatus set to completed', async () => {
     vi.mocked(api.getGoals).mockResolvedValue({ data: { data: [TEAM_GOAL_ACTIVE_AS_MEMBER] } } as any);
     vi.mocked(api.getGoalHierarchy).mockResolvedValue({ data: { data: [TEAM_GOAL_ACTIVE_AS_MEMBER] } } as any);
     renderGoals();
     await screen.findByText('Ship the feature');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Request Sign-off' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Request Approval' }));
 
     await waitFor(() => expect(api.submitGoalForReview).toHaveBeenCalledWith('goal-team-active', undefined));
     await waitFor(() => expect(api.getGoals).toHaveBeenCalledTimes(2));
   });
 
-  it('requesting completion submits with requestedStatus: completed', async () => {
+  it('requesting completion approval submits with requestedStatus: completed', async () => {
     vi.mocked(api.getGoals).mockResolvedValue({ data: { data: [TEAM_GOAL_ACTIVE_AS_MEMBER] } } as any);
     vi.mocked(api.getGoalHierarchy).mockResolvedValue({ data: { data: [TEAM_GOAL_ACTIVE_AS_MEMBER] } } as any);
     renderGoals();
     await screen.findByText('Ship the feature');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Request Completion' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Request Completion Approval' }));
 
     await waitFor(() => expect(api.submitGoalForReview).toHaveBeenCalledWith('goal-team-active', 'completed'));
   });
 
-  it('a normal member sees a sign-off request labeled distinctly from a completion request, with no Approve/Return controls', async () => {
+  it('a normal member sees an approval request labeled distinctly from a completion request, with no Approve/Send Back controls', async () => {
     vi.mocked(api.getGoals).mockResolvedValue({ data: { data: [TEAM_GOAL_PENDING_SIGNOFF_AS_MEMBER] } } as any);
     vi.mocked(api.getGoalHierarchy).mockResolvedValue({ data: { data: [TEAM_GOAL_PENDING_SIGNOFF_AS_MEMBER] } } as any);
     renderGoals();
     await screen.findByText('Ship the feature');
 
-    expect(screen.getByText('Waiting for Review')).toBeInTheDocument();
-    expect(screen.getByText(/Sign-off requested by Alex Submitter/)).toBeInTheDocument();
-    expect(screen.queryByText(/Completion requested/)).not.toBeInTheDocument();
+    expect(screen.getByText('Awaiting Approval')).toBeInTheDocument();
+    expect(screen.getByText(/Approval requested by Alex Submitter/)).toBeInTheDocument();
+    expect(screen.queryByText(/Completion approval requested/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Approve/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Return/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Send Back/ })).not.toBeInTheDocument();
   });
 
-  it('a normal member sees a completion request labeled distinctly from a sign-off request', async () => {
+  it('a normal member sees a completion request labeled distinctly from a plain approval request', async () => {
     vi.mocked(api.getGoals).mockResolvedValue({ data: { data: [TEAM_GOAL_PENDING_COMPLETION_AS_MEMBER] } } as any);
     vi.mocked(api.getGoalHierarchy).mockResolvedValue({ data: { data: [TEAM_GOAL_PENDING_COMPLETION_AS_MEMBER] } } as any);
     renderGoals();
     await screen.findByText('Ship the feature');
 
-    expect(screen.getByText(/Completion requested by Alex Submitter/)).toBeInTheDocument();
+    expect(screen.getByText(/Completion approval requested by Alex Submitter/)).toBeInTheDocument();
   });
 
-  it('CORRECTIVE FIX: a leader approving a sign-off request keeps the goal in its working status -- it must NOT become Completed', async () => {
+  it('CORRECTIVE FIX: a leader approving a plain approval request keeps the goal in its working status -- it must NOT become Completed', async () => {
     vi.mocked(api.getGoals).mockResolvedValue({ data: { data: [TEAM_GOAL_PENDING_SIGNOFF_AS_LEADER] } } as any);
     vi.mocked(api.getGoalHierarchy).mockResolvedValue({ data: { data: [TEAM_GOAL_PENDING_SIGNOFF_AS_LEADER] } } as any);
     renderGoals();
     await screen.findByText('Ship the feature');
 
-    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
     // Approve takes only the goal id -- the frontend never tells the
     // server "make this completed"; the server derives the outcome from
     // requested_status (goals.service.ts's approveReview), which is the
@@ -404,9 +412,174 @@ describe('Goals — team goal progress and review workflow', () => {
     renderGoals();
     await screen.findByText('Ship the feature');
 
-    fireEvent.click(screen.getByRole('button', { name: /Return/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send Back' }));
     await waitFor(() => expect(api.returnGoal).toHaveBeenCalledWith('goal-team-pending-completion-leader'));
     await waitFor(() => expect(api.getGoals).toHaveBeenCalledTimes(2));
+  });
+
+  // Progress-implies-completion invariant (governance pass, item D): a
+  // plain progress update must never cause the goal to display or become
+  // Completed. The "updating progress..." test above already proves the
+  // payload sent is `{ progress: N }` with no status key at all -- this
+  // test proves the OTHER half: even progress=100 on an in-progress team
+  // goal renders as "Active" (or whatever status it already is), never as
+  // Completed, since isCompleted is derived from goal.status alone.
+  it('a progress update to 100 never displays the goal as Completed -- only status drives that', async () => {
+    const ALMOST_DONE = { ...TEAM_GOAL_ACTIVE_AS_MEMBER, progress: 100, status: 'active' };
+    vi.mocked(api.getGoals).mockResolvedValue({ data: { data: [ALMOST_DONE] } } as any);
+    vi.mocked(api.getGoalHierarchy).mockResolvedValue({ data: { data: [ALMOST_DONE] } } as any);
+    renderGoals();
+    await screen.findByText('Ship the feature');
+
+    expect(screen.getByText('active')).toBeInTheDocument();
+    expect(screen.queryByText('completed')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Goal CREATION governance (Teams + Goals governance pass): deliberately
+// separate from the completion-review workflow above -- these tests cover
+// whether a member-PROPOSED team goal becomes official at all, using the
+// backend's creation_status field (goals.repository.ts/goals.service.ts).
+// NULL/undefined creation_status (every fixture above, and every legacy
+// goal) means "not a pending/rejected proposal" -- already implicitly
+// covered by every test above continuing to pass unmodified.
+describe('Goals — team-goal creation governance', () => {
+  const PENDING_PROPOSAL_AS_MEMBER = {
+    goal_id: 'goal-proposal-1',
+    title: 'New team initiative',
+    description: 'Proposed by a member',
+    goal_type: 'project',
+    status: 'planning',
+    progress: 0,
+    team_id: 'team-a',
+    my_team_role: 'member',
+    creation_status: 'pending_approval',
+    created_by_name: 'Alex Proposer',
+    children: [],
+  };
+
+  const PENDING_PROPOSAL_AS_LEADER = {
+    ...PENDING_PROPOSAL_AS_MEMBER,
+    goal_id: 'goal-proposal-2',
+    my_team_role: 'owner',
+  };
+
+  const REJECTED_PROPOSAL_AS_CREATOR = {
+    ...PENDING_PROPOSAL_AS_MEMBER,
+    goal_id: 'goal-proposal-3',
+    creation_status: 'rejected',
+    creation_reviewed_by_name: 'Carl Leader',
+  };
+
+  it('a non-leader member sees "Pending Team Approval" and no Approve/Reject controls, only a waiting message', async () => {
+    vi.mocked(api.getGoals).mockResolvedValue({ data: { data: [PENDING_PROPOSAL_AS_MEMBER] } } as any);
+    vi.mocked(api.getGoalHierarchy).mockResolvedValue({ data: { data: [PENDING_PROPOSAL_AS_MEMBER] } } as any);
+    renderGoals();
+    await screen.findByText('New team initiative');
+
+    expect(screen.getByText('Pending Team Approval')).toBeInTheDocument();
+    expect(screen.getByText(/Proposed by Alex Proposer/)).toBeInTheDocument();
+    expect(screen.getByText('Waiting for team leader approval')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve Goal' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reject Goal' })).not.toBeInTheDocument();
+  });
+
+  it('a team leader sees Approve Goal / Reject Goal controls for a pending proposal', async () => {
+    vi.mocked(api.getGoals).mockResolvedValue({ data: { data: [PENDING_PROPOSAL_AS_LEADER] } } as any);
+    vi.mocked(api.getGoalHierarchy).mockResolvedValue({ data: { data: [PENDING_PROPOSAL_AS_LEADER] } } as any);
+    renderGoals();
+    await screen.findByText('New team initiative');
+
+    expect(screen.getByRole('button', { name: 'Approve Goal' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reject Goal' })).toBeInTheDocument();
+  });
+
+  it('a leader clicking Approve Goal calls the creation-approval endpoint and refreshes', async () => {
+    vi.mocked(api.getGoals).mockResolvedValue({ data: { data: [PENDING_PROPOSAL_AS_LEADER] } } as any);
+    vi.mocked(api.getGoalHierarchy).mockResolvedValue({ data: { data: [PENDING_PROPOSAL_AS_LEADER] } } as any);
+    renderGoals();
+    await screen.findByText('New team initiative');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve Goal' }));
+
+    await waitFor(() => expect(api.approveGoalCreation).toHaveBeenCalledWith('goal-proposal-2'));
+    await waitFor(() => expect(api.getGoals).toHaveBeenCalledTimes(2));
+  });
+
+  it('a leader clicking Reject Goal calls the creation-rejection endpoint and refreshes', async () => {
+    vi.mocked(api.getGoals).mockResolvedValue({ data: { data: [PENDING_PROPOSAL_AS_LEADER] } } as any);
+    vi.mocked(api.getGoalHierarchy).mockResolvedValue({ data: { data: [PENDING_PROPOSAL_AS_LEADER] } } as any);
+    renderGoals();
+    await screen.findByText('New team initiative');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reject Goal' }));
+
+    await waitFor(() => expect(api.rejectGoalCreation).toHaveBeenCalledWith('goal-proposal-2'));
+    await waitFor(() => expect(api.getGoals).toHaveBeenCalledTimes(2));
+  });
+
+  it('a pending proposal has no progress input, status select, or review controls -- it is not yet an official goal', async () => {
+    vi.mocked(api.getGoals).mockResolvedValue({ data: { data: [PENDING_PROPOSAL_AS_LEADER] } } as any);
+    vi.mocked(api.getGoalHierarchy).mockResolvedValue({ data: { data: [PENDING_PROPOSAL_AS_LEADER] } } as any);
+    renderGoals();
+    await screen.findByText('New team initiative');
+
+    expect(screen.getByLabelText('Progress for New team initiative')).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Request Approval' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Request Completion Approval' })).not.toBeInTheDocument();
+  });
+
+  it('a rejected proposal shows "Rejected" with who rejected it, and no creation-approval controls', async () => {
+    vi.mocked(api.getGoals).mockResolvedValue({ data: { data: [REJECTED_PROPOSAL_AS_CREATOR] } } as any);
+    vi.mocked(api.getGoalHierarchy).mockResolvedValue({ data: { data: [REJECTED_PROPOSAL_AS_CREATOR] } } as any);
+    renderGoals();
+    await screen.findByText('New team initiative');
+
+    expect(screen.getByText('Rejected')).toBeInTheDocument();
+    expect(screen.getByText(/Rejected by Carl Leader/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve Goal' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reject Goal' })).not.toBeInTheDocument();
+  });
+
+  it('a rejected proposal can still be deleted by its creator', async () => {
+    vi.mocked(api.getGoals).mockResolvedValue({ data: { data: [REJECTED_PROPOSAL_AS_CREATOR] } } as any);
+    vi.mocked(api.getGoalHierarchy).mockResolvedValue({ data: { data: [REJECTED_PROPOSAL_AS_CREATOR] } } as any);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderGoals();
+    await screen.findByText('New team initiative');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(api.deleteGoal).toHaveBeenCalledWith('goal-proposal-3'));
+  });
+
+  // Legacy compatibility (item I): a team goal created before this feature
+  // existed has no creation_status key at all (not even null on the
+  // fixture) -- must behave exactly as a normal, already-approved team
+  // goal, with zero special-casing required.
+  it('a legacy team goal with no creation_status field behaves as a normal approved team goal', async () => {
+    const LEGACY_TEAM_GOAL = {
+      goal_id: 'goal-legacy',
+      title: 'Pre-existing team goal',
+      description: 'Created before this feature existed',
+      goal_type: 'project',
+      status: 'active',
+      progress: 40,
+      team_id: 'team-a',
+      my_team_role: 'member',
+      children: [],
+      // no creation_status key at all -- matches a real pre-migration row
+    };
+    vi.mocked(api.getGoals).mockResolvedValue({ data: { data: [LEGACY_TEAM_GOAL] } } as any);
+    vi.mocked(api.getGoalHierarchy).mockResolvedValue({ data: { data: [LEGACY_TEAM_GOAL] } } as any);
+    renderGoals();
+    await screen.findByText('Pre-existing team goal');
+
+    expect(screen.queryByText('Pending Team Approval')).not.toBeInTheDocument();
+    expect(screen.queryByText('Rejected')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Progress for Pre-existing team goal')).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Request Approval' })).toBeInTheDocument();
   });
 });
 
@@ -642,7 +815,7 @@ describe('Goals — creator and timestamp visibility', () => {
     // Locale-agnostic: don't assert exact digit order (day/month vs
     // month/day depends on the test environment's default locale), just
     // that a name and a parenthesized date both render.
-    expect(await screen.findByText(/Sign-off requested by Alex Submitter \(.+\)/)).toBeInTheDocument();
+    expect(await screen.findByText(/Approval requested by Alex Submitter \(.+\)/)).toBeInTheDocument();
   });
 });
 
@@ -739,5 +912,28 @@ describe('Goals — create-form accessibility associations', () => {
     expect(screen.getByLabelText('Parent goal (optional)')).toBeInTheDocument();
     expect(screen.getByLabelText('Team (optional)')).toBeInTheDocument();
     expect(screen.getByLabelText('Target date (optional)')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Notification deep-link destination: ?teamId=&goalId= selects the team
+// and scrolls to/highlights the specific goal once the hierarchy has
+// actually loaded, forcing the type filter to 'all' so it can never hide
+// the target.
+describe('Goals — notification deep-link destination', () => {
+  it('?teamId=team-a&goalId=goal-department selects the team and highlights the goal', async () => {
+    renderGoals(['/goals?teamId=team-a&goalId=goal-department']);
+
+    await screen.findByText('Department objective');
+    const wrapper = document.getElementById('goal-goal-department');
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.querySelector('.ring-2')).not.toBeNull();
+  });
+
+  it('a deep-linked goalId not present in the loaded hierarchy shows a safe fallback message, not a crash', async () => {
+    renderGoals(['/goals?teamId=team-a&goalId=goal-does-not-exist']);
+
+    await screen.findByText('Company direction');
+    expect(await screen.findByText(/no longer available/i)).toBeInTheDocument();
   });
 });

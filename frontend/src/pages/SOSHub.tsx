@@ -1,10 +1,24 @@
 import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../hooks/useAuth';
+import { useRealtime, type RealtimeEvent } from '../hooks/useRealtime';
 import * as api from '../services/api';
 
 export default function SOSHub() {
   const { user } = useAuth();
+  // Notification deep-linking: ?teamId=&blockerId= selects the team
+  // (overriding the default "first team" auto-select) and selects the
+  // specific blocker once that team's blockers have actually loaded.
+  // Tracked by last-processed value (not a one-shot boolean) so a second,
+  // different notification click while already on /help -- same route,
+  // no remount -- is still processed.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const lastProcessedTeamDeepLink = useRef<string | null>(null);
+  const blockerSelectConsumed = useRef<string | null>(null);
+  const [highlightedBlockerId, setHighlightedBlockerId] = useState<string | null>(null);
+  const [teamDeepLinkError, setTeamDeepLinkError] = useState('');
+  const [blockerDeepLinkError, setBlockerDeepLinkError] = useState('');
   const [teams, setTeams] = useState<any[]>([]);
   const [selectedTeam, setSelectedTeam] = useState<any>(null);
   const [blockers, setBlockers] = useState<any[]>([]);
@@ -48,6 +62,37 @@ export default function SOSHub() {
   useEffect(() => {
     loadTeams();
   }, []);
+
+  // Notification deep-link: reacts to `searchParams` itself, not just
+  // mount -- clicking a Blockers notification while already on /help
+  // (same route, only the query string changes) does not remount this
+  // component. Waits for `teams` to actually be populated (covers the
+  // fresh-page-load case where the param is present before getMyTeams()
+  // resolves). highlightedBlockerId set here is picked up by
+  // loadBlockers' own success handler once that team's blockers actually
+  // load (see below) -- not a separate effect racing blockersLoading's
+  // render-delayed state.
+  useEffect(() => {
+    const teamId = searchParams.get('teamId');
+    if (!teamId || teamId === lastProcessedTeamDeepLink.current || teams.length === 0) return;
+    lastProcessedTeamDeepLink.current = teamId;
+    const target = teams.find((t: any) => t.team_id === teamId);
+    if (target) {
+      setTeamDeepLinkError('');
+      setSelectedTeam(target);
+      setSelectedBlocker(null);
+      const blockerId = searchParams.get('blockerId');
+      if (blockerId) {
+        setBlockerDeepLinkError('');
+        setHighlightedBlockerId(blockerId);
+      }
+    } else {
+      setTeamDeepLinkError("You no longer have access to that team, or it doesn't exist.");
+      if (teams.length > 0) setSelectedTeam(teams[0]);
+    }
+    setSearchParams({}, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, teams]);
 
   useEffect(() => {
     if (selectedTeam) {
@@ -94,13 +139,28 @@ export default function SOSHub() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
 
+  useRealtime((event: RealtimeEvent) => {
+    // Blocker realtime events: refresh the currently-selected team's
+    // blockers. The event carries only teamId; the frontend maintains
+    // blocker/message state locally and refetches on demand to get
+    // authoritative updates.
+    if (event.type !== 'blocker.created' && event.type !== 'blocker.resolved') return;
+    if (!selectedTeamRef.current) return;
+
+    const requestVersion = ++blockersRequestVersion.current;
+    void loadBlockers(selectedTeamRef.current.team_id, requestVersion, true);
+  });
+
   const loadTeams = async () => {
     setTeamsLoading(true);
     setTeamsError('');
     try {
       const response = await api.getMyTeams();
       setTeams(response.data.data);
-      if (response.data.data.length > 0) {
+      // Default-select is skipped when a teamId deep link is currently
+      // pending -- the dedicated deep-link effect below owns selection in
+      // that case.
+      if (response.data.data.length > 0 && !searchParams.get('teamId')) {
         setSelectedTeam(response.data.data[0]);
       }
     } catch (error) {
@@ -127,6 +187,24 @@ export default function SOSHub() {
         blockersRequestVersion.current === requestVersion
       ) {
         setBlockers(response.data.data);
+
+        // Deep-linked blocker: consumed inline with the fetch that
+        // actually populates `blockers` for the correct team -- not a
+        // separate effect watching blockersLoading, since that state
+        // flips true/false across renders in a way a reactive effect can
+        // observe out of step with when `blockers` itself genuinely
+        // reflects a fresh, correct-team fetch. Keyed on the blocker ID
+        // itself (not a one-shot boolean) so a second, different
+        // deep-linked blocker is still selected.
+        if (highlightedBlockerId && highlightedBlockerId !== blockerSelectConsumed.current) {
+          blockerSelectConsumed.current = highlightedBlockerId;
+          const target = response.data.data.find((b: any) => b.blocker_id === highlightedBlockerId);
+          if (target) {
+            setSelectedBlocker(target);
+          } else {
+            setBlockerDeepLinkError("That blocker is no longer available, or you don't have access to it.");
+          }
+        }
       }
     } catch (error) {
       console.error('Failed to load blockers:', error);
@@ -262,6 +340,18 @@ export default function SOSHub() {
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-8">
+        {(teamDeepLinkError || blockerDeepLinkError) && (
+          <div role="alert" className="mb-6 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-800 text-sm flex items-center justify-between">
+            <span>{teamDeepLinkError || blockerDeepLinkError}</span>
+            <button
+              type="button"
+              onClick={() => { setTeamDeepLinkError(''); setBlockerDeepLinkError(''); }}
+              className="text-yellow-700 hover:text-yellow-900 text-xs underline"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           <div className="lg:col-span-1">
             <div className="pro-card p-4 mb-4">

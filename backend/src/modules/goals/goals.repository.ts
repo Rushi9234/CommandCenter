@@ -12,6 +12,11 @@ const GOAL_UPDATABLE_COLUMNS = [
   // Only goals.service.ts's submitForReview/approveCompletion/returnGoal
   // pass these, after their own dedicated authorization checks.
   'submitted_for_review_by', 'submitted_for_review_at', 'approved_by', 'approved_at', 'requested_status',
+  // Creation-governance columns -- same treatment: never taken directly
+  // from a request body (excluded from both createGoalSchema and
+  // updateGoalSchema). Only goals.service.ts's createGoal/approveCreation/
+  // rejectCreation pass these.
+  'creation_status', 'creation_reviewed_by', 'creation_reviewed_at',
 ];
 
 // Moved verbatim from the old databaseService.ts (goal methods).
@@ -26,13 +31,14 @@ export class GoalsRepository {
     team_id?: string;
     parent_goal_id?: string;
     target_date?: Date;
+    creation_status?: string;
   }) {
     const text = `
       INSERT INTO goals (
         title, description, goal_type, status, progress,
-        created_by, team_id, parent_goal_id, target_date
+        created_by, team_id, parent_goal_id, target_date, creation_status
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
     `;
 
@@ -46,6 +52,7 @@ export class GoalsRepository {
       goalData.team_id || null,
       goalData.parent_goal_id || null,
       goalData.target_date || null,
+      goalData.creation_status || null,
     ];
 
     return queryOne<any>(text, params);
@@ -69,12 +76,14 @@ export class GoalsRepository {
     const text = `
       SELECT g.*, tm.role AS my_team_role,
         cu.full_name AS created_by_name,
-        su.full_name AS submitted_by_name, au.full_name AS approved_by_name
+        su.full_name AS submitted_by_name, au.full_name AS approved_by_name,
+        cru.full_name AS creation_reviewed_by_name
       FROM goals g
       LEFT JOIN team_members tm ON tm.team_id = g.team_id AND tm.user_id = $1
       LEFT JOIN users cu ON cu.user_id = g.created_by
       LEFT JOIN users su ON su.user_id = g.submitted_for_review_by
       LEFT JOIN users au ON au.user_id = g.approved_by
+      LEFT JOIN users cru ON cru.user_id = g.creation_reviewed_by
       WHERE g.created_by = $1 OR g.team_id IN (
         SELECT team_id FROM team_members WHERE user_id = $1
       )
@@ -87,12 +96,14 @@ export class GoalsRepository {
     const text = `
       SELECT g.*, tm.role AS my_team_role,
         cu.full_name AS created_by_name,
-        su.full_name AS submitted_by_name, au.full_name AS approved_by_name
+        su.full_name AS submitted_by_name, au.full_name AS approved_by_name,
+        cru.full_name AS creation_reviewed_by_name
       FROM goals g
       LEFT JOIN team_members tm ON tm.team_id = g.team_id AND tm.user_id = $2
       LEFT JOIN users cu ON cu.user_id = g.created_by
       LEFT JOIN users su ON su.user_id = g.submitted_for_review_by
       LEFT JOIN users au ON au.user_id = g.approved_by
+      LEFT JOIN users cru ON cru.user_id = g.creation_reviewed_by
       WHERE g.team_id = $1
       ORDER BY g.created_at DESC
     `;
@@ -264,6 +275,18 @@ export class GoalsRepository {
       WHERE g.goal_id = $1 AND tm.user_id = $2 AND tm.role IN ('owner', 'admin')
     `;
     const result = await queryOne(text, [goalId, userId]);
+    return result !== null;
+  }
+
+  // Creation-governance: same leadership tier as isTeamLeader (owner/admin)
+  // but checked against a teamId directly, since this runs at CREATE time --
+  // the goal doesn't exist yet, so there is no goal_id to join through.
+  async isTeamLeaderOfTeam(userId: string, teamId: string): Promise<boolean> {
+    const text = `
+      SELECT 1 FROM team_members
+      WHERE team_id = $1 AND user_id = $2 AND role IN ('owner', 'admin')
+    `;
+    const result = await queryOne(text, [teamId, userId]);
     return result !== null;
   }
 }

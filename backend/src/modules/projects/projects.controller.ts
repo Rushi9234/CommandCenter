@@ -54,7 +54,7 @@ export const getProjectTasks = async (req: AuthRequest, res: Response) => {
 };
 
 export const updateTask = async (req: AuthRequest, res: Response) => {
-  const task = await projectsService.updateTask(req.params.taskId, req.body);
+  const task = await projectsService.updateTask(req.params.taskId, req.body, req.user!.userId);
   ok(res, task, 'Task updated successfully');
 };
 

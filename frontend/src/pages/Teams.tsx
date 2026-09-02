@@ -1,12 +1,20 @@
 import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import * as api from '../services/api';
 import { useAuth } from '../hooks/useAuth';
 import { useRealtime } from '../hooks/useRealtime';
 import { RealtimeEvent } from '../services/realtime';
+import { buildTeamTree, hasRealParent, TeamTreeNode } from '../utils/teamHierarchy';
 
 export default function Teams() {
   const { user } = useAuth();
+  // Notification deep-linking: ?teamId=... selects that team, overriding
+  // the default "first team" -- see the dedicated effect below (reacts to
+  // searchParams directly, not just mount, so it also works when the user
+  // is already on /teams and clicks another Teams notification).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [deepLinkError, setDeepLinkError] = useState('');
   const [teams, setTeams] = useState<any[]>([]);
   const [allTeams, setAllTeams] = useState<any[]>([]);
   const [invites, setInvites] = useState<any[]>([]);
@@ -102,6 +110,174 @@ export default function Teams() {
   // blockersRequestVersion/messagesRequestVersion.
   const selectTeamRequestVersion = useRef(0);
 
+  // Milestone 52: join-request mutation race prevention. When the user
+  // clicks Approve/Reject, the click handler calls the scoped refetch.
+  // Simultaneously, the backend publishes an SSE event that also triggers
+  // the same refetch. Both use the shared selectTeamRequestVersion token,
+  // and the SSE-triggered call can increment it BEFORE the click handler's
+  // refetch completes, causing the click handler's correct response to be
+  // discarded (version mismatch). Setting these flags prevents the SSE
+  // handler from starting its refetch while the corresponding click
+  // handler's refetch is in flight. The click handler sets the flag BEFORE
+  // the API call and clears it in finally (after refetch completes); the
+  // SSE handler checks the flag and skips its refetch if it's set.
+  const approvingJoinRequestRef = useRef(false);
+  const rejectingJoinRequestRef = useRef(false);
+
+  // Sidebar + Discover Teams hierarchy: `teams` (getMyTeams) and the
+  // Discover lists (getAllTeams/searchTeams) all already carry each
+  // team's own parent_team_id -- no new schema, no invented data, no
+  // backend change (confirmed by reading both repository queries: both
+  // are SELECT * against `teams`). Most parents are themselves already
+  // present in whichever list is being shown, so their name is available
+  // locally with zero extra requests. The one case that needs an extra
+  // read is a team whose PARENT is not in that same list (not a member,
+  // for the sidebar; not itself public/discoverable or search-matched,
+  // for Discover) -- for that case only, getTeamPreview (already used for
+  // this exact purpose on the detail pane, membership/discoverability-
+  // free, safe fields only) resolves the name, batched and deduplicated
+  // by unique missing parent ID so N discover rows sharing one hidden
+  // parent cost exactly one request, not N. The Discover portion of this
+  // scan is gated on the modal actually being open, so a user who never
+  // opens Discover Teams never triggers it. Purely a display cache; never
+  // used for any authorization decision.
+  const [parentNamesById, setParentNamesById] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const discoverList = showDiscoverModal ? (searchQuery ? searchResults : allTeams) : [];
+    const combined = [...teams, ...discoverList];
+    const localIds = new Set(combined.map((t) => t.team_id));
+    const missing = Array.from(
+      new Set(
+        combined
+          .filter((t) => t.parent_team_id && !localIds.has(t.parent_team_id) && !parentNamesById[t.parent_team_id])
+          .map((t) => t.parent_team_id)
+      )
+    );
+    if (missing.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const results = await Promise.allSettled(missing.map((id) => api.getTeamPreview(id)));
+      if (cancelled) return;
+      setParentNamesById((prev) => {
+        const next = { ...prev };
+        results.forEach((r, i) => {
+          if (r.status === 'fulfilled') {
+            next[missing[i]] = r.value.data.data.team_name;
+          }
+        });
+        return next;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [teams, showDiscoverModal, allTeams, searchResults, searchQuery]);
+
+  // Groups `teams` (flat, from getMyTeams) into the sidebar's visual
+  // hierarchy using buildTeamTree() -- the SAME recursive, cycle-safe,
+  // order-independent utility Discover Teams uses (no second competing
+  // hierarchy algorithm). Only bucketing into visual groups is
+  // sidebar-specific:
+  //  - a root with descendants becomes its own group, headed by itself
+  //    (still directly selectable), with every descendant at any depth
+  //    rendered recursively beneath it via renderSidebarNode.
+  //  - a childless root with no real parent is a genuine independent
+  //    team -- grouped under the shared "Independent Team" heading.
+  //  - a root that DOES have a real parent_team_id but whose parent isn't
+  //    in the user's own team list (buildTeamTree correctly still surfaces
+  //    it as a root rather than dropping it) is an orphan: never mislabeled
+  //    as independent. Grouped by its resolved parent name (parentNamesById,
+  //    same batched/deduplicated lookup already used elsewhere in this
+  //    file), falling back to a generic label while that single extra
+  //    fetch is in flight or failed. Multiple orphans sharing the same
+  //    missing parent share one group.
+  const resolveSidebarParentName = (parentId: string): string | null => {
+    const local = teams.find((t) => t.team_id === parentId);
+    if (local) return local.team_name;
+    return parentNamesById[parentId] || null;
+  };
+
+  const buildSidebarGroups = () => {
+    const tree = buildTeamTree(teams);
+    const groups: { key: string; heading: string; headingTeam: any | null; nodes: TeamTreeNode[] }[] = [];
+    const independent: TeamTreeNode[] = [];
+
+    for (const root of tree) {
+      if (hasRealParent(root.team)) {
+        const parentId = root.team.parent_team_id;
+        const key = `orphan-${parentId}`;
+        let group = groups.find((g) => g.key === key);
+        if (!group) {
+          group = { key, heading: resolveSidebarParentName(parentId) || 'Sub-team', headingTeam: null, nodes: [] };
+          groups.push(group);
+        }
+        group.nodes.push(root);
+      } else if (root.children.length > 0) {
+        groups.push({ key: root.team.team_id, heading: root.team.team_name, headingTeam: root.team, nodes: root.children });
+      } else {
+        independent.push(root);
+      }
+    }
+
+    if (independent.length > 0) {
+      groups.push({ key: 'independent', heading: 'Independent Team', headingTeam: null, nodes: independent });
+    }
+
+    return groups;
+  };
+
+  // Recursively renders one sidebar node (and its descendants, unlimited
+  // depth) -- every team, at any depth, is independently selectable via
+  // selectTeam(team) using that exact node's own team_id, never a parent
+  // substitution. depth>0 nodes get a "└──" connector, growing indentation
+  // per level, and (only when they genuinely have a parent_team_id -- never
+  // for the childless "Independent Team" bucket, which passes depth 0) a
+  // "Sub-team of X" caption resolved from the node's own immediate parent
+  // (so a grandchild correctly says "Sub-team of <its direct parent>", not
+  // the top-level ancestor). indexRef is a shared mutable counter across
+  // the whole sidebar tree so the existing stagger-in animation delay still
+  // increases monotonically, matching pre-hierarchy behavior.
+  const renderSidebarNode = (node: TeamTreeNode, depth: number, indexRef: { current: number }) => {
+    const { team, children } = node;
+    const parentName = hasRealParent(team) ? resolveSidebarParentName(team.parent_team_id) : null;
+    return (
+      <div key={team.team_id}>
+        <motion.button
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: indexRef.current++ * 0.05 }}
+          onClick={() => selectTeam(team)}
+          style={depth > 0 ? { marginLeft: `${depth}rem` } : undefined}
+          aria-label={`Select ${team.team_name}`}
+          className={`w-full text-left p-3 rounded-lg transition-all ${
+            selectedTeam?.team_id === team.team_id
+              ? 'bg-blue-50 border-2 border-blue-500 shadow-sm'
+              : 'hover:bg-gray-50 border-2 border-transparent'
+          }`}
+        >
+          <div className="font-medium text-gray-900 flex items-center gap-1">
+            {depth > 0 && <span className="text-gray-400" aria-hidden="true">└──</span>}
+            <span>{team.team_name}</span>
+          </div>
+          {depth > 0 && hasRealParent(team) && (
+            <div className="text-xs text-gray-400 mt-0.5">
+              {parentName ? `Sub-team of ${parentName}` : 'Sub-team'}
+            </div>
+          )}
+          <div className="text-xs text-gray-500 mt-1">
+            {new Date(team.created_at).toLocaleDateString()}
+          </div>
+        </motion.button>
+        {children.length > 0 && (
+          <div role="group" aria-label={`Sub-teams of ${team.team_name}`} className="space-y-2 mt-2">
+            {children.map((child) => renderSidebarNode(child, depth + 1, indexRef))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   useEffect(() => {
     // Step 7: getAllTeams' result only feeds the Discover Teams modal, not
     // the main page -- it doesn't belong in the batch that gates
@@ -125,15 +301,46 @@ export default function Teams() {
     }
   };
 
+  // Realtime nudge for the currently-selected team must reuse the exact
+  // same scoped refetch helpers the direct mutation handlers use
+  // (handleApproveJoinRequest/handleRejectJoinRequest below), not the full
+  // selectTeam() cascade. selectTeam() synchronously clears teamMembers/
+  // joinRequests to [] before refetching everything -- fine for an actual
+  // team switch, but wrong here: the approving/rejecting leader is also a
+  // subscriber to their own team's realtime channel (events are matched by
+  // teamId, not just recipient), so their own action echoes back to their
+  // own open connection nearly concurrently with their own mutation's
+  // already-correct, already-awaited scoped refetch. Both paths share the
+  // same selectTeamRequestVersion ref; with selectTeam()'s heavier,
+  // sequential fetch chain racing the lean scoped refetch, resolution
+  // order isn't deterministic, so the version guard could discard the
+  // correct scoped response or leave the UI blanked mid-cascade. Routing
+  // the realtime nudge through the same scoped helpers instead means both
+  // triggers cooperate on one non-destructive, version-guarded update
+  // path -- no clearing, no race, only ever a final consistent state.
   useRealtime((event: RealtimeEvent) => {
     if (!event.type.startsWith('join_request.')) return;
+
+    // Milestone 52: Skip the SSE-triggered refetch if the click handler is
+    // currently inflight (approvingJoinRequestRef.current or
+    // rejectingJoinRequestRef.current is true). The click handler will do
+    // its own refetch after the mutation succeeds, and both using the same
+    // version token would cause a race. This check lets the click handler's
+    // refetch complete uncontested, while still allowing the SSE-triggered
+    // refetch for OTHER users' actions (when both flags are false).
+    if (event.type === 'join_request.approved' && approvingJoinRequestRef.current) return;
+    if (event.type === 'join_request.rejected' && rejectingJoinRequestRef.current) return;
 
     void loadMyJoinRequests();
     if (event.type === 'join_request.approved') {
       void loadTeams();
     }
     if (selectedTeam && event.teamId === selectedTeam.team_id) {
-      void selectTeam(selectedTeam);
+      if (event.type === 'join_request.approved') {
+        void refetchTeamMembersAndJoinRequests(selectedTeam.team_id);
+      } else {
+        void refetchJoinRequests(selectedTeam.team_id);
+      }
     }
   });
 
@@ -141,13 +348,43 @@ export default function Teams() {
     try {
       const response = await api.getMyTeams();
       setTeams(response.data.data);
-      if (response.data.data.length > 0 && !selectedTeam) {
+      // Default-select-first is skipped when a teamId deep link is
+      // currently pending -- the dedicated deep-link effect below (which
+      // reacts to `teams` finishing loading too) owns selection in that
+      // case, so this doesn't race it and briefly select the wrong team.
+      if (response.data.data.length > 0 && !selectedTeam && !searchParams.get('teamId')) {
         selectTeam(response.data.data[0]);
       }
     } catch (error) {
       console.error('Failed to load teams:', error);
     }
   };
+
+  // Notification deep-link: reacts to `searchParams` itself, not just
+  // mount -- a click on a Teams notification while the user is ALREADY on
+  // /teams does not remount this component (same route, only the query
+  // string changes), so a mount-only effect would never see it. Also
+  // waits for `teams` to actually be populated, covering the fresh-
+  // page-load case where the param is present before getMyTeams()
+  // resolves. lastProcessedTeamId prevents reprocessing the exact same
+  // value while the param-clearing setSearchParams update is still
+  // in-flight.
+  const lastProcessedTeamId = useRef<string | null>(null);
+  useEffect(() => {
+    const teamId = searchParams.get('teamId');
+    if (!teamId || teamId === lastProcessedTeamId.current || teams.length === 0) return;
+    lastProcessedTeamId.current = teamId;
+    const target = teams.find((t: any) => t.team_id === teamId);
+    if (target) {
+      setDeepLinkError('');
+      selectTeam(target);
+    } else {
+      setDeepLinkError("You no longer have access to that team, or it doesn't exist.");
+      selectTeam(teams[0]);
+    }
+    setSearchParams({}, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, teams]);
 
   const loadAllTeams = async () => {
     setAllTeamsLoading(true);
@@ -385,21 +622,33 @@ export default function Teams() {
     }
   };
 
+  // Discover Teams search had no stale-response protection at all --
+  // found during this task's own audit, not a pre-existing documented
+  // gap. The 300ms debounce (below) makes back-to-back keystrokes rare in
+  // practice, but nothing prevented an OLDER query's response from
+  // resolving after a NEWER one's and overwriting it (real network
+  // jitter, not just rapid typing). Same version-token pattern already
+  // proven everywhere else in this file (selectTeamRequestVersion).
+  const searchRequestVersion = useRef(0);
+
   const handleSearch = async () => {
+    const requestVersion = ++searchRequestVersion.current;
     if (!searchQuery.trim()) {
-      setSearchResults([]);
+      if (searchRequestVersion.current === requestVersion) setSearchResults([]);
       return;
     }
     setSearchLoading(true);
     setDiscoverError('');
     try {
       const response = await api.searchTeams(searchQuery);
+      if (searchRequestVersion.current !== requestVersion) return;
       setSearchResults(response.data.data);
     } catch (error) {
+      if (searchRequestVersion.current !== requestVersion) return;
       console.error('Search failed:', error);
       setDiscoverError('Failed to search teams. Please try again.');
     } finally {
-      setSearchLoading(false);
+      if (searchRequestVersion.current === requestVersion) setSearchLoading(false);
     }
   };
 
@@ -501,20 +750,26 @@ export default function Teams() {
   };
 
   const handleApproveJoinRequest = async (requestId: string) => {
+    approvingJoinRequestRef.current = true;
     try {
       await api.approveJoinRequest(requestId);
       if (selectedTeam) await refetchTeamMembersAndJoinRequests(selectedTeam.team_id);
     } catch (error: any) {
       alert(error.response?.data?.error || 'Failed to approve request');
+    } finally {
+      approvingJoinRequestRef.current = false;
     }
   };
 
   const handleRejectJoinRequest = async (requestId: string) => {
+    rejectingJoinRequestRef.current = true;
     try {
       await api.rejectJoinRequest(requestId);
       if (selectedTeam) await refetchJoinRequests(selectedTeam.team_id);
     } catch (error: any) {
       alert(error.response?.data?.error || 'Failed to reject request');
+    } finally {
+      rejectingJoinRequestRef.current = false;
     }
   };
 
@@ -585,6 +840,84 @@ export default function Teams() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
+  // Discover Teams hierarchy card, rendered recursively (unlimited depth,
+  // not just one level) by buildTeamTree's node structure. Every node --
+  // parent or child, any depth -- gets its own uniform "Request to Join"
+  // button and always targets THAT exact node's own team_id (never a
+  // parent substitution): unlike the sidebar, Discover Teams has no
+  // "select to view" concept, the user isn't necessarily a member of
+  // ANY of these teams, so every row must be independently actionable.
+  // Indentation is reinforced with a "└──" text marker and an explicit
+  // "Sub-team of X" caption -- never relying on indentation/color alone.
+  const renderDiscoverNode = (
+    node: TeamTreeNode,
+    depth: number,
+    resolveParentName: (parentId: string) => string | null
+  ) => {
+    const { team, children } = node;
+    const parentName = hasRealParent(team) ? resolveParentName(team.parent_team_id) : null;
+    return (
+      <div key={team.team_id} className={depth > 0 ? 'ml-6 mt-3' : ''}>
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="p-4 pro-card-hover"
+        >
+          <div className="flex items-start justify-between">
+            <div className="flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                {depth > 0 && <span className="text-gray-400" aria-hidden="true">└──</span>}
+                <h3 className="font-semibold text-gray-900">{team.team_name}</h3>
+                {team.team_type && team.team_type !== 'main' && (
+                  <span className="badge badge-blue text-xs">
+                    {contextTypeEmoji(team.team_type)} {contextTypeLabel(team.team_type)}
+                  </span>
+                )}
+              </div>
+              <p className="text-sm text-gray-600 mt-1">{team.description || 'No description'}</p>
+              {/* Real hierarchy only -- never invented. A team with no
+                  parent_team_id at all shows no caption here (it's
+                  grouped under "Independent Teams" instead, or is itself
+                  a hierarchy root with children below). A team WITH a
+                  real parent always shows this caption, whether or not
+                  that parent happens to be visible in this same result
+                  set -- "Parent team unavailable" is an honest fallback,
+                  never a guessed/invented name. */}
+              {hasRealParent(team) && (
+                <p className="text-xs text-gray-400 mt-1">
+                  {parentName ? `Sub-team of ${parentName}` : 'Parent team unavailable'}
+                </p>
+              )}
+              <div className="flex items-center gap-3 mt-2">
+                {team.owner && (
+                  <span className="text-xs text-gray-500">
+                    👤 Led by {team.owner.full_name}
+                  </span>
+                )}
+                <span className="text-xs text-gray-500">
+                  {team.member_count || 0} members
+                </span>
+                {team.is_public && <span className="badge badge-green text-xs">Public</span>}
+              </div>
+            </div>
+            <button
+              onClick={() => handleJoinTeam(team.team_id)}
+              className="btn-primary text-sm"
+              aria-label={`Request to join ${team.team_name}`}
+            >
+              Request to Join
+            </button>
+          </div>
+        </motion.div>
+        {children.length > 0 && (
+          <div role="group" aria-label={`Sub-teams of ${team.team_name}`}>
+            {children.map((child) => renderDiscoverNode(child, depth + 1, resolveParentName))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -609,6 +942,17 @@ export default function Teams() {
           </div>
         </div>
       </div>
+
+      {deepLinkError && (
+        <div role="alert" className="max-w-7xl mx-auto px-6 pt-4">
+          <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-800 text-sm flex items-center justify-between">
+            <span>{deepLinkError}</span>
+            <button type="button" onClick={() => setDeepLinkError('')} className="text-yellow-700 hover:text-yellow-900 text-xs underline">
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Pending Invites Banner */}
       {invites.length > 0 && (
@@ -688,27 +1032,43 @@ export default function Teams() {
           <div className="lg:col-span-1">
             <div className="pro-card p-4">
               <h2 className="text-sm font-semibold text-gray-900 mb-3">Your Teams ({teams.length})</h2>
-              <div className="space-y-2">
+              <div className="space-y-4">
                 <AnimatePresence>
-                  {teams.map((team, index) => (
-                    <motion.button
-                      key={team.team_id}
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: index * 0.05 }}
-                      onClick={() => selectTeam(team)}
-                      className={`w-full text-left p-3 rounded-lg transition-all ${
-                        selectedTeam?.team_id === team.team_id
-                          ? 'bg-blue-50 border-2 border-blue-500 shadow-sm'
-                          : 'hover:bg-gray-50 border-2 border-transparent'
-                      }`}
-                    >
-                      <div className="font-medium text-gray-900">{team.team_name}</div>
-                      <div className="text-xs text-gray-500 mt-1">
-                        {new Date(team.created_at).toLocaleDateString()}
+                  {(() => {
+                    const indexRef = { current: 0 };
+                    return buildSidebarGroups().map((group) => (
+                      <div key={group.key} data-testid="sidebar-team-group">
+                        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1 px-1">
+                          {group.heading}
+                        </div>
+                        <div className="space-y-2">
+                          {group.headingTeam && (
+                            <motion.button
+                              key={group.headingTeam.team_id}
+                              initial={{ opacity: 0, x: -20 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              transition={{ delay: indexRef.current++ * 0.05 }}
+                              onClick={() => selectTeam(group.headingTeam)}
+                              aria-label={`Select ${group.headingTeam.team_name}`}
+                              className={`w-full text-left p-3 rounded-lg transition-all ${
+                                selectedTeam?.team_id === group.headingTeam.team_id
+                                  ? 'bg-blue-50 border-2 border-blue-500 shadow-sm'
+                                  : 'hover:bg-gray-50 border-2 border-transparent'
+                              }`}
+                            >
+                              <div className="font-medium text-gray-900">{group.headingTeam.team_name}</div>
+                              <div className="text-xs text-gray-500 mt-1">
+                                {new Date(group.headingTeam.created_at).toLocaleDateString()}
+                              </div>
+                            </motion.button>
+                          )}
+                          {group.nodes.map((node) =>
+                            renderSidebarNode(node, group.headingTeam || group.key.startsWith('orphan-') ? 1 : 0, indexRef)
+                          )}
+                        </div>
                       </div>
-                    </motion.button>
-                  ))}
+                    ));
+                  })()}
                 </AnimatePresence>
                 {teams.length === 0 && (
                   <div className="text-sm text-gray-500 text-center py-8 space-y-3">
@@ -1321,53 +1681,42 @@ export default function Teams() {
                     {searchQuery ? 'No teams found' : 'No teams available'}
                   </p>
                 ) : (
-                  (searchQuery ? searchResults : allTeams).map((team) => (
-                    <motion.div
-                      key={team.team_id}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      className="p-4 pro-card-hover"
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <h3 className="font-semibold text-gray-900">{team.team_name}</h3>
-                            {team.team_type && team.team_type !== 'main' && (
-                              <span className="badge badge-blue text-xs">
-                                {contextTypeEmoji(team.team_type)} {contextTypeLabel(team.team_type)}
-                              </span>
-                            )}
+                  (() => {
+                    const discoverList = searchQuery ? searchResults : allTeams;
+                    // True nested hierarchy: buildTeamTree walks the REAL
+                    // parent_team_id already returned by getAllTeams/
+                    // searchTeams (no backend change) -- unlimited depth,
+                    // cycle-safe, never invents a relationship that isn't
+                    // in the data. A node whose real parent isn't in THIS
+                    // result set (not itself public/discoverable, or
+                    // didn't match the current search) still shows a
+                    // "Sub-team of X" caption via the batched
+                    // parentNamesById resolution above, rather than being
+                    // mislabeled as independent.
+                    const tree = buildTeamTree(discoverList);
+                    const resolveParentName = (parentId: string): string | null => {
+                      const inList = discoverList.find((t) => t.team_id === parentId);
+                      return inList ? inList.team_name : parentNamesById[parentId] || null;
+                    };
+                    const withHierarchy = tree.filter((n) => n.children.length > 0 || hasRealParent(n.team));
+                    const independent = tree.filter((n) => n.children.length === 0 && !hasRealParent(n.team));
+
+                    return (
+                      <>
+                        {withHierarchy.map((node) => renderDiscoverNode(node, 0, resolveParentName))}
+                        {independent.length > 0 && (
+                          <div role="group" aria-label="Independent teams">
+                            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-4 mb-2 px-1">
+                              Independent Teams
+                            </h3>
+                            <div className="space-y-3">
+                              {independent.map((node) => renderDiscoverNode(node, 0, resolveParentName))}
+                            </div>
                           </div>
-                          <p className="text-sm text-gray-600 mt-1">{team.description || 'No description'}</p>
-                          {/* Hierarchy: only shown when the backend actually
-                              gave us a parent_team_id -- we don't resolve
-                              the parent's name here (that would mean one
-                              extra request per discover-result row), just
-                              surface that it's a sub-team. */}
-                          <p className="text-xs text-gray-400 mt-1">
-                            {team.parent_team_id ? 'Sub-team' : 'Independent Team'}
-                          </p>
-                          <div className="flex items-center gap-3 mt-2">
-                            {team.owner && (
-                              <span className="text-xs text-gray-500">
-                                👤 Led by {team.owner.full_name}
-                              </span>
-                            )}
-                            <span className="text-xs text-gray-500">
-                              {team.member_count || 0} members
-                            </span>
-                            {team.is_public && <span className="badge badge-green text-xs">Public</span>}
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => handleJoinTeam(team.team_id)}
-                          className="btn-primary text-sm"
-                        >
-                          Request to Join
-                        </button>
-                      </div>
-                    </motion.div>
-                  ))
+                        )}
+                      </>
+                    );
+                  })()
                 )}
               </div>
 

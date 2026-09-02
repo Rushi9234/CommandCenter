@@ -1,10 +1,24 @@
 import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../hooks/useAuth';
+import { useRealtime, type RealtimeEvent } from '../hooks/useRealtime';
 import * as api from '../services/api';
 
 export default function Projects() {
   const { user } = useAuth();
+  // Notification deep-linking: ?projectId=&taskId= selects that project
+  // (overriding the normal "keep current, else first" logic) and scrolls
+  // to/highlights the specific task once its tasks have loaded. Tracked
+  // by last-processed value (not a one-shot boolean) so a second,
+  // different notification click while already on /projects -- same
+  // route, no remount -- is still processed.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const lastProcessedProjectDeepLink = useRef<string | null>(null);
+  const lastScrolledTaskId = useRef<string | null>(null);
+  const [highlightedTaskId, setHighlightedTaskId] = useState<string | null>(null);
+  const [projectDeepLinkError, setProjectDeepLinkError] = useState('');
+  const [taskDeepLinkError, setTaskDeepLinkError] = useState('');
 
   const [projects, setProjects] = useState<any[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(true);
@@ -142,6 +156,54 @@ export default function Projects() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId]);
 
+  // Notification deep-link: reacts to `searchParams` itself, not just
+  // mount -- clicking a Projects notification while already on /projects
+  // (same route, only the query string changes) does not remount this
+  // component. Waits for `projects` to actually be populated (covers the
+  // fresh-page-load case where the param is present before
+  // getMyProjects() resolves).
+  useEffect(() => {
+    const projectId = searchParams.get('projectId');
+    if (!projectId || projectId === lastProcessedProjectDeepLink.current || projects.length === 0) return;
+    lastProcessedProjectDeepLink.current = projectId;
+    const target = projects.find((p: any) => p.project_id === projectId);
+    if (target) {
+      setProjectDeepLinkError('');
+      setSelectedProjectId(target.project_id);
+      const taskId = searchParams.get('taskId');
+      if (taskId) {
+        setTaskDeepLinkError('');
+        setHighlightedTaskId(taskId);
+      }
+    } else {
+      setProjectDeepLinkError("You no longer have access to that project, or it doesn't exist.");
+      setSelectedProjectId((current) => {
+        if (current && projects.some((p: any) => p.project_id === current)) return current;
+        return projects[0]?.project_id ?? null;
+      });
+    }
+    setSearchParams({}, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, projects]);
+
+  // Deep-linked task: scroll to / confirm it once this project's tasks
+  // have actually finished loading. Keyed on the task ID itself (not a
+  // one-shot boolean) so a second, different deep-linked task is still
+  // scrolled to, while a same-project mutation refresh for the SAME
+  // already-scrolled task doesn't re-scroll the board.
+  useEffect(() => {
+    if (!highlightedTaskId || highlightedTaskId === lastScrolledTaskId.current || !tasksLoadedOnce) return;
+    lastScrolledTaskId.current = highlightedTaskId;
+    const found = tasks.some((t) => t.task_id === highlightedTaskId);
+    if (!found) {
+      setTaskDeepLinkError("That task is no longer available, or you don't have access to it.");
+      return;
+    }
+    const el = document.getElementById(`task-${highlightedTaskId}`);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightedTaskId, tasksLoadedOnce, tasks]);
+
   useEffect(() => {
     // Member list is TEAM-scoped, not project-scoped -- keyed on team_id
     // so switching between two projects under the same team does not
@@ -154,6 +216,16 @@ export default function Projects() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProject?.team_id]);
 
+  useRealtime((event: RealtimeEvent) => {
+    // Task realtime events: refresh the currently-selected project's tasks.
+    // The event carries only teamId; the frontend maintains task state
+    // locally and refetches on demand to get authoritative updates.
+    if (!event.type.startsWith('task.') && event.type !== 'blocker.created' && event.type !== 'blocker.resolved') return;
+    if (!selectedProjectIdRef.current) return;
+
+    loadTasks();
+  });
+
   const loadProjects = async () => {
     const requestVersion = ++loadProjectsVersion.current;
     setProjectsLoading(true);
@@ -164,10 +236,17 @@ export default function Projects() {
       const data = response.data.data;
       setProjects(data);
       setProjectsLoadedOnce(true);
-      setSelectedProjectId((current) => {
-        if (current && data.some((p: any) => p.project_id === current)) return current;
-        return data[0]?.project_id ?? null;
-      });
+
+      // Default-select is skipped when a projectId deep link is currently
+      // pending -- the dedicated deep-link effect below owns selection in
+      // that case, so this doesn't race it and briefly select the wrong
+      // project.
+      if (!searchParams.get('projectId')) {
+        setSelectedProjectId((current) => {
+          if (current && data.some((p: any) => p.project_id === current)) return current;
+          return data[0]?.project_id ?? null;
+        });
+      }
     } catch (error: any) {
       if (loadProjectsVersion.current !== requestVersion) return;
       console.error('Failed to load projects:', error);
@@ -668,6 +747,18 @@ export default function Projects() {
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-8">
+        {(projectDeepLinkError || taskDeepLinkError) && (
+          <div role="alert" className="mb-6 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-800 text-sm flex items-center justify-between">
+            <span>{projectDeepLinkError || taskDeepLinkError}</span>
+            <button
+              type="button"
+              onClick={() => { setProjectDeepLinkError(''); setTaskDeepLinkError(''); }}
+              className="text-yellow-700 hover:text-yellow-900 text-xs underline"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           <div className="lg:col-span-1">
             <div className="pro-card p-4">
@@ -806,8 +897,11 @@ export default function Projects() {
                             {tasksByStatus[status].map((task) => (
                               <motion.div
                                 key={task.task_id}
+                                id={`task-${task.task_id}`}
                                 layout
-                                className="p-3 bg-white border border-gray-200 rounded-lg hover:shadow-sm transition-shadow"
+                                className={`p-3 bg-white border rounded-lg hover:shadow-sm transition-shadow ${
+                                  highlightedTaskId === task.task_id ? 'ring-2 ring-blue-500 border-blue-300' : 'border-gray-200'
+                                }`}
                               >
                                 <div className="font-medium text-sm text-gray-900">{task.title}</div>
                                 <p className="text-xs text-gray-600 mt-1 line-clamp-2">{task.description}</p>

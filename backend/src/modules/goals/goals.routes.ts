@@ -86,4 +86,26 @@ router.post(
   asyncHandler(goalsController.returnGoal)
 );
 
+// Creation-governance workflow -- distinct from the completion-review
+// endpoints above (/approve, /return govern completion; these two govern
+// whether a proposed team goal becomes official at all). Same leadership
+// gate (isTeamLeader -- owner/admin of the goal's own team) as the
+// completion workflow: a normal member can never approve their own or
+// anyone else's team-goal proposal, and a leader can only approve/reject
+// proposals on their own team (isTeamLeader joins on the goal's team_id).
+router.post(
+  '/goals/:goalId/approve-creation',
+  authenticate,
+  validateUuidParams('goalId'),
+  requireAccess((req) => goalsRepository.isTeamLeader(req.user!.userId, req.params.goalId), 'Only a team owner or admin can approve a team-goal proposal'),
+  asyncHandler(goalsController.approveGoalCreation)
+);
+router.post(
+  '/goals/:goalId/reject-creation',
+  authenticate,
+  validateUuidParams('goalId'),
+  requireAccess((req) => goalsRepository.isTeamLeader(req.user!.userId, req.params.goalId), 'Only a team owner or admin can reject a team-goal proposal'),
+  asyncHandler(goalsController.rejectGoalCreation)
+);
+
 export default router;

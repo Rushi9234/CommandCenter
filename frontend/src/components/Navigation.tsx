@@ -1,6 +1,7 @@
 import { Link, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useAuth } from '../hooks/useAuth';
+import NotificationBell from './NotificationBell';
 
 export default function Navigation() {
   const location = useLocation();
@@ -72,11 +73,13 @@ export default function Navigation() {
 
           {/* User Menu */}
           <div className="flex items-center gap-4">
+            <NotificationBell />
+
             <div className="text-right hidden sm:block">
               <div className="text-sm font-medium text-gray-900">{user?.full_name}</div>
               <div className="text-xs text-gray-500 capitalize">{user?.role}</div>
             </div>
-            
+
             <div className="avatar w-10 h-10 text-sm">
               {getInitials(user?.full_name || 'User')}
             </div>

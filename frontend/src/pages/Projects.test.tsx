@@ -1,4 +1,5 @@
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Projects from './Projects';
 import { useAuth } from '../hooks/useAuth';
@@ -44,9 +45,13 @@ const TEAM_TASK_1 = {
   owner_user: null, reviewer_user: null, contributor_users: [], dependency_tasks: [],
 };
 
-const renderProjects = (user: any = FAKE_USER) => {
+const renderProjects = (user: any = FAKE_USER, initialEntries: string[] = ['/projects']) => {
   mockUseAuth.mockReturnValue({ user, isAuthenticated: true, token: 'fake-token', login: vi.fn(), register: vi.fn(), logout: vi.fn() });
-  return render(<Projects />);
+  return render(
+    <MemoryRouter initialEntries={initialEntries}>
+      <Projects />
+    </MemoryRouter>
+  );
 };
 
 const deferred = <T,>() => {
@@ -738,7 +743,21 @@ describe('Projects — edit task with assignment', () => {
 
     await waitFor(() => expect(api.updateTask).toHaveBeenCalledWith('task-team-1', expect.objectContaining({ owner: 'user-2' })));
     expect(await screen.findByText('👤 Owner: Bob Smith')).toBeInTheDocument();
-    expect(screen.queryByText('Edit Task')).not.toBeInTheDocument();
+    // The modal's exit is animated (AnimatePresence/framer-motion) --
+    // handleSaveTaskEdit nulls editingTask/editTaskDraft as soon as
+    // updateTask resolves (starting the exit animation), but that
+    // animation takes real wall-clock time to finish and be removed from
+    // the DOM, independent of -- and not necessarily faster than -- the
+    // second, separately-awaited loadTasks() response that makes "Bob
+    // Smith" appear. A synchronous queryByText check right after that
+    // await was a genuine test-timing bug (confirmed via screen.debug():
+    // the modal was still present, frozen mid-exit on its pre-close
+    // "Saving..." state, at the moment "Bob Smith" had already rendered)
+    // -- not a product defect, and not the flaky-vs-deterministic
+    // ambiguity it was first filed as. Same waitFor-wrapped-removal
+    // pattern already used a few tests up for the delete-task case (see
+    // "removes a task and it disappears from the board" above).
+    await waitFor(() => expect(screen.queryByText('Edit Task')).not.toBeInTheDocument());
   });
 
   it('clears an existing owner assignment by selecting Unassigned', async () => {
@@ -803,5 +822,38 @@ describe('Projects — assignment permissions', () => {
 
     const ownerSelect = await screen.findByLabelText('Owner (optional)');
     expect(within(ownerSelect).queryByText('Someone Else')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Notification deep-link destination: ?projectId=&taskId= selects that
+// project (overriding the normal "current, else first" logic) and
+// scrolls to/highlights the specific task once tasks have loaded.
+describe('Projects — notification deep-link destination', () => {
+  it('?projectId=proj-team selects that project instead of the default first project', async () => {
+    vi.mocked(api.getMyProjects).mockResolvedValue({ data: { data: [PROJECT_SOLO, PROJECT_TEAM] } } as any);
+    renderProjects(FAKE_USER, ['/projects?projectId=proj-team']);
+
+    await screen.findByRole('heading', { name: 'Team Project' });
+    expect(screen.queryByRole('heading', { name: 'Solo Project' })).not.toBeInTheDocument();
+  });
+
+  it('?projectId=&taskId= highlights the matching task once tasks load', async () => {
+    vi.mocked(api.getMyProjects).mockResolvedValue({ data: { data: [PROJECT_SOLO] } } as any);
+    vi.mocked(api.getProjectTasks).mockResolvedValue({ data: { data: [TASK_1, TASK_2] } } as any);
+    renderProjects(FAKE_USER, ['/projects?projectId=proj-solo&taskId=task-1']);
+
+    await screen.findByText('First task');
+    const card = document.getElementById('task-task-1');
+    expect(card).not.toBeNull();
+    expect(card?.className).toContain('ring-2');
+  });
+
+  it('a deep-linked projectId no longer accessible shows a safe fallback message, not a crash', async () => {
+    vi.mocked(api.getMyProjects).mockResolvedValue({ data: { data: [PROJECT_SOLO] } } as any);
+    renderProjects(FAKE_USER, ['/projects?projectId=proj-removed']);
+
+    expect(await screen.findByText(/no longer have access to that project/i)).toBeInTheDocument();
+    await screen.findByRole('heading', { name: 'Solo Project' });
   });
 });

@@ -1,4 +1,5 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Teams from './Teams';
 import { useAuth } from '../hooks/useAuth';
@@ -12,6 +13,19 @@ vi.mock('../hooks/useAuth', () => ({
   useAuth: vi.fn(),
 }));
 vi.mock('../services/api');
+
+// Realtime-race regression tests (join-request sync fix): useRealtime is
+// mocked to capture the latest callback Teams.tsx registers, so a test can
+// invoke it directly to simulate an SSE event arriving -- no real
+// EventSource/fetch involved. Without this mock, no prior test ever
+// actually delivered an event to the handler at all (confirmed during the
+// governance audit), which is exactly why the race went unexercised.
+let latestRealtimeCallback: ((event: any) => void) | null = null;
+vi.mock('../hooks/useRealtime', () => ({
+  useRealtime: (cb: (event: any) => void) => {
+    latestRealtimeCallback = cb;
+  },
+}));
 
 const mockUseAuth = useAuth as unknown as ReturnType<typeof vi.fn>;
 
@@ -40,9 +54,13 @@ const EMPTY_DASHBOARD = {
   summary: { total_teams: 0, submitted_today_count: 0, blocked_count: 0, needs_attention_count: 0 },
 };
 
-const renderTeams = (user: any = FAKE_USER) => {
+const renderTeams = (user: any = FAKE_USER, initialEntries: string[] = ['/teams']) => {
   mockUseAuth.mockReturnValue({ user, isAuthenticated: true, token: 'fake-token', login: vi.fn(), register: vi.fn(), logout: vi.fn() });
-  return render(<Teams />);
+  return render(
+    <MemoryRouter initialEntries={initialEntries}>
+      <Teams />
+    </MemoryRouter>
+  );
 };
 
 beforeEach(() => {
@@ -176,7 +194,13 @@ describe('Teams — team creation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create Team' }));
 
     await waitFor(() => expect(api.createTeam).toHaveBeenCalledWith('New Squad', '', true, 10, undefined, undefined, 'main'));
-    expect(screen.queryByText('Create New Team')).not.toBeInTheDocument();
+    // Same class of test-timing bug identified and fixed in
+    // Projects.test.tsx's "changes a task's owner..." test this task: the
+    // Create Team modal's exit is animated (AnimatePresence/framer-motion),
+    // so its removal from the DOM isn't guaranteed to have completed by
+    // the very next synchronous assertion -- wait for it explicitly,
+    // rather than asserting on an exact tick.
+    await waitFor(() => expect(screen.queryByText('Create New Team')).not.toBeInTheDocument());
     await waitFor(() => expect(api.getMyTeams).toHaveBeenCalledTimes(2));
   });
 
@@ -400,7 +424,11 @@ describe('Teams — hierarchy (Step 4)', () => {
     renderTeams();
     await screen.findByRole('heading', { name: 'Team Alpha' });
 
-    expect(screen.getByText('Independent Team')).toBeInTheDocument();
+    // "Independent Team" legitimately appears twice once the sidebar
+    // hierarchy grouping exists: once as the sidebar's group heading for
+    // childless root teams, once in the selected team's detail-pane
+    // hierarchy line (both pre-existing/added, not a duplication bug).
+    expect(screen.getAllByText('Independent Team').length).toBeGreaterThanOrEqual(1);
   });
 
   it('labels a sub-team with its resolved parent name, using the existing team-preview endpoint', async () => {
@@ -411,7 +439,11 @@ describe('Teams — hierarchy (Step 4)', () => {
     renderTeams();
     await screen.findByRole('heading', { name: 'Team Alpha' });
 
-    expect(await screen.findByText('Sub-team of Software Engineering — Batch A')).toBeInTheDocument();
+    // Legitimately appears twice once the sidebar hierarchy grouping
+    // exists: once in the sidebar's resolved-parent caption (orphan
+    // group -- the parent isn't in the user's own team list), once in
+    // the selected team's detail-pane hierarchy line.
+    expect((await screen.findAllByText('Sub-team of Software Engineering — Batch A')).length).toBeGreaterThanOrEqual(1);
     expect(api.getTeamPreview).toHaveBeenCalledWith('team-parent');
   });
 });
@@ -720,6 +752,348 @@ describe('Teams — mutation refetch scoping (optimize Teams mutation refetches)
 });
 
 // ---------------------------------------------------------------------------
+// Realtime join-request UI sync fix: the leader's own approve/reject
+// action echoes back to their own open SSE connection (events are matched
+// by teamId, not just recipient). Previously this echo drove a FULL
+// selectTeam() cascade that synchronously cleared teamMembers/joinRequests
+// to [] and raced the mutation's own already-correct scoped refetch via
+// the shared selectTeamRequestVersion ref -- a real race, not reproducible
+// without actually delivering an SSE event, which is why it went
+// unexercised before (see the useRealtime mock above).
+describe('Teams — realtime join-request sync (race fix)', () => {
+  it('a join_request.approved event for the selected team triggers the scoped members+join-requests refetch, not the full cascade', async () => {
+    vi.mocked(api.getJoinRequests).mockResolvedValue({ data: { data: [] } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+    expect(latestRealtimeCallback).not.toBeNull();
+
+    vi.mocked(api.getTeamMembers).mockClear();
+    vi.mocked(api.getJoinRequests).mockClear();
+    vi.mocked(api.getSubTeams).mockClear();
+    vi.mocked(api.getTeamWorkSubmissions).mockClear();
+    vi.mocked(api.getContextDashboard).mockClear();
+
+    latestRealtimeCallback!({ type: 'join_request.approved', teamId: 'team-a' });
+
+    await waitFor(() => expect(api.getTeamMembers).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.getJoinRequests).toHaveBeenCalledTimes(1));
+    // The full cascade (selectTeam) would also call these -- asserting
+    // they are NOT called is exactly what proves the scoped path was
+    // used instead of a full re-select.
+    expect(api.getSubTeams).not.toHaveBeenCalled();
+    expect(api.getTeamWorkSubmissions).not.toHaveBeenCalled();
+    expect(api.getContextDashboard).not.toHaveBeenCalled();
+  });
+
+  it('a join_request.created event for the selected team triggers only the scoped join-requests refetch', async () => {
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+    expect(latestRealtimeCallback).not.toBeNull();
+
+    vi.mocked(api.getTeamMembers).mockClear();
+    vi.mocked(api.getJoinRequests).mockClear();
+    vi.mocked(api.getSubTeams).mockClear();
+
+    latestRealtimeCallback!({ type: 'join_request.created', teamId: 'team-a' });
+
+    await waitFor(() => expect(api.getJoinRequests).toHaveBeenCalledTimes(1));
+    expect(api.getTeamMembers).not.toHaveBeenCalled();
+    expect(api.getSubTeams).not.toHaveBeenCalled();
+  });
+
+  it('a realtime event for a DIFFERENT team than the one selected does not trigger any scoped refetch', async () => {
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+
+    vi.mocked(api.getTeamMembers).mockClear();
+    vi.mocked(api.getJoinRequests).mockClear();
+
+    latestRealtimeCallback!({ type: 'join_request.approved', teamId: 'some-other-team' });
+
+    await waitFor(() => expect(api.getMyJoinRequests).toHaveBeenCalled());
+    expect(api.getTeamMembers).not.toHaveBeenCalled();
+    expect(api.getJoinRequests).not.toHaveBeenCalled();
+  });
+
+  it('the members list never visibly blanks when a realtime approved-event echo arrives for the selected team', async () => {
+    vi.mocked(api.getTeamMembers).mockResolvedValue({ data: { data: [OWNER_MEMBER, BOB_MEMBER] } } as any);
+    vi.mocked(api.getJoinRequests).mockResolvedValue({ data: { data: [] } } as any);
+    renderTeams();
+    await screen.findByText('Bob Smith');
+
+    latestRealtimeCallback!({ type: 'join_request.approved', teamId: 'team-a' });
+
+    // The old full-cascade path synchronously cleared teamMembers to []
+    // before refetching -- with the fix, the member list is never removed
+    // from the DOM at any point during this refresh.
+    expect(screen.getByText('Bob Smith')).toBeInTheDocument();
+    await waitFor(() => expect(api.getTeamMembers).toHaveBeenCalled());
+    expect(screen.getByText('Bob Smith')).toBeInTheDocument();
+  });
+
+  it('when an SSE approve event arrives during the click handler\'s refetch, the click handler\'s state update is not lost to version conflict', async () => {
+    // Milestone 52: join-request mutation race prevention regression test.
+    // This test reproduces the exact race that caused the bug: the click
+    // handler initiates a refetch, the SSE event arrives and attempts to
+    // initiate its own refetch (same version token), and the click
+    // handler's refetch must not be discarded due to version mismatch.
+    //
+    // Setup: initial render shows request; after approve, both requests
+    // list and members list must update.
+    vi.mocked(api.getJoinRequests)
+      .mockResolvedValueOnce({ data: { data: [{ request_id: 'req-1', user: { full_name: 'Bob Smith', username: 'bob' } }] } } as any)
+      // After approval: empty join requests
+      .mockResolvedValueOnce({ data: { data: [] } } as any);
+    vi.mocked(api.getTeamMembers)
+      .mockResolvedValueOnce({ data: { data: [OWNER_MEMBER] } } as any)
+      // After approval: Bob appears as a new member
+      .mockResolvedValueOnce({ data: { data: [OWNER_MEMBER, BOB_MEMBER] } } as any);
+    vi.mocked(api.approveJoinRequest).mockResolvedValue({} as any);
+
+    renderTeams();
+    await screen.findByText('Approve');
+    expect(screen.getByText('Bob Smith')).toBeInTheDocument(); // Request visible
+
+    vi.mocked(api.getJoinRequests).mockClear();
+    vi.mocked(api.getTeamMembers).mockClear();
+
+    // Click Approve -- this starts the click handler's refetch
+    fireEvent.click(screen.getByText('Approve'));
+
+    // Simulate the SSE event arriving DURING the click handler's in-flight
+    // refetch. With the fix in place (approvingJoinRequestRef check), the
+    // SSE handler should skip its refetch, letting the click handler's
+    // refetch complete uncontested.
+    latestRealtimeCallback!({ type: 'join_request.approved', teamId: 'team-a' });
+
+    // Verify both refetches eventually complete and the final UI is correct:
+    // the request is gone and Bob appears as a member.
+    await waitFor(() => expect(api.approveJoinRequest).toHaveBeenCalledWith('req-1'));
+    // The click handler's refetch must complete, so getJoinRequests is
+    // called once (from the click handler).
+    await waitFor(() => expect(api.getJoinRequests).toHaveBeenCalledTimes(1));
+    // The click handler's refetch also calls getTeamMembers.
+    await waitFor(() => expect(api.getTeamMembers).toHaveBeenCalledTimes(1));
+
+    // Final UI state: request is gone, member is visible.
+    expect(screen.queryByText('Approve')).not.toBeInTheDocument();
+    expect(screen.getByText('Bob Smith')).toBeInTheDocument();
+  });
+
+  it('when an SSE reject event arrives during the click handler\'s refetch, the click handler\'s state update is not lost to version conflict', async () => {
+    // Milestone 52: similar race prevention test for reject path.
+    vi.mocked(api.getJoinRequests)
+      .mockResolvedValueOnce({ data: { data: [{ request_id: 'req-1', user: { full_name: 'Bob Smith', username: 'bob' } }] } } as any)
+      // After rejection: empty join requests
+      .mockResolvedValueOnce({ data: { data: [] } } as any);
+    vi.mocked(api.rejectJoinRequest).mockResolvedValue({} as any);
+
+    renderTeams();
+    await screen.findByText('Reject');
+
+    vi.mocked(api.getJoinRequests).mockClear();
+
+    // Click Reject
+    fireEvent.click(screen.getByText('Reject'));
+
+    // SSE event arrives during click handler's refetch
+    latestRealtimeCallback!({ type: 'join_request.rejected', teamId: 'team-a' });
+
+    // Verify the click handler's refetch completes and the request is gone
+    await waitFor(() => expect(api.rejectJoinRequest).toHaveBeenCalledWith('req-1'));
+    await waitFor(() => expect(api.getJoinRequests).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('Reject')).not.toBeInTheDocument();
+  });
+
+  it('an SSE approve event from another user (flag not set) still triggers the refetch as expected', async () => {
+    // Milestone 52: ensure the prevention flag doesn't break SSE handling
+    // for OTHER users' approvals (when the flag is false). This verifies
+    // that the fix doesn't disable realtime updates entirely.
+    vi.mocked(api.getJoinRequests).mockResolvedValue({ data: { data: [] } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+
+    vi.mocked(api.getJoinRequests).mockClear();
+    vi.mocked(api.getTeamMembers).mockClear();
+
+    // Fire SSE event with NO click handler in flight (flag is false).
+    // The SSE handler SHOULD call refetch.
+    latestRealtimeCallback!({ type: 'join_request.approved', teamId: 'team-a' });
+
+    await waitFor(() => expect(api.getTeamMembers).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.getJoinRequests).toHaveBeenCalledTimes(1));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Teams sidebar hierarchy: `teams` (flat, from getMyTeams) grouped purely
+// from parent_team_id -- no invented data, no new endpoint. Complements
+// the pre-existing "Teams — hierarchy (Step 4)" detail-pane tests above,
+// which only ever covered the SELECTED team's own hierarchy line, not the
+// sidebar list itself (the actual bug the user's screenshot showed: a
+// sub-team rendered as an unrelated sibling of its own parent).
+describe('Teams — sidebar hierarchy grouping', () => {
+  it('nests a sub-team under its parent heading in the sidebar when both are in the user\'s own team list', async () => {
+    const PARENT = { team_id: 'team-parent', team_name: 'Software Engg', description: '', is_public: true, created_at: '2026-08-01T00:00:00Z', team_type: 'main' };
+    const CHILD = { ...TEAM_A, parent_team_id: 'team-parent' };
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [PARENT, CHILD] } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Software Engg' });
+
+    const groups = screen.getAllByTestId('sidebar-team-group');
+    // Exactly one group -- the parent's -- containing both the parent
+    // heading and the nested child, not two separate flat top-level rows.
+    expect(groups.length).toBe(1);
+    expect(groups[0]).toHaveTextContent('Software Engg');
+    expect(groups[0]).toHaveTextContent('Team Alpha');
+    expect(groups[0]).toHaveTextContent('Sub-team of Software Engg');
+  });
+
+  it('groups a childless root team under the shared "Independent Team" sidebar heading', async () => {
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [TEAM_A, TEAM_B] } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+
+    const groups = screen.getAllByTestId('sidebar-team-group');
+    expect(groups.length).toBe(1);
+    expect(groups[0]).toHaveTextContent('Independent Team');
+    expect(groups[0]).toHaveTextContent('Team Alpha');
+    expect(groups[0]).toHaveTextContent('Team Beta');
+  });
+
+  it('does not fetch getTeamPreview for a parent that is already present in the user\'s own team list', async () => {
+    const PARENT = { team_id: 'team-parent', team_name: 'Software Engg', description: '', is_public: true, created_at: '2026-08-01T00:00:00Z', team_type: 'main' };
+    const CHILD = { ...TEAM_A, parent_team_id: 'team-parent' };
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [PARENT, CHILD] } } as any);
+    vi.mocked(api.getTeamPreview).mockClear();
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Software Engg' });
+    await screen.findByText(/Team Alpha/);
+
+    // selectTeam() itself may call getTeamPreview for the SELECTED team's
+    // own parent-preview panel -- but the sidebar grouping's own
+    // name-resolution effect must not issue a redundant call for a parent
+    // it can already resolve locally from `teams`.
+    expect(vi.mocked(api.getTeamPreview).mock.calls.filter((c) => c[0] === 'team-parent').length).toBeLessThanOrEqual(1);
+  });
+
+  // Milestone (sidebar true nesting): the sidebar now reuses the same
+  // buildTeamTree() utility Discover Teams already uses (unlimited depth,
+  // cycle-safe, order-independent, duplicate-safe), rather than the old
+  // 2-level-only grouping. These tests cover exactly what the old
+  // algorithm could not: grandchildren, arbitrary API ordering, missing
+  // parents, and corrupt/cyclic data, plus that no new sidebar-only API
+  // calls or selection regressions were introduced.
+  const SIDEBAR_PARENT = { team_id: 'sb-parent', team_name: 'Software Engg', description: '', is_public: true, created_at: '2026-08-01T00:00:00Z', team_type: 'main' };
+  const SIDEBAR_CHILD = { team_id: 'sb-child', team_name: 'Team Sujal', parent_team_id: 'sb-parent', description: '', is_public: true, created_at: '2026-08-01T00:00:00Z', team_type: 'main' };
+  const SIDEBAR_GRANDCHILD = { team_id: 'sb-grandchild', team_name: 'Team Child', parent_team_id: 'sb-child', description: '', is_public: true, created_at: '2026-08-01T00:00:00Z', team_type: 'main' };
+
+  it('a grandchild renders beneath its parent and grandparent, with a caption naming its own direct parent', async () => {
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [SIDEBAR_PARENT, SIDEBAR_CHILD, SIDEBAR_GRANDCHILD] } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Software Engg' });
+
+    const groups = screen.getAllByTestId('sidebar-team-group');
+    expect(groups.length).toBe(1);
+    expect(groups[0]).toHaveTextContent('Team Child');
+    // The grandchild's caption names its own direct parent (Team Sujal),
+    // not the top-level ancestor (Software Engg).
+    expect(screen.getByText('Sub-team of Team Sujal')).toBeInTheDocument();
+  });
+
+  it('renders the identical hierarchy regardless of API ordering (child before parent)', async () => {
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [SIDEBAR_GRANDCHILD, SIDEBAR_CHILD, SIDEBAR_PARENT] } } as any);
+    renderTeams();
+    await screen.findByRole('button', { name: 'Select Software Engg' });
+
+    const groups = screen.getAllByTestId('sidebar-team-group');
+    expect(groups.length).toBe(1);
+    expect(groups[0]).toHaveTextContent('Team Sujal');
+    expect(groups[0]).toHaveTextContent('Team Child');
+  });
+
+  it('every team appears exactly once in the sidebar (no duplicate rendering)', async () => {
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [SIDEBAR_PARENT, SIDEBAR_CHILD, SIDEBAR_GRANDCHILD] } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Software Engg' });
+
+    // aria-labelled sidebar buttons disambiguate from the (legitimately
+    // duplicated) detail-pane heading and group-label text -- each team
+    // gets exactly one clickable sidebar entry.
+    expect(screen.getAllByRole('button', { name: 'Select Software Engg' }).length).toBe(1);
+    expect(screen.getAllByRole('button', { name: 'Select Team Sujal' }).length).toBe(1);
+    expect(screen.getAllByRole('button', { name: 'Select Team Child' }).length).toBe(1);
+  });
+
+  it('a team whose real parent is missing from the user\'s own team list stays visible, not silently dropped or mislabeled independent', async () => {
+    const orphan = { team_id: 'sb-orphan', team_name: 'Orphan Team', parent_team_id: 'not-a-member-here', description: '', is_public: true, created_at: '2026-08-01T00:00:00Z', team_type: 'main' };
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [orphan] } } as any);
+    vi.mocked(api.getTeamPreview).mockRejectedValue({ response: { status: 404 } });
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Orphan Team' });
+
+    expect(screen.getByRole('button', { name: 'Select Orphan Team' })).toBeInTheDocument();
+    // Must never be lumped into the "Independent Team" bucket -- it does
+    // have a real parent_team_id, it's just not resolvable from this list.
+    expect(screen.queryByText('Independent Team')).not.toBeInTheDocument();
+  });
+
+  it('a self-referencing parent_team_id (corrupt data) cannot infinite-loop and the team still renders', async () => {
+    const weird = { team_id: 'sb-weird', team_name: 'Weird Team', parent_team_id: 'sb-weird', description: '', is_public: true, created_at: '2026-08-01T00:00:00Z', team_type: 'main' };
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [weird] } } as any);
+    renderTeams();
+
+    expect(await screen.findByRole('button', { name: 'Select Weird Team' })).toBeInTheDocument();
+  });
+
+  it('a multi-team parent cycle cannot infinite-loop and both teams still render exactly once', async () => {
+    const cycleA = { team_id: 'sb-cycle-a', team_name: 'Cycle A', parent_team_id: 'sb-cycle-b', description: '', is_public: true, created_at: '2026-08-01T00:00:00Z', team_type: 'main' };
+    const cycleB = { team_id: 'sb-cycle-b', team_name: 'Cycle B', parent_team_id: 'sb-cycle-a', description: '', is_public: true, created_at: '2026-08-01T00:00:00Z', team_type: 'main' };
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [cycleA, cycleB] } } as any);
+    renderTeams();
+
+    expect(await screen.findByRole('button', { name: 'Select Cycle A' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Select Cycle B' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Select Cycle A' }).length).toBe(1);
+    expect(screen.getAllByRole('button', { name: 'Select Cycle B' }).length).toBe(1);
+  });
+
+  it('selecting a nested (grandchild) team in the sidebar selects that exact team, not its parent', async () => {
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [SIDEBAR_PARENT, SIDEBAR_CHILD, SIDEBAR_GRANDCHILD] } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Software Engg' });
+    vi.mocked(api.getTeamMembers).mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select Team Child' }));
+
+    await waitFor(() => expect(api.getTeamMembers).toHaveBeenCalledWith('sb-grandchild'));
+    expect(await screen.findByRole('heading', { name: 'Team Child' })).toBeInTheDocument();
+  });
+
+  it('the selected nested team is visually highlighted in the sidebar', async () => {
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [SIDEBAR_PARENT, SIDEBAR_CHILD, SIDEBAR_GRANDCHILD] } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Software Engg' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select Team Sujal' }));
+    await screen.findByRole('heading', { name: 'Team Sujal' });
+
+    expect(screen.getByRole('button', { name: 'Select Team Sujal' })).toHaveClass('bg-blue-50');
+  });
+
+  it('building the sidebar hierarchy issues no extra API calls beyond the existing getMyTeams/parent-preview pattern', async () => {
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [SIDEBAR_PARENT, SIDEBAR_CHILD, SIDEBAR_GRANDCHILD] } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Software Engg' });
+
+    // Every parent in this tree is already present locally, so the
+    // parent-name-resolution effect must never call getTeamPreview at all.
+    expect(api.getTeamPreview).not.toHaveBeenCalled();
+    expect(api.getMyTeams).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Teams settings save — server-truth synchronization: updateTeamSettings'
 // controller returns the full updated team row (RETURNING *), which is
 // now used directly instead of relying on the settings form's own local
@@ -887,5 +1261,238 @@ describe('Teams — additional behaviors', () => {
     fireEvent.click(screen.getByText('🔍 Discover Teams'));
 
     expect(screen.getByText('No teams available')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Discover Teams true nested hierarchy: buildTeamTree (a pure, separately
+// unit-tested utility -- see teamHierarchy.test.ts for cycle/duplicate/
+// ordering edge cases) drives real parent/child nesting instead of the
+// old flat "Sub-team"/"Independent Team" text label.
+describe('Teams — Discover Teams hierarchy', () => {
+  const PARENT = { team_id: 'parent-1', team_name: 'Software Engg', description: '', is_public: true, is_discoverable: true, member_count: 10, team_type: 'main' };
+  const CHILD_A = { team_id: 'child-a', team_name: 'Team Sujal', parent_team_id: 'parent-1', description: '', is_public: true, is_discoverable: true, member_count: 3, team_type: 'main' };
+  const CHILD_B = { team_id: 'child-b', team_name: 'Team Rushi', parent_team_id: 'parent-1', description: '', is_public: true, is_discoverable: true, member_count: 2, team_type: 'main' };
+  const INDEPENDENT = { team_id: 'indep-1', team_name: 'Standalone Team', description: '', is_public: true, is_discoverable: true, member_count: 5, team_type: 'main' };
+
+  it('an independent team (no parent_team_id) renders under "Independent Teams"', async () => {
+    vi.mocked(api.getAllTeams).mockResolvedValue({ data: { data: [INDEPENDENT] } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+    fireEvent.click(screen.getByText('🔍 Discover Teams'));
+
+    expect(await screen.findByText('Independent Teams')).toBeInTheDocument();
+    expect(screen.getByText('Standalone Team')).toBeInTheDocument();
+  });
+
+  it('a child team nests under its real parent, with a "Sub-team of" caption, not as a root sibling', async () => {
+    vi.mocked(api.getAllTeams).mockResolvedValue({ data: { data: [PARENT, CHILD_A] } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+    fireEvent.click(screen.getByText('🔍 Discover Teams'));
+
+    await screen.findByText('Software Engg');
+    expect(screen.getByText('Team Sujal')).toBeInTheDocument();
+    expect(screen.getByText('Sub-team of Software Engg')).toBeInTheDocument();
+    // Not double-counted as its own independent root.
+    expect(screen.queryByText('Independent Teams')).not.toBeInTheDocument();
+  });
+
+  it('multiple children render under the same parent', async () => {
+    vi.mocked(api.getAllTeams).mockResolvedValue({ data: { data: [PARENT, CHILD_A, CHILD_B] } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+    fireEvent.click(screen.getByText('🔍 Discover Teams'));
+
+    await screen.findByText('Software Engg');
+    expect(screen.getByText('Team Sujal')).toBeInTheDocument();
+    expect(screen.getByText('Team Rushi')).toBeInTheDocument();
+    expect(screen.getAllByText('Sub-team of Software Engg').length).toBe(2);
+  });
+
+  it('a deeper hierarchy (grandchild) renders recursively, not just one level', async () => {
+    const GRANDCHILD = { team_id: 'grandchild-1', team_name: 'Sub-crew', parent_team_id: 'child-a', description: '', is_public: true, is_discoverable: true, member_count: 1, team_type: 'main' };
+    vi.mocked(api.getAllTeams).mockResolvedValue({ data: { data: [PARENT, CHILD_A, GRANDCHILD] } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+    fireEvent.click(screen.getByText('🔍 Discover Teams'));
+
+    await screen.findByText('Software Engg');
+    await screen.findByText('Team Sujal');
+    expect(await screen.findByText('Sub-crew')).toBeInTheDocument();
+    expect(screen.getByText('Sub-team of Team Sujal')).toBeInTheDocument();
+  });
+
+  it('renders the identical hierarchy regardless of API ordering (child before parent)', async () => {
+    vi.mocked(api.getAllTeams).mockResolvedValue({ data: { data: [CHILD_A, PARENT] } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+    fireEvent.click(screen.getByText('🔍 Discover Teams'));
+
+    await screen.findByText('Software Engg');
+    expect(screen.getByText('Team Sujal')).toBeInTheDocument();
+    expect(screen.getByText('Sub-team of Software Engg')).toBeInTheDocument();
+  });
+
+  it('a child whose real parent is not in this result set (private/non-discoverable parent) resolves the name via one batched getTeamPreview call, not N', async () => {
+    const orphanChild1 = { team_id: 'orphan-1', team_name: 'Orphan One', parent_team_id: 'hidden-parent', description: '', is_public: true, is_discoverable: true, member_count: 1, team_type: 'main' };
+    const orphanChild2 = { team_id: 'orphan-2', team_name: 'Orphan Two', parent_team_id: 'hidden-parent', description: '', is_public: true, is_discoverable: true, member_count: 1, team_type: 'main' };
+    vi.mocked(api.getAllTeams).mockResolvedValue({ data: { data: [orphanChild1, orphanChild2] } } as any);
+    vi.mocked(api.getTeamPreview).mockResolvedValue({ data: { data: { team_id: 'hidden-parent', team_name: 'Hidden Parent Team' } } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+    fireEvent.click(screen.getByText('🔍 Discover Teams'));
+
+    expect(await screen.findAllByText('Sub-team of Hidden Parent Team')).toHaveLength(2);
+    // One request for the shared hidden parent, not one per orphan child.
+    expect(vi.mocked(api.getTeamPreview).mock.calls.filter((c) => c[0] === 'hidden-parent').length).toBe(1);
+  });
+
+  it('a parent that cannot be resolved at all shows a safe fallback, never an invented name', async () => {
+    const orphan = { team_id: 'orphan-3', team_name: 'Orphan Three', parent_team_id: 'gone-parent', description: '', is_public: true, is_discoverable: true, member_count: 1, team_type: 'main' };
+    vi.mocked(api.getAllTeams).mockResolvedValue({ data: { data: [orphan] } } as any);
+    vi.mocked(api.getTeamPreview).mockRejectedValue({ response: { status: 404 } });
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+    fireEvent.click(screen.getByText('🔍 Discover Teams'));
+
+    await screen.findByText('Orphan Three');
+    expect(await screen.findByText('Parent team unavailable')).toBeInTheDocument();
+  });
+
+  it('a self-referencing parent_team_id (corrupt data) cannot infinite-loop and the team still renders', async () => {
+    const selfParent = { team_id: 'weird-1', team_name: 'Weird Team', parent_team_id: 'weird-1', description: '', is_public: true, is_discoverable: true, member_count: 1, team_type: 'main' };
+    vi.mocked(api.getAllTeams).mockResolvedValue({ data: { data: [selfParent] } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+    fireEvent.click(screen.getByText('🔍 Discover Teams'));
+
+    expect(await screen.findByText('Weird Team')).toBeInTheDocument();
+  });
+
+  it('search results preserve correct hierarchy, independent of the unfiltered list', async () => {
+    vi.mocked(api.searchTeams).mockResolvedValue({ data: { data: [PARENT, CHILD_A] } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+    fireEvent.click(screen.getByText('🔍 Discover Teams'));
+    fireEvent.change(screen.getByPlaceholderText('Search teams by name or description...'), { target: { value: 'Engg' } });
+
+    await screen.findByText('Software Engg');
+    expect(await screen.findByText('Sub-team of Software Engg')).toBeInTheDocument();
+  });
+
+  it('a stale search response cannot overwrite a newer one', async () => {
+    let resolveFirst!: (value: any) => void;
+    const firstPromise = new Promise((r) => { resolveFirst = r; });
+    vi.mocked(api.searchTeams)
+      .mockReturnValueOnce(firstPromise as any)
+      .mockResolvedValueOnce({ data: { data: [INDEPENDENT] } } as any);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+    fireEvent.click(screen.getByText('🔍 Discover Teams'));
+
+    const input = screen.getByPlaceholderText('Search teams by name or description...');
+    fireEvent.change(input, { target: { value: 'first' } });
+    await waitFor(() => expect(api.searchTeams).toHaveBeenCalledTimes(1));
+    fireEvent.change(input, { target: { value: 'second' } });
+    await waitFor(() => expect(api.searchTeams).toHaveBeenCalledTimes(2));
+
+    // The newer ("second") query's response resolves and renders first.
+    await screen.findByText('Standalone Team');
+
+    // The older ("first") query resolves AFTER -- must be discarded, not
+    // overwrite the newer, already-displayed result.
+    resolveFirst({ data: { data: [PARENT] } });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(screen.getByText('Standalone Team')).toBeInTheDocument();
+    expect(screen.queryByText('Software Engg')).not.toBeInTheDocument();
+  });
+
+  it('clicking Request to Join on a CHILD team targets the child\'s own team_id, not the parent\'s', async () => {
+    vi.mocked(api.getAllTeams).mockResolvedValue({ data: { data: [PARENT, CHILD_A] } } as any);
+    vi.mocked(api.requestJoinTeam).mockResolvedValue({} as any);
+    vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+    fireEvent.click(screen.getByText('🔍 Discover Teams'));
+    await screen.findByText('Team Sujal');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Request to join Team Sujal' }));
+
+    await waitFor(() => expect(api.requestJoinTeam).toHaveBeenCalledWith('child-a'));
+    expect(api.requestJoinTeam).not.toHaveBeenCalledWith('parent-1');
+  });
+
+  it('clicking Request to Join on the PARENT itself still targets the parent\'s own team_id', async () => {
+    vi.mocked(api.getAllTeams).mockResolvedValue({ data: { data: [PARENT, CHILD_A] } } as any);
+    vi.mocked(api.requestJoinTeam).mockResolvedValue({} as any);
+    vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+    fireEvent.click(screen.getByText('🔍 Discover Teams'));
+    await screen.findByText('Software Engg');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Request to join Software Engg' }));
+
+    await waitFor(() => expect(api.requestJoinTeam).toHaveBeenCalledWith('parent-1'));
+  });
+
+  it('does not fetch parent previews for teams already shown flat when Discover has never been opened', async () => {
+    vi.mocked(api.getAllTeams).mockResolvedValue({ data: { data: [{ ...CHILD_A, parent_team_id: 'never-opened-parent' }] } } as any);
+    vi.mocked(api.getTeamPreview).mockClear();
+    renderTeams();
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+
+    // Discover Teams was never clicked open -- no reason to have resolved
+    // any of its parent names yet.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(vi.mocked(api.getTeamPreview).mock.calls.filter((c) => c[0] === 'never-opened-parent').length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Notification deep-link destination: ?teamId=... selects that team on
+// load instead of the default "first team," and the param is consumed
+// (cleared from the URL) so it doesn't re-fire on a later reload.
+describe('Teams — notification deep-link destination', () => {
+  it('?teamId=team-b selects Team Beta instead of the default first team', async () => {
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [TEAM_A, TEAM_B] } } as any);
+    renderTeams(FAKE_USER, ['/teams?teamId=team-b']);
+
+    await screen.findByRole('heading', { name: 'Team Beta' });
+    expect(screen.queryByRole('heading', { name: 'Team Alpha' })).not.toBeInTheDocument();
+  });
+
+  it('a deep-linked teamId no longer in the user\'s teams shows a safe fallback message, not a crash', async () => {
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [TEAM_A] } } as any);
+    renderTeams(FAKE_USER, ['/teams?teamId=team-removed']);
+
+    expect(await screen.findByText(/no longer have access to that team/i)).toBeInTheDocument();
+    // Falls back to the normal default-selection behavior rather than a
+    // blank/broken page.
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+  });
+
+  it('a second notification click while already on /teams (no remount) still switches the selected team', async () => {
+    // React Router does not remount a component on a search-string-only
+    // navigation to the SAME route -- this proves the deep-link effect
+    // reacts to searchParams changes directly, not just component mount.
+    vi.mocked(api.getMyTeams).mockResolvedValue({ data: { data: [TEAM_A, TEAM_B] } } as any);
+    let navigate: (path: string) => void = () => {};
+    function Harness() {
+      navigate = useNavigate();
+      return <Teams />;
+    }
+    mockUseAuth.mockReturnValue({ user: FAKE_USER, isAuthenticated: true, token: 'fake-token', login: vi.fn(), register: vi.fn(), logout: vi.fn() });
+    render(
+      <MemoryRouter initialEntries={['/teams']}>
+        <Harness />
+      </MemoryRouter>
+    );
+    await screen.findByRole('heading', { name: 'Team Alpha' });
+
+    act(() => navigate('/teams?teamId=team-b'));
+
+    await screen.findByRole('heading', { name: 'Team Beta' });
   });
 });

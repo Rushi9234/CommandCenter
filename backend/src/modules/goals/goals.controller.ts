@@ -48,3 +48,13 @@ export const returnGoal = async (req: AuthRequest, res: Response) => {
   const goal = await goalsService.returnGoal(req.user!.userId, req.params.goalId, req.body?.status);
   ok(res, goal, 'Goal returned for further work');
 };
+
+export const approveGoalCreation = async (req: AuthRequest, res: Response) => {
+  const goal = await goalsService.approveCreation(req.user!.userId, req.params.goalId);
+  ok(res, goal, 'Goal approved');
+};
+
+export const rejectGoalCreation = async (req: AuthRequest, res: Response) => {
+  const goal = await goalsService.rejectCreation(req.user!.userId, req.params.goalId);
+  ok(res, goal, 'Goal rejected');
+};

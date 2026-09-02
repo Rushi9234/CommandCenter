@@ -1,5 +1,8 @@
 import { goalsRepository } from './goals.repository';
 import { ForbiddenError, BadRequestError } from '../../common/errors';
+import { notificationsService } from '../notifications/notifications.service';
+import { usersRepository } from '../users/users.repository';
+import { teamsRepository } from '../teams/teams.repository';
 
 // Milestone 46: used to re-filter the ENTIRE goals array at every node of
 // the tree (children = allGoals.filter(...)) -- O(n) work per node
@@ -40,6 +43,21 @@ export class GoalsService {
   // write access to just by naming that goal's ID. Reuses canWriteGoal
   // against the destination parent, the exact same rule and reasoning
   // updateGoal already applies.
+  // Creation governance: a team goal proposed by a non-leader member must
+  // not go live as an official team goal immediately -- it enters
+  // 'pending_approval' until a team owner/admin approves or rejects it.
+  // A leader creating a team goal themselves is auto-approved (creation_
+  // status stays NULL): they already ARE the approval authority for their
+  // own team, so a self-approval step would add friction with no actual
+  // governance value. Personal (teamless) goals never touch creation_
+  // status at all -- this entire concept is team-goal-only, per the
+  // explicit requirement that personal goals remain unaffected.
+  //
+  // Deliberately separate from the completion-review workflow below
+  // (submitForReview/approveReview/returnGoal) -- these are two different
+  // approval concepts (who may officially create a team goal, vs. who may
+  // mark one completed) and must never be conflated into one status field
+  // or one set of columns.
   async createGoal(userId: string, body: any) {
     if (body.parentGoalId) {
       const canWriteParent = await goalsRepository.canWriteGoal(userId, body.parentGoalId);
@@ -48,7 +66,13 @@ export class GoalsService {
       }
     }
 
-    return goalsRepository.createGoal({
+    let creationStatus: string | undefined;
+    if (body.teamId) {
+      const isLeader = await goalsRepository.isTeamLeaderOfTeam(userId, body.teamId);
+      creationStatus = isLeader ? undefined : 'pending_approval';
+    }
+
+    const goal = await goalsRepository.createGoal({
       title: body.title,
       description: body.description || '',
       goal_type: body.goalType || 'project',
@@ -56,7 +80,28 @@ export class GoalsService {
       team_id: body.teamId,
       parent_goal_id: body.parentGoalId,
       target_date: body.targetDate ? new Date(body.targetDate) : undefined,
+      creation_status: creationStatus,
     });
+
+    if (creationStatus === 'pending_approval' && body.teamId) {
+      const [team, creator] = await Promise.all([teamsRepository.getTeam(body.teamId), usersRepository.getUserById(userId)]);
+      if (team && creator) {
+        await notificationsService.notifyTeamMembersByRole(
+          body.teamId,
+          ['owner', 'admin'],
+          {
+            category: 'goal.creation_proposed',
+            preferenceGroup: 'goal_creation',
+            title: 'Goal approval requested',
+            message: `${creator.full_name} proposed a new team goal: "${goal.title}"`,
+            goalId: goal.goal_id,
+          },
+          userId
+        );
+      }
+    }
+
+    return goal;
   }
 
   // Milestone 5: base gate (requireTeamRoleIfSpecified + canAccessTeam)
@@ -111,6 +156,23 @@ export class GoalsService {
       const wouldCycle = await goalsRepository.wouldCreateCycle(goalId, updates.parent_goal_id);
       if (wouldCycle) {
         throw new BadRequestError('This would create a cycle in the goal hierarchy');
+      }
+    }
+
+    // Creation governance: a proposal still awaiting (or rejected from)
+    // leader approval is not yet an official team goal -- status/progress
+    // work on it must wait until it's approved. Title/description edits
+    // (and delete, gated separately at the route level) remain allowed,
+    // so a proposer can still fix a typo or withdraw their own proposal.
+    if (updates.status !== undefined || updates.progress !== undefined) {
+      const target = await goalsRepository.getGoal(goalId);
+      if (target?.creation_status === 'pending_approval') {
+        throw new ForbiddenError(
+          'This goal is still awaiting team-leader approval and cannot be worked on yet.'
+        );
+      }
+      if (target?.creation_status === 'rejected') {
+        throw new ForbiddenError('This goal proposal was rejected by a team leader and cannot be updated.');
       }
     }
 
@@ -182,6 +244,9 @@ export class GoalsService {
     if (!goal.team_id) {
       throw new BadRequestError('Only team goals go through review -- personal goals can be marked completed directly.');
     }
+    if (goal.creation_status === 'pending_approval' || goal.creation_status === 'rejected') {
+      throw new ForbiddenError('This goal is not yet an approved team goal and cannot be submitted for review.');
+    }
     if (goal.status === 'completed') {
       throw new BadRequestError('This goal is already completed.');
     }
@@ -189,7 +254,7 @@ export class GoalsService {
       throw new BadRequestError('This goal has already been submitted for review.');
     }
 
-    return goalsRepository.updateGoal(goalId, {
+    const updated = await goalsRepository.updateGoal(goalId, {
       status: 'pending_review',
       // No explicit request means "sign off on the current progress/
       // stage" -- re-affirming the goal's own status, never completion.
@@ -197,6 +262,33 @@ export class GoalsService {
       submitted_for_review_by: userId,
       submitted_for_review_at: new Date(),
     });
+
+    const isCompletionRequest = (requestedStatus || goal.status) === 'completed';
+    const submitter = await usersRepository.getUserById(userId);
+    if (submitter) {
+      await notificationsService.notifyTeamMembersByRole(
+        goal.team_id,
+        ['owner', 'admin'],
+        isCompletionRequest
+          ? {
+              category: 'goal.completion_requested',
+              preferenceGroup: 'goal_completion',
+              title: 'Completion approval requested',
+              message: `${submitter.full_name} requested completion approval for "${goal.title}"`,
+              goalId,
+            }
+          : {
+              category: 'goal.review_requested',
+              preferenceGroup: 'goal_completion',
+              title: 'Progress approval requested',
+              message: `${submitter.full_name} requested approval for "${goal.title}"`,
+              goalId,
+            },
+        userId
+      );
+    }
+
+    return updated;
   }
 
   async approveReview(userId: string, goalId: string) {
@@ -230,7 +322,33 @@ export class GoalsService {
       updates.completed_at = new Date();
     }
 
-    return goalsRepository.updateGoal(goalId, updates);
+    const updated = await goalsRepository.updateGoal(goalId, updates);
+
+    if (goal.submitted_for_review_by) {
+      await notificationsService.notifyUser(
+        isCompletionRequest
+          ? {
+              recipientUserId: goal.submitted_for_review_by,
+              category: 'goal.completion_approved',
+              preferenceGroup: 'goal_completion',
+              title: 'Goal completion approved',
+              message: `"${goal.title}" is now marked Completed`,
+              goalId,
+              teamId: goal.team_id,
+            }
+          : {
+              recipientUserId: goal.submitted_for_review_by,
+              category: 'goal.review_approved',
+              preferenceGroup: 'goal_completion',
+              title: 'Your goal progress was approved',
+              message: `Your update on "${goal.title}" was approved`,
+              goalId,
+              teamId: goal.team_id,
+            }
+      );
+    }
+
+    return updated;
   }
 
   async returnGoal(userId: string, goalId: string, targetStatus?: string) {
@@ -242,7 +360,7 @@ export class GoalsService {
       throw new BadRequestError('This goal is not currently awaiting review.');
     }
 
-    return goalsRepository.updateGoal(goalId, {
+    const updated = await goalsRepository.updateGoal(goalId, {
       status: targetStatus || 'active',
       // Clear the submission/request markers -- it's been sent back, so
       // "waiting for review, submitted by X, requesting Y" would be
@@ -253,6 +371,84 @@ export class GoalsService {
       submitted_for_review_by: null,
       submitted_for_review_at: null,
     });
+
+    if (goal.submitted_for_review_by) {
+      await notificationsService.notifyUser({
+        recipientUserId: goal.submitted_for_review_by,
+        category: 'goal.returned',
+        preferenceGroup: 'goal_completion',
+        title: 'Goal sent back for changes',
+        message: `"${goal.title}" was sent back by your team leader`,
+        goalId,
+        teamId: goal.team_id,
+      });
+    }
+
+    return updated;
+  }
+
+  // --- Creation-governance workflow ------------------------------------
+  // Distinct from the completion-review workflow above: this governs
+  // whether a PROPOSED team goal ever becomes official at all, not
+  // whether a goal already in progress may be marked completed.
+  // Authorization for both actions is enforced at the route level
+  // (isTeamLeader -- same owner/admin check the completion workflow
+  // uses), never trusted from the request body.
+
+  async approveCreation(userId: string, goalId: string) {
+    const goal = await goalsRepository.getGoal(goalId);
+    if (!goal) {
+      throw new BadRequestError('Goal not found');
+    }
+    if (goal.creation_status !== 'pending_approval') {
+      throw new BadRequestError('This goal is not currently awaiting creation approval.');
+    }
+
+    const updated = await goalsRepository.updateGoal(goalId, {
+      creation_status: null,
+      creation_reviewed_by: userId,
+      creation_reviewed_at: new Date(),
+    });
+
+    await notificationsService.notifyUser({
+      recipientUserId: goal.created_by,
+      category: 'goal.creation_approved',
+      preferenceGroup: 'goal_creation',
+      title: 'Your team goal was approved',
+      message: `"${goal.title}" is now an official team goal`,
+      goalId,
+      teamId: goal.team_id,
+    });
+
+    return updated;
+  }
+
+  async rejectCreation(userId: string, goalId: string) {
+    const goal = await goalsRepository.getGoal(goalId);
+    if (!goal) {
+      throw new BadRequestError('Goal not found');
+    }
+    if (goal.creation_status !== 'pending_approval') {
+      throw new BadRequestError('This goal is not currently awaiting creation approval.');
+    }
+
+    const updated = await goalsRepository.updateGoal(goalId, {
+      creation_status: 'rejected',
+      creation_reviewed_by: userId,
+      creation_reviewed_at: new Date(),
+    });
+
+    await notificationsService.notifyUser({
+      recipientUserId: goal.created_by,
+      category: 'goal.creation_rejected',
+      preferenceGroup: 'goal_creation',
+      title: 'Your goal proposal was rejected',
+      message: `"${goal.title}" was not approved`,
+      goalId,
+      teamId: goal.team_id,
+    });
+
+    return updated;
   }
 }
 

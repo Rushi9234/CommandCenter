@@ -289,4 +289,29 @@ export const approveGoal = (goalId: string) =>
 export const returnGoal = (goalId: string, status?: string) =>
   api.post(`/goals/${goalId}/return`, status ? { status } : {});
 
+// Creation-governance workflow -- distinct from the completion-review
+// endpoints above. Governs whether a team member's proposed team goal
+// becomes official at all.
+export const approveGoalCreation = (goalId: string) =>
+  api.post(`/goals/${goalId}/approve-creation`);
+
+export const rejectGoalCreation = (goalId: string) =>
+  api.post(`/goals/${goalId}/reject-creation`);
+
+// Notifications
+export const getMyNotifications = (limit = 20, offset = 0) =>
+  api.get(`/notifications?limit=${limit}&offset=${offset}`);
+
+export const markNotificationRead = (notificationId: string) =>
+  api.put(`/notifications/${notificationId}/read`);
+
+export const markAllNotificationsRead = () =>
+  api.put('/notifications/read-all');
+
+export const getNotificationPreferences = () =>
+  api.get('/notifications/preferences');
+
+export const updateNotificationPreferences = (updates: Record<string, boolean>) =>
+  api.put('/notifications/preferences', updates);
+
 export default api;

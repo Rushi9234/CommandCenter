@@ -22,6 +22,7 @@ import leaderboardRoutes from '../modules/leaderboard/leaderboard.routes';
 import privacyRoutes from '../modules/privacy/privacy.routes';
 import aiRoutes from '../modules/ai/ai.routes';
 import realtimeRoutes from '../realtime/realtime.routes';
+import notificationsRoutes from '../modules/notifications/notifications.routes';
 
 const router = Router();
 
@@ -56,5 +57,6 @@ router.use('/', leaderboardRoutes);
 router.use('/', privacyRoutes);
 router.use('/ai', aiRoutes);
 router.use('/', realtimeRoutes);
+router.use('/', notificationsRoutes);
 
 export default router;
