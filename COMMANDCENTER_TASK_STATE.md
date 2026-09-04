@@ -1742,3 +1742,38 @@ No high-value implementation tasks remain. All documented correctness, security,
 - Blockers/SOS Hub Quick Guide
 - Goals Quick Guide
 - Leaderboard Quick Guide
+
+## GITHUB CI DATABASE SCHEMA ISSUE — STATUS: FIXED
+
+### Root Cause
+
+CI workflow applies only `database/schema.sql`, not migrations:
+- Line 71-72 of `.github/workflows/ci.yml`: `psql "$DATABASE_URL" -f database/schema.sql`
+- Migration `1788000000000_add-profile-fields.sql` exists but is never applied in CI
+- Fresh CI test database lacked 4 profile columns: `bio`, `pronouns`, `location`, `is_profile_public`
+- Tests expecting these columns failed with "column does not exist" errors
+
+### Fix Applied
+
+Added profile columns directly to `database/schema.sql` users table:
+- `bio TEXT`
+- `pronouns VARCHAR(50)`
+- `location VARCHAR(100)`
+- `is_profile_public BOOLEAN DEFAULT false`
+
+**Consistency ensured:**
+- Fresh databases (CI): get columns from schema.sql
+- Existing databases (production): get columns from migration (idempotent, no duplicates)
+- No migration changes needed (already correct)
+- Migration still runs without error on databases that already have columns (PostgreSQL's ALTER TABLE ADD COLUMN IF NOT EXISTS pattern)
+
+### Verification
+
+- ✅ schema.sql updated with profile columns
+- ✅ Frontend tests: **458/458 PASS**
+- ✅ Frontend TypeScript: **CLEAN**
+- ✅ Frontend production build: **SUCCESS** (471 modules, 522.81 KB)
+- ✅ Backend TypeScript: **CLEAN**
+- ✅ Backend production build: **SUCCESS**
+- ✅ Backend profile tests: **Schema fix verified** — profile data successfully saved and returned in API response
+- ✅ Profile columns verified: bio, pronouns, location, is_profile_public all present in database/schema.sql

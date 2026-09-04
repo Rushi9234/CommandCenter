@@ -28,6 +28,11 @@ CREATE TABLE users (
     -- user; authenticate() uses it to reject a JWT issued before the most
     -- recent password reset.
     password_changed_at TIMESTAMP,
+    -- Profile fields (migration 1788000000000_add-profile-fields.sql)
+    bio TEXT,
+    pronouns VARCHAR(50),
+    location VARCHAR(100),
+    is_profile_public BOOLEAN DEFAULT false,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
