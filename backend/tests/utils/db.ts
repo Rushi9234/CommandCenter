@@ -6,7 +6,17 @@ import { Pool } from 'pg';
 // commandcenter_test.
 export const testPool = new Pool({ connectionString: process.env.DATABASE_URL });
 
+// `notifications` was previously omitted here even though it has a FK to
+// `users` (ON DELETE CASCADE) -- Postgres's TRUNCATE ... CASCADE already
+// implicitly locks and empties it as a dependent table regardless of
+// whether it's named, so this addition is not what actually fixes
+// anything (see users.controller.ts's changePassword for the real fix:
+// an unawaited notification INSERT racing this TRUNCATE, not this list
+// being incomplete). Named explicitly anyway to match every other
+// cascade-reachable table already listed here for clarity (e.g.
+// `messages` is likewise redundant with `blockers`'s cascade).
 const TABLES = [
+  'notifications',
   'messages',
   'blockers',
   'daily_work_submissions',

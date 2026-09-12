@@ -31,7 +31,25 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/commandcenter_test
       JWT_SECRET: ci-test-only-jwt-secret-not-used-outside-this-workflow
       AUTO_VERIFY: 'true'
+      # AI_PROVIDER is deliberately left at its 'groq' default (config/env.ts),
+      # NOT set to 'none'. Several test files (privacyEnforcement.test.ts,
+      # rateLimit.test.ts, finalAuditHardening.test.ts) rely on
+      # jest.spyOn(GroqProvider.prototype, 'generateCompletion') to control
+      # AI response content -- that spy only ever fires when the real
+      # provider factory actually constructs a GroqProvider instance, which
+      # requires AI_PROVIDER='groq'. Setting it to 'none' here would make
+      # aiProviderFactory return a NullProvider instead and silently break
+      # every one of those tests' assertions (verified locally before
+      # settling on this). GROQ_API_KEY/GEMINI_API_KEY below are
+      # intentionally fake, non-functional placeholders, never real
+      # secrets: no test asserts on real Groq/Gemini connectivity, and
+      # backend/tests/setup/aiProviderStub.ts stubs global fetch by
+      # default for every test so none of them depend on real outbound
+      # network access to either provider's live API either way -- these
+      # two vars only need to be *present* (non-empty) for code paths that
+      # check truthiness before use, never valid.
       GROQ_API_KEY: ci-placeholder-key
+      GEMINI_API_KEY: ci-placeholder-key
       # Milestone 16: single place to change the audit's failure threshold.
       # 'high' means moderate/low findings are visible in the step's output
       # but never fail the job -- only high/critical do. Kept as

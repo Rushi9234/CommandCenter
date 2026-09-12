@@ -35,17 +35,26 @@ export const changePassword = async (req: AuthRequest, res: Response) => {
 
   await usersService.changePassword(req.user!.userId, current_password, new_password);
 
-  // Send security notification after successful password change (fire-and-forget)
-  // Notification failure must not fail the password change itself
-  notificationsService.notifyUser({
+  // Send security notification after successful password change. Awaited --
+  // matching every other notifyUser() call site in the codebase (teams,
+  // goals, projects, blockers all await it inline) -- not fire-and-forget.
+  // notifyUser() already never throws (its own body is wrapped in
+  // try/catch and only logs), so awaiting it cannot make this endpoint
+  // fail on notification trouble; it only makes the response wait for the
+  // notification's own DB write to finish first. Previously this was
+  // deliberately NOT awaited, which let the HTTP response return, and the
+  // test that sent it proceed to the next test's beforeEach (resetDatabase's
+  // TRUNCATE ... CASCADE on users), while this INSERT into the
+  // users-referencing notifications table was still in flight -- producing
+  // real, reproduced-locally Postgres deadlocks and FK violations
+  // ("notifications_user_id_fkey", "deadlock detected") in CI. This is the
+  // only notifyUser() call site in the app that wasn't already awaited.
+  await notificationsService.notifyUser({
     recipientUserId: req.user!.userId,
     category: 'password_change',
     preferenceGroup: 'password_change',
     title: 'Password Changed',
     message: 'Your password was changed successfully. If you did not make this change, please contact support immediately.',
-  }).catch((error) => {
-    // Logged but not thrown -- password change succeeded regardless
-    console.error('[users.controller] Failed to send password change notification (non-fatal):', error);
   });
 
   // Return 204 No Content on success

@@ -2018,10 +2018,10 @@ Covers (via a mocked `avatarStorageService` — see note below): authenticated u
 | Phase 1 | Core Profile (fields, visibility, My Profile page) | COMPLETE |
 | Phase 2 | Password & Security (change password, session invalidation, rate limiting, security notification) | COMPLETE |
 | Phase 3 | Avatar / Media (upload, display, replacement, deletion) | COMPLETE |
-| Phase 4 | Email / Phone Verification | NOT STARTED |
+| Phase 4 | Email / Phone Verification | **ARCHITECTURE/AUDIT COMPLETE — NOT IMPLEMENTED** (see `PROFILE_PHASE4_EMAIL_PHONE_VERIFICATION_AUDIT.md`) |
 | Phase 5 | Advanced Account Security (sessions/device management, 2FA, password history) | FUTURE |
 
-The Profile feature as a whole is **NOT COMPLETE** — Phases 1-3 are done and verified; Phases 4-5 remain.
+The Profile feature as a whole is **NOT COMPLETE** — Phases 1-3 are done and verified; Phase 4 has a completed architecture/security audit but zero implementation; Phase 5 remains untouched.
 
 ## PROFILE RESPONSE-ENVELOPE INVESTIGATION — STATUS: COMPLETE / VERIFIED (2026-09-12)
 
@@ -2112,11 +2112,84 @@ Several existing tests in this file (and 11 more failures in two entirely separa
 - `tests/notifications.test.ts`'s "defaults to all categories ON for a fresh user" test has a stale hardcoded preferences object missing the `password_change` key added during Phase 2 hardening.
 - The token-reuse-across-successful-changes pitfall described above affects `tests/password-change-security.test.ts`'s own "rejects the 4th password change attempt with 429" and "does not expose rate-limit timing details" tests, plus its entire "Security Notification" describe block (which also independently races a fire-and-forget notification INSERT against the next test's `resetDatabase()` TRUNCATE).
 
+## PROFILE PHASE 4 — EMAIL/PHONE VERIFICATION ARCHITECTURE & SECURITY AUDIT — STATUS: AUDIT COMPLETE / NOT IMPLEMENTED (2026-09-19)
+
+Full document: `PROFILE_PHASE4_EMAIL_PHONE_VERIFICATION_AUDIT.md`. **No routes, migrations, schema changes, UI, or dependencies were added — this task was architecture and threat-model analysis only,** per its explicit scope boundary.
+
+### Current-state findings (grounded in reading the actual code, not assumed)
+
+- **Email:** `users.email` is `UNIQUE NOT NULL`, the login identifier, and login is unconditionally gated on `is_verified`. **There is currently no code path anywhere — backend or frontend — that can change a user's email after account creation.** `email` is absent from both `AUTH_UPDATABLE_COLUMNS` and the profile `UPDATABLE_COLUMNS`; `Profile.tsx` shows it read-only with an explicit "coming in a future phase" caption. `is_verified` itself is not even returned by `GET /api/users/me` today — a prerequisite fix needed before any frontend verification badge can render.
+- **Existing exposure (pre-existing, not introduced by Phase 4, not fixed by this audit):** `GET /api/users` (teammates-scoped, Milestone 41) returns every teammate's `email`. Flagged so no future Phase 4 phone-verification indicator repeats the same exposure on that endpoint.
+- **Phone:** 100% greenfield. No column, no SMS/OTP provider abstraction, no route, nothing exists anywhere in the codebase.
+- **Reusable primitives already established** (Phase 4 should not reinvent): `generateOpaqueToken()`/`hashToken()` (256-bit random + SHA-256 hash-at-rest, used today for verification/reset/refresh tokens); single-pending-slot-column pattern (a new token request overwrites/invalidates the old one, no multi-row token table); expiry-at-query-time; anti-enumeration silent-no-op convention (`resendVerification`/`forgotPassword`); free-text notification categories (zero schema change to add `email_change`/`phone_verification`); the `RateLimitProvider` factory pattern (and the hard lesson from BUG-003: any new per-user limiter must be mounted *after* `authenticate`); a real, already-implemented `EmailProvider` abstraction with a working Resend integration (though whether `EMAIL_PROVIDER=resend` is actually configured in the live deployment is an operational fact this audit could not verify from source).
+
+### Recommended architecture (highlights — full detail in the audit doc)
+
+- **Email-change verification:** two-step, verify-the-*new*-address-first flow. Old email stays authoritative and login is unaffected throughout the pending period. Old email is notified at *request* time (not just completion) — the account owner's earliest chance to notice an attack. Current-password confirmation required to initiate. All sessions revoked on completion (reusing the exact `password_changed_at`-style mechanism, as a new `email_changed_at` column checked by `authenticate()`).
+- **Phone verification:** optional, OTP-based (not link-based — different medium, different natural UX), E.164-normalized, 10-minute expiry, 5-attempt ceiling per OTP (the primary brute-force defense against the 6-digit/1,000,000-code space), 60-second resend cooldown. Explicitly **not** promoted to a login/recovery method in Phase 4 — verified-attribute only, with login/recovery-via-phone and 2FA explicitly deferred to Phase 5. Phone number recommended **not** globally unique (unlike email) — shared family numbers are legitimate; email uniqueness exists specifically because email is the login identifier, phone deliberately is not.
+- **Database:** extend `users` directly (9 new nullable columns total — 4 for email-change, 5 for phone/OTP including a new `phone_otp_attempts` counter), not a dedicated verification table — matches the exact precedent already set by every existing single-purpose verification column, and the single-pending-slot design needs no multi-row table.
+- **API:** 6 new endpoints proposed (`request-email-change`, `resend-email-change-verification`, `verify-email-change`, `request-phone-verification`, `resend-phone-verification`, `verify-phone`) with exact auth/rate-limit/request/response shapes documented in the audit's §7.
+- **Threat model:** explicit mitigation mapped for account takeover, email-change hijacking, verification-token theft, OTP brute force, replay, user enumeration, resend abuse, race conditions, CSRF, leaked URLs, and privileged bypass — no admin-override endpoint is proposed anywhere in the design.
+- **Dependencies/blockers identified:** a phone-number normalization library (e.g. `libphonenumber-js`) is required and does not currently exist in `package.json`; a real SMS-sending capability (new provider abstraction + vendor integration, e.g. Twilio) is an unresolved product/ops decision, not something this audit chose on its own; real email delivery in production depends on `EMAIL_PROVIDER` actually being configured to a real provider in the deployed environment, which is unverified from source.
+- **Recommended implementation order:** migration + schema sync → expose `is_verified` on the profile endpoint (cheap, unblocks frontend badge work early) → email-change backend → email-change tests → email-change frontend → phone SMS-provider decision → phone backend → phone tests → phone frontend → full verification pass → documentation reconciliation. Full 11-step breakdown in the audit's §13.
+
+### Explicitly NOT done in this task
+
+No migration, no schema change, no route, no controller, no service method, no frontend component, no new npm dependency, no test. No existing authentication behavior was touched. Nothing was committed or pushed as part of this audit (the audit document itself, and this task-state/roadmap update, remain uncommitted per instruction).
+
+## CI FAILURE INVESTIGATION & TEST INFRASTRUCTURE CLEANUP — STATUS: FIXES IMPLEMENTED AND LOCALLY VERIFIED / NOT YET COMMITTED (2026-09-19)
+
+Investigated an automated CI reviewer's report of two failure classes (AI-provider 401s, database deadlocks) without assuming the diagnosis was complete or correct, per explicit instruction. **Profile Phase 4 was not touched.** Full root-cause detail: `COMMANDCENTER_BUG_AUDIT.md` BUG-004.
+
+### Task A — AI provider failures: root cause confirmed, but NOT a test-failure cause
+
+Every AI-touching test file (`privacyEnforcement.test.ts`, `rateLimit.test.ts`, `finalAuditHardening.test.ts`, `aiPromptSanitization.test.ts`) already mocks the AI-provider boundary — either `jest.spyOn(GroqProvider.prototype, 'generateCompletion')` or a full `jest.mock` of `aiProviderFactory`. Every `ai.service.ts` consumer function wraps its own provider call in try/catch with a safe fallback. **The real Groq-401/Gemini-missing-key errors do genuinely occur** — in test files that incidentally trigger AI indirectly (creating a log/blocker/project) without mocking anything, since `AI_PROVIDER` defaults to `'groq'` and CI's `GROQ_API_KEY` is a placeholder — but every one is caught and swallowed before it can fail an assertion. Cross-referenced against every historical full-suite failure list produced across this session and prior sessions: none ever attributed a failure to this.
+
+**`AI_PROVIDER=none` was considered and explicitly rejected, not assumed safe.** Verified that `privacyEnforcement.test.ts`, `rateLimit.test.ts`, and `finalAuditHardening.test.ts` all depend on the real factory actually constructing a `GroqProvider` instance for their `jest.spyOn(GroqProvider.prototype, ...)` calls to ever fire — with `AI_PROVIDER=none`, `aiProviderFactory` returns a `NullProvider` instead, the spy is never invoked, and every one of those tests' call-count/content assertions would break. This is a real, verified dependency, not a hypothetical one.
+
+**Fix implemented instead:** `backend/tests/setup/aiProviderStub.ts` (new), wired into `jest.config.js` via `setupFilesAfterEnv`. Stubs `global.fetch` with a `beforeEach`/`afterEach` pair so any *unmocked* code path through the real `GroqProvider`/`GeminiProvider` never makes a real network call — confirmed via grep that `fetch` is used by nothing else in the entire backend (only these two providers), so this cannot affect any other subsystem. Any test that spies on `GroqProvider.prototype.generateCompletion` directly, or mocks the whole factory module, is completely unaffected either way (the real method body — and therefore `fetch` — is never reached when spied/mocked, regardless of whether this stub exists). `.github/workflows/ci.yml` updated: added `GEMINI_API_KEY: ci-placeholder-key` (symmetry with the existing fake `GROQ_API_KEY`) and a comment explicitly documenting why `AI_PROVIDER` is deliberately left at its `'groq'` default rather than switched to `'none'`.
+
+### Task B — Database deadlocks: root cause confirmed and fixed
+
+`backend/src/modules/users/users.controller.ts`'s `changePassword` was the **sole** `notifyUser()` call site in the entire codebase not `await`ed (every other caller — teams, goals, projects, blockers — awaits it inline, per `notifications.service.ts`'s own documented convention). The unawaited background `INSERT INTO notifications` raced the *next* test's `beforeEach` → `resetDatabase()` → `TRUNCATE users ... CASCADE` (which must also lock the FK-cascade-reachable `notifications` table), producing genuine, reproduced-on-demand Postgres `deadlock detected` errors and `notifications_user_id_fkey` violations.
+
+**Reproduced locally before fixing** (per explicit instruction not to skip this step): isolated the "Security Notification" describe block in `password-change-security.test.ts`, ran it against the unmodified pre-fix controller via `git stash`, and captured the exact `notifications_user_id_fkey` violation on the first attempt.
+
+**Fix:** changed the call to `await notificationsService.notifyUser({...})` — matches every other call site's existing convention exactly. `notifyUser()` already never throws (its own body is fully try/caught), so this cannot introduce a new failure mode for `changePassword`; it only removes the race window. Also added `notifications` explicitly to `resetDatabase()`'s `TABLES` list in `tests/utils/db.ts` for consistency with every other already-explicitly-listed cascade-reachable table (this is a documentation/consistency change, not the actual fix — Postgres's `TRUNCATE ... CASCADE` already implicitly reaches `notifications` whether named or not).
+
+**No `pg_terminate_backend`, no blind retries, no test-concurrency changes** — exactly the "correct the unawaited async work" class of fix the investigation instructions asked for, not any of the explicitly-disallowed shortcuts.
+
+**Re-ran the identical reproduction scenario after the fix:** zero `deadlock detected` or `notifications_user_id_fkey` occurrences, versus the reliable pre-fix reproduction. Confirmed at the full-suite level too: two complete ~63-65 minute full-backend-suite runs (one before this fix's controller change, one after) both show the identical 22-failed/504-passed/six-failed-suites baseline from unrelated pre-existing causes, but zero deadlock/FK-violation occurrences in either raw log text after the fix, versus a nonzero baseline before it.
+
+### A third issue found during verification, deliberately NOT fixed here (out of this task's scope)
+
+While confirming no full-suite regressions, `tests/dailyWork.test.ts`'s "caps entries at 50 per day per team" test (51 sequential real HTTP+DB round-trips against Neon, already given an extended 60000ms timeout by whoever wrote it) is **currently, consistently** exceeding that budget by ~5-6 seconds (65-66s observed across 3 separate runs). Verified this is unrelated to anything in this task by reproducing the identical failure against the completely unmodified, pristine pre-task codebase via `git stash` — same ~66.5s failure. This is a genuine, currently-reproducing database-latency timing-margin issue (not a deadlock, not AI-related), flagged here for whoever owns test-timeout budgets next, not fixed as part of this CI-stabilization task (which was scoped to AI-provider determinism and deadlocks specifically, not general per-test timeout tuning under variable third-party database latency).
+
+### Verification results
+
+- Focused reproduction (Security Notification describe block): pre-fix reliably reproduces the FK violation; post-fix, zero occurrences across repeated runs.
+- Affected AI-touching suites run together (`password-change-security.test.ts`, `privacyEnforcement.test.ts`, `rateLimit.test.ts`, `finalAuditHardening.test.ts`, `aiPromptSanitization.test.ts`): the only failures present are the same 8 pre-existing token-reuse-after-invalidation failures already documented under the password-change rate-limiter fix above (unrelated to this task), plus two Neon-latency 30s timeouts in `finalAuditHardening.test.ts` that were confirmed transient/environmental by passing 15/15 on an immediate isolated rerun of the same file.
+- Backend `tsc --noEmit`: **PASS** (clean).
+- Backend production build: **PASS**.
+- Full backend suite, run once before this session's fixes and once after: both **504/526 passed, 22 failed, 39 suites** — identical failure count, zero attributable to this task's changes, zero deadlock/FK-violation text present in the post-fix run (present pre-fix, on-demand).
+- GitHub Actions: **not run** — pushing was explicitly disallowed for this task ("Do not commit or push until I explicitly approve the final result"), so CI could not be triggered or inspected as part of this verification pass.
+
+### Files changed (this task, not yet committed)
+
+- `backend/src/modules/users/users.controller.ts` — awaited the password-change notification call (the actual deadlock/FK-violation fix)
+- `backend/tests/utils/db.ts` — added `notifications` to the explicit truncate list (consistency, not the fix)
+- `backend/tests/setup/aiProviderStub.ts` (new) — global `fetch` stub for AI providers
+- `backend/jest.config.js` — wired the new setup file in via `setupFilesAfterEnv`
+- `.github/workflows/ci.yml` — added `GEMINI_API_KEY` placeholder + explanatory comment on the `AI_PROVIDER='groq'` decision
+- `COMMANDCENTER_BUG_AUDIT.md` — BUG-004 added
+- `COMMANDCENTER_TASK_STATE.md` — this entry
+
+### Whether real GitHub Secrets are still required
+
+**No.** Nothing in this fix requires a real Groq, Gemini, or any other third-party API key/secret. `GROQ_API_KEY`/`GEMINI_API_KEY` in CI remain intentionally fake placeholder strings (unchanged in spirit, `GEMINI_API_KEY` newly added for symmetry) — they only need to be non-empty for truthiness checks in code paths that, thanks to the fetch stub, never make a real network call anyway.
+
 ## NEXT PRIORITY (AUTHORITATIVE — supersedes all earlier "NEXT PRIORITY" sections in this file)
 
-**Profile Phase 4 — Email / Phone Verification**, OR another roadmap item the user prioritizes explicitly.
+**Get explicit approval on this CI-stabilization task's diffs, then commit and push** so the fixes actually take effect in GitHub Actions (currently implemented and locally verified only — not yet committed, per this task's explicit instruction). After that: **implement Profile Phase 4** per `PROFILE_PHASE4_EMAIL_PHONE_VERIFICATION_AUDIT.md`'s recommended order (§13), OR another roadmap item the user prioritizes explicitly, OR the smaller, independently-flagged `tests/profile.test.ts`/`tests/profile-core.test.ts` response-envelope fix (11 failing tests, same root cause as BUG-002) if a quicker task is preferred first. Also newly flagged as a candidate: the `dailyWork.test.ts` timeout-margin issue described above.
 
-This task (password-change rate limiter ordering) is now closed. No blocking defect remains in either of the two rate limiters that were audited (avatar, password-change) — both are correctly user-ID-keyed. Per the canonical Profile phase table, Phases 1-3 are COMPLETE and Phase 4 (Email/Phone Verification) is the next unstarted phase in sequence — flagged as the next candidate only, not started, pending explicit direction.
-
-Also newly available as an alternative next priority, if preferred over Phase 4: fix the response-envelope assertions in `tests/profile.test.ts`/`tests/profile-core.test.ts` (11 failing tests, same root cause as BUG-002, backend-side, never previously touched) — a small, well-understood, already-diagnosed correctness fix in the same spirit as this task.
-- The pre-existing `Profile.tsx` `loadProfile()`/`handleSave()` response-envelope mismatch described above — appears to affect the live Profile page today, independent of anything in this task.
+Phase 4 remains architecturally ready but has **zero implementation** — do not mark it COMPLETE, or begin implementing it, until explicitly directed.
