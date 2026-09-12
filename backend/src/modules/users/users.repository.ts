@@ -12,6 +12,7 @@ export class UsersRepository {
     const text = `
       SELECT
         user_id, email, username, full_name, role,
+        is_verified,
         bio, pronouns, location, is_profile_public,
         avatar_key, avatar_mime_type, avatar_size, avatar_width, avatar_height, avatar_uploaded_at,
         privacy_settings, notification_preferences,

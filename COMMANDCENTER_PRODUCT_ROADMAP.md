@@ -825,7 +825,7 @@ CommandCenter is a lightweight, team-focused productivity platform designed for 
 ### I. Profile & Account
 
 #### I.1 User Profile & Account Settings
-**Status:** In Progress — Phases 1-3 complete, Phases 4-5 not started
+**Status:** In Progress — Phases 1-3 complete; Phase 4 implementation started (Step 1 of several slices); Phase 5 not started
 **Priority:** P2  
 **Effort:** Medium
 
@@ -833,7 +833,7 @@ CommandCenter is a lightweight, team-focused productivity platform designed for 
 - Phase 1 — Core Profile (fields, visibility, My Profile page): **COMPLETE**
 - Phase 2 — Password & Security (change password, session invalidation, rate limiting, security notification): **COMPLETE**
 - Phase 3 — Avatar/Media (upload, display, replacement, deletion via Vercel Blob Storage): **COMPLETE**
-- Phase 4 — Email/Phone Verification (email change verification, phone verification): NOT STARTED
+- Phase 4 — Email/Phone Verification (email change verification, phone verification): **IN PROGRESS, NOT COMPLETE** — architecture/security audit complete (`PROFILE_PHASE4_EMAIL_PHONE_VERIFICATION_AUDIT.md`); Step 1 implemented (database migration for the 9 approved columns, mirrored into `schema.sql`, and `GET /api/users/me` now exposes `is_verified`). No email-change or phone-OTP endpoint, no SMS provider, no UI, no notifications yet — those are later slices.
 - Phase 5 — Advanced Account Security (active sessions/device management, 2FA, password history/reuse prevention): FUTURE
 
 **User Problem:** No dedicated profile page; minimal account management

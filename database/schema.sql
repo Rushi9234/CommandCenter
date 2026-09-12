@@ -40,6 +40,20 @@ CREATE TABLE users (
     avatar_width INTEGER,
     avatar_height INTEGER,
     avatar_uploaded_at TIMESTAMP,
+    -- Profile Phase 4 (migration 1788000002000_add-phase4-email-phone-verification-fields.sql)
+    -- Email-change verification -- distinct from is_verified/verification_token
+    -- above, which remain signup-only and untouched.
+    pending_email VARCHAR(255),
+    email_change_token_hash VARCHAR(255),
+    email_change_expires TIMESTAMP,
+    email_changed_at TIMESTAMP,
+    -- Phone verification -- deliberately separate from is_verified, and
+    -- deliberately not unique (not a login identifier).
+    phone_number VARCHAR(20),
+    phone_verified BOOLEAN DEFAULT false,
+    phone_otp_hash VARCHAR(255),
+    phone_otp_expires TIMESTAMP,
+    phone_otp_attempts INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
