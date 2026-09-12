@@ -46,7 +46,17 @@ const stubbedGroqResponse = () =>
 let fetchSpy: jest.SpyInstance;
 
 beforeEach(() => {
-  fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue(stubbedGroqResponse() as unknown as Response);
+  // mockImplementation (not mockResolvedValue) -- a Response's body stream
+  // can only be read once (a second .json()/.text() call throws "TypeError:
+  // Body is unusable: Body has already been read"). mockResolvedValue
+  // resolves every call to the exact same Response instance, so any test
+  // that triggers the real, un-spied AI path more than once (e.g. creating
+  // two blockers, each of which calls analyzeBlocker once) had its second
+  // call fail with that exact error -- reproduced locally and confirmed
+  // present in the pushed CI run. mockImplementation constructs a fresh
+  // Response per call instead, which is what every real HTTP client
+  // (including undici's own fetch) actually does on every request.
+  fetchSpy = jest.spyOn(global, 'fetch').mockImplementation(async () => stubbedGroqResponse() as unknown as Response);
 });
 
 afterEach(() => {

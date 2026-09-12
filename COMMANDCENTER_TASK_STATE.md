@@ -2188,8 +2188,109 @@ While confirming no full-suite regressions, `tests/dailyWork.test.ts`'s "caps en
 
 **No.** Nothing in this fix requires a real Groq, Gemini, or any other third-party API key/secret. `GROQ_API_KEY`/`GEMINI_API_KEY` in CI remain intentionally fake placeholder strings (unchanged in spirit, `GEMINI_API_KEY` newly added for symmetry) — they only need to be non-empty for truthiness checks in code paths that, thanks to the fetch stub, never make a real network call anyway.
 
+The CI-stabilization fix above was committed and pushed (commit `9841b7b`) in a subsequent task — that "get approval, commit, push" instruction is now stale and superseded by the entry below.
+
+## PROFILE PHASE 4 — STEP 1: SCHEMA + is_verified EXPOSURE — STATUS: COMPLETE / VERIFIED (2026-09-19)
+
+First of several implementation slices for Profile Phase 4, per `PROFILE_PHASE4_EMAIL_PHONE_VERIFICATION_AUDIT.md`. **This slice implements only the database schema and one read-only profile field — no endpoint, no email/phone logic, no notifications, no UI.** Phase 4 remains NOT COMPLETE overall; only this first slice is done.
+
+### What was implemented
+
+1. **Migration** `backend/migrations/1788000002000_add-phase4-email-phone-verification-fields.sql` — adds the 9 columns specified in the audit's §6.2, verbatim: `pending_email`, `email_change_token_hash`, `email_change_expires`, `email_changed_at`, `phone_number`, `phone_verified`, `phone_otp_hash`, `phone_otp_expires`, `phone_otp_attempts`. All nullable/additive. Only two have defaults (`phone_verified DEFAULT false`, `phone_otp_attempts DEFAULT 0`), matching the audit exactly. No indexes, no `UNIQUE` constraint on `phone_number` (deliberate — phone is not a login identifier, shared family numbers are legitimate, per audit §4.11), no `NOT NULL` anywhere.
+2. **`database/schema.sql`** — mirrored identically into the `users` table's inline definition, in the same task, per the established twice-precedented convention (CI applies `schema.sql` directly, never migrations).
+3. **`GET /api/users/me`** now returns `is_verified` — `users.repository.ts`'s `getProfileById` SELECT gained exactly one column. `is_verified`'s existing meaning (signup-account verification, gates login) is completely unchanged; this only makes the existing value visible in the response for the first time. `UPDATABLE_COLUMNS` (used by `updateUser`) was **not** touched — `is_verified` remains impossible to set through the profile-update path, preserving the existing mass-assignment protection invariant documented in that file's own comment.
+
+### What was deliberately NOT implemented (per explicit instruction)
+
+Email-change request/resend/verify endpoints, phone OTP request/verify endpoints, any SMS provider, any Profile UI change, any email-change or phone notification, Phase 5, Chat. None of the 9 new columns are read or written by any endpoint yet — they exist in the schema only, ready for the next implementation slice.
+
+### A migration-application wrinkle discovered and resolved (not a code defect)
+
+`commandcenter_test` (the database `tests/setup/env.ts` points at) was originally created by applying `database/schema.sql` directly, not by replaying migration history — so `node-pg-migrate`'s tracking table doesn't know several earlier migrations (profile fields, avatar fields) were ever "run" against it, even though their columns already exist there (from `schema.sql`). Running `npm run migrate:up` against it therefore fails immediately on the first already-satisfied `ALTER TABLE ADD COLUMN`, unrelated to this slice's own migration. Resolved by applying this slice's migration file's SQL directly (a plain `ALTER TABLE ADD COLUMN` set, idempotent-safe here since none of the 9 columns existed yet) rather than replaying the whole migration history — this is exactly the same "schema.sql for fresh/CI databases, migrations for incremental production upgrades" dual-track model already established and documented for every prior Profile phase; `commandcenter_test` simply falls on the schema.sql side of that split, same as CI's own fresh database does. No code or documentation elsewhere needed correction for this — it's an artifact of how the shared test database happens to have been provisioned, not a defect in the migration itself (confirmed by also running it, without error, via `node-pg-migrate up` against a separate database whose tracking table *was* in sync).
+
+### Tests added
+
+`backend/tests/profileVerificationStatus.test.ts` (new) — 5 focused tests:
+- `GET /api/users/me` returns `is_verified: true` for a freshly auto-verified test user
+- Reflects `is_verified: false` when the underlying account is unverified (proves the field is a live read, not hardcoded)
+- Does not expose `verification_token`/`password_hash` alongside it
+- Migration coverage: all 9 new columns exist with exactly the documented nullable/default shape (only `phone_verified`/`phone_otp_attempts` have defaults; everything else is nullable with no default)
+- Migration coverage: `phone_number` carries no unique/other constraint
+
+Uses the established `res.body.data.*` envelope convention throughout (not the flat shape `tests/profile.test.ts`/`tests/profile-core.test.ts` still incorrectly assert — those remain untouched, pre-existing, out of scope for this slice).
+
+### Verification results
+
+- Focused (`profileVerificationStatus.test.ts`): **5/5 PASS**.
+- Regression check on the most directly-relevant existing suite (`avatar.test.ts`, which also reads `GET /api/users/me`'s full profile shape): **30/30 PASS**, confirming the new `is_verified` column in the SELECT introduced no regression.
+- Backend `tsc --noEmit`: **PASS** (clean).
+- Backend production build: **PASS**.
+- Full backend suite (run once, ~62 minutes): **510/531 passed, 21 failed, 40 suites**. All 5 new tests from this slice passed. The 21 failures are exactly the same, previously-documented, pre-existing failure classes (`notifications.test.ts`'s stale preferences assertion; `password-change-security.test.ts`'s token-reuse-after-invalidation pitfall; `profile.test.ts`/`profile-core.test.ts`'s pre-BUG-002 flat-envelope assertions; `finalAuditHardening.test.ts`'s Neon-latency timeout) — zero new failures, zero `deadlock detected`/`notifications_user_id_fkey` occurrences (confirming the CI-stabilization fix from the prior task remains stable). `rbac.test.ts` and `dailyWork.test.ts`, both previously flagged as intermittent Neon-latency timeouts, happened to complete within budget this run — consistent with their already-documented transient nature, not evidence either was ever fixed.
+
+### Files changed (this slice)
+
+- `backend/migrations/1788000002000_add-phase4-email-phone-verification-fields.sql` (new)
+- `database/schema.sql`
+- `backend/src/modules/users/users.repository.ts` — one column added to `getProfileById`'s SELECT
+- `backend/tests/profileVerificationStatus.test.ts` (new)
+- `COMMANDCENTER_TASK_STATE.md`, `COMMANDCENTER_PRODUCT_ROADMAP.md`
+
+## GITHUB CI FAILURE INVESTIGATION (POST 9841b7b) — STATUS: ROOT-CAUSED AND FIXED / LOCALLY VERIFIED, NOT YET COMMITTED (2026-09-19)
+
+Investigated an automated reviewer's report of ~20 CI failures across 4 classes, without assuming the diagnosis was correct. Confirmed via the public GitHub Actions API (unauthenticated `GET /repos/.../actions/runs`, no token available/needed for run+job metadata) that the failing run's `head_sha` is exactly `9841b7b` — the local Profile Phase 4 Step 1 changes were never pushed and are not what CI tested. Raw log *text* download required admin auth this session didn't have, so every claim below was verified by direct local reproduction against the actual pushed code, not by reading the raw CI log.
+
+### Class 1 — "Body is unusable" (Groq/AI): Copilot's file attribution was WRONG; root cause found and fixed in test infrastructure, not production code
+
+`groqProvider.ts` and `ai.service.ts` were not the defect — they were the first place the symptom surfaced. The actual bug was in **this session's own prior fix**, `backend/tests/setup/aiProviderStub.ts` (from commit `9841b7b`): `jest.spyOn(global, 'fetch').mockResolvedValue(stubbedGroqResponse())` resolves every call to the exact same `Response` **instance** — and a `Response` body stream can only be read once; a second `.json()` on the same instance throws `TypeError: Body is unusable: Body has already been read` (verified this exact mechanism in a 10-line isolated Node repro before touching anything). Any test that triggers the real, un-spied AI path more than once in one test (e.g. `resourceExhaustionHardening.test.ts`'s "multiple blockers" test, which creates two blockers and each blocker-creation calls `analyzeBlocker` once) hit this. **Reproduced locally** (2 occurrences of the exact error text, swallowed by `ai.service.ts`'s existing per-function try/catch so this specific test still passed, but polluted console output exactly as an automated reviewer would flag). **Fix:** changed `mockResolvedValue` to `mockImplementation(async () => stubbedGroqResponse())` in `aiProviderStub.ts`, constructing a fresh `Response` per call. Re-ran the identical reproduction: zero occurrences. No change to `groqProvider.ts` or `ai.service.ts` — per instruction, production code was confirmed correct and left untouched.
+
+### Class 2 — Notification preferences: production correct, test stale (confirmed, not assumed)
+
+`NOTIFICATION_PREFERENCE_KEYS` currently has 6 keys (`team_join_request`, `goal_creation`, `goal_completion`, `task_assignment`, `blocker`, `password_change`) — Copilot's "5 keys" framing was already stale before this task. `tests/notifications.test.ts`'s "defaults to all categories ON for a fresh user" hardcoded the pre-Phase-2 5-key object via `.toEqual()`, missing `password_change` (added during the already-shipped Phase 2 password-change hardening). **Fix:** added `password_change: true` to the expected object. No production change — `getPreferences()`/`DEFAULT_PREFERENCES` were already correct.
+
+### Class 3 — Password-change rate-limit: reproduces, but is the already-diagnosed BUG-003-adjacent pitfall, not a new regression
+
+Re-ran `password-change-security.test.ts` fresh (not reusing old logs): identical 8 failures, identical names, as already documented — all trace to the token-reuse-across-successful-password-changes pitfall (Milestone 38's correct session-invalidation-on-password-change behavior colliding with tests that reuse one JWT across multiple successful changes), not to the rate limiter itself. The route ordering (`authenticate → passwordChangeRateLimiter → validate → controller`, commit `3395526`) was not touched — no evidence found that it's wrong. **BUG-003 was not reopened.**
+
+### Class 4 — Profile response tests: mostly stale envelope, but a REAL security bug found underneath (new, genuine defect — not stale)
+
+`tests/profile.test.ts`/`tests/profile-core.test.ts` asserted the pre-BUG-002 flat shape (`res.body.X` instead of `res.body.data.X`) — confirmed stale, fixed mechanically (16/16 and 5/5 now pass). But fixing the envelope on `profile.test.ts`'s "does not expose password hash in response" test **revealed the assertion had been silently passing for the wrong reason**: the *old* flat-shape check (`res.body).not.toHaveProperty('password_hash')`) was checking the outer `{success, data}` wrapper, which trivially never has that key, regardless of whether the real payload does. Once corrected to check `res.body.data`, the test **failed for real** — `PUT /api/users/me/profile` was genuinely returning the caller's own bcrypt `password_hash` in its HTTP response body.
+
+**Root cause:** `usersRepository.updateUser()`'s `RETURNING *` returns every column including `password_hash`. `notifications.service.ts` and `privacy.service.ts` (the only other two callers) each extract exactly one safe field before it ever reaches an HTTP response; `usersService.updateProfile` was the **one** caller that returned the raw row straight to `ok(res, updated)`, unmodified, since the method was first written. This was a real, live, previously-undetected security defect — undetected specifically *because* the stale flat-shape test gave a false-negative "pass" that looked like real password-hash-exposure coverage.
+
+**Fix:** `usersService.updateProfile` now re-fetches the safe profile shape via `this.getProfile(userId)` after the update completes, exactly matching the pattern `changePassword` already uses for the identical reason. No change to the shared `updateUser` repository method (its other two callers already extract only what they need).
+
+**A second, unrelated defect found and fixed in the same investigation:** the "clears fields when set to empty string or null" test got `400` instead of `200` -- not staleness. `updateProfileSchema` (`users.dto.ts`) rejected `pronouns: null` outright, even though `users.controller.ts`'s `updateProfile` explicitly checks `!== undefined` (not `!== null`) for `bio`/`pronouns`/`location` -- a deliberate "null explicitly clears the field, undefined leaves it alone" convention the schema never actually allowed. Added `.nullable()` to those three fields (not `full_name`, which is `NOT NULL` in the DB with no clear-it affordance).
+
+**A third, purely stale-fixture issue, also fixed:** `profile.test.ts` hardcoded `'profile@example.com'`/`'profileuser'`/`'Profile User'` as expected values, but `fixtures.ts`'s `buildUser()` always appends a unique timestamp+counter suffix -- these literals never matched what `registerAndLogin` actually produces. Captured the real generated `email`/`username`/`fullName` at each test's `beforeEach` and asserted against those instead. One test ("updates partial profile fields") also wrongly assumed a *different* test's `full_name` mutation carried over, which cannot happen since `beforeEach` resets the database before every test -- corrected to assert the field remains the registration-time value.
+
+### Files changed (this investigation, not yet committed)
+
+- `backend/tests/setup/aiProviderStub.ts` — `mockResolvedValue` → `mockImplementation` (the real Class 1 fix)
+- `backend/tests/notifications.test.ts` — added the missing `password_change` key to one stale assertion
+- `backend/src/modules/users/users.service.ts` — `updateProfile` no longer returns the raw `RETURNING *` row (the real security fix)
+- `backend/src/modules/users/users.dto.ts` — `bio`/`pronouns`/`location` made `.nullable()`, matching the controller's existing intent
+- `backend/tests/profile.test.ts` — envelope fix + stale hardcoded-value fixes (16/16 pass)
+- `backend/tests/profile-core.test.ts` — envelope fix (5/5 pass)
+- `COMMANDCENTER_TASK_STATE.md`, `COMMANDCENTER_BUG_AUDIT.md` — this entry / BUG-005
+
+### Verification
+
+- Focused reproduction (Class 1): fixed, zero occurrences post-fix, confirmed via isolated re-run.
+- `tests/notifications.test.ts` (targeted test): PASS.
+- `tests/password-change-security.test.ts`: unchanged 8/16 pre-existing failures, none new, ordering not touched.
+- `tests/profile.test.ts`: 16/16 PASS (was 6 failing before this session's fixes).
+- `tests/profile-core.test.ts`: 5/5 PASS.
+- Backend `tsc --noEmit`: PASS. Backend production build: PASS.
+- Full backend suite: run once at the end — see the run's own result for the final count.
+- CI rerun: **not performed** — nothing was pushed this task (explicit instruction).
+- No real GitHub secrets required for any of the above; the public Actions API calls used to determine which commit CI tested were unauthenticated.
+
+### Local Profile Phase 4 Step 1 changes
+
+Confirmed still intact and untouched throughout this investigation (migration, `schema.sql`, `is_verified` exposure, `profileVerificationStatus.test.ts`) — nothing in this task discarded or modified them.
+
 ## NEXT PRIORITY (AUTHORITATIVE — supersedes all earlier "NEXT PRIORITY" sections in this file)
 
-**Get explicit approval on this CI-stabilization task's diffs, then commit and push** so the fixes actually take effect in GitHub Actions (currently implemented and locally verified only — not yet committed, per this task's explicit instruction). After that: **implement Profile Phase 4** per `PROFILE_PHASE4_EMAIL_PHONE_VERIFICATION_AUDIT.md`'s recommended order (§13), OR another roadmap item the user prioritizes explicitly, OR the smaller, independently-flagged `tests/profile.test.ts`/`tests/profile-core.test.ts` response-envelope fix (11 failing tests, same root cause as BUG-002) if a quicker task is preferred first. Also newly flagged as a candidate: the `dailyWork.test.ts` timeout-margin issue described above.
+**Get explicit approval on this CI-investigation task's fixes (including the genuine password-hash-exposure security fix), then commit and push both this and the still-pending local Profile Phase 4 Step 1 changes.** After that: continue Profile Phase 4 with its next implementation slice (email-change request/verify backend endpoints, audit §7/§13 step 3), once explicitly directed.
 
-Phase 4 remains architecturally ready but has **zero implementation** — do not mark it COMPLETE, or begin implementing it, until explicitly directed.
+Also still open, unrelated, lower priority: the `dailyWork.test.ts` timeout-margin issue flagged during the earlier CI-stabilization task (confirmed pre-existing/environmental, not touched here either).

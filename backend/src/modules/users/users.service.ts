@@ -36,7 +36,16 @@ export class UsersService {
   }
 
   async updateProfile(userId: string, updates: Record<string, any>) {
-    return usersRepository.updateUser(userId, updates);
+    // updateUser's `RETURNING *` includes password_hash and every other raw
+    // column -- fine for the two other callers (notifications/privacy
+    // services), which each extract exactly one safe field before this ever
+    // reaches an HTTP response, but this was the one call site that handed
+    // the entire raw row straight to the controller's ok(res, updated),
+    // exposing the bcrypt hash directly in PUT /api/users/me/profile's
+    // response body. Re-fetching the safe profile shape afterward matches
+    // the exact pattern changePassword already uses for the same reason.
+    await usersRepository.updateUser(userId, updates);
+    return this.getProfile(userId);
   }
 
   async changePassword(userId: string, currentPassword: string, newPassword: string) {

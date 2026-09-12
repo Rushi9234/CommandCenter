@@ -7,14 +7,25 @@ import { registerAndLogin, authHeader } from './utils/fixtures';
 
 let testToken: string;
 let testUserId: string;
+let testEmail: string;
+let testUsername: string;
+let testFullName: string;
 
 beforeEach(async () => {
   await resetDatabase();
 
-  // Register and login a test user
+  // Register and login a test user. fixtures.ts's buildUser() appends a
+  // unique timestamp+counter suffix to email/username (never a fixed
+  // 'profile@example.com'/'profileuser') so tests can run repeatedly
+  // without colliding -- capture the actual generated values instead of
+  // hardcoding the pre-suffix literals a stale version of this file used to
+  // assume.
   const result = await registerAndLogin('profile');
   testUserId = result.userId;
   testToken = result.token;
+  testEmail = result.user.email;
+  testUsername = result.user.username;
+  testFullName = result.user.fullName;
 });
 
 afterAll(async () => {
@@ -30,15 +41,15 @@ describe('Profile API', () => {
         .set(authHeader(testToken));
 
       expect(res.status).toBe(200);
-      expect(res.body).toHaveProperty('user_id', testUserId);
-      expect(res.body).toHaveProperty('email', 'profile@example.com');
-      expect(res.body).toHaveProperty('username', 'profileuser');
-      expect(res.body).toHaveProperty('full_name', 'Profile User');
-      expect(res.body).toHaveProperty('role');
-      expect(res.body).toHaveProperty('is_profile_public');
-      expect(res.body).toHaveProperty('bio');
-      expect(res.body).toHaveProperty('pronouns');
-      expect(res.body).toHaveProperty('location');
+      expect(res.body.data).toHaveProperty('user_id', testUserId);
+      expect(res.body.data).toHaveProperty('email', testEmail);
+      expect(res.body.data).toHaveProperty('username', testUsername);
+      expect(res.body.data).toHaveProperty('full_name', testFullName);
+      expect(res.body.data).toHaveProperty('role');
+      expect(res.body.data).toHaveProperty('is_profile_public');
+      expect(res.body.data).toHaveProperty('bio');
+      expect(res.body.data).toHaveProperty('pronouns');
+      expect(res.body.data).toHaveProperty('location');
     });
 
     it('rejects unauthenticated request', async () => {
@@ -54,7 +65,7 @@ describe('Profile API', () => {
         .set(authHeader(testToken));
 
       expect(res.status).toBe(200);
-      expect(res.body).not.toHaveProperty('password_hash');
+      expect(res.body.data).not.toHaveProperty('password_hash');
     });
   });
 
@@ -72,11 +83,11 @@ describe('Profile API', () => {
         });
 
       expect(res.status).toBe(200);
-      expect(res.body).toHaveProperty('full_name', 'Updated Name');
-      expect(res.body).toHaveProperty('bio', 'My bio');
-      expect(res.body).toHaveProperty('pronouns', 'they/them');
-      expect(res.body).toHaveProperty('location', 'San Francisco');
-      expect(res.body).toHaveProperty('is_profile_public', true);
+      expect(res.body.data).toHaveProperty('full_name', 'Updated Name');
+      expect(res.body.data).toHaveProperty('bio', 'My bio');
+      expect(res.body.data).toHaveProperty('pronouns', 'they/them');
+      expect(res.body.data).toHaveProperty('location', 'San Francisco');
+      expect(res.body.data).toHaveProperty('is_profile_public', true);
     });
 
     it('updates partial profile fields', async () => {
@@ -88,9 +99,13 @@ describe('Profile API', () => {
         });
 
       expect(res.status).toBe(200);
-      expect(res.body).toHaveProperty('bio', 'Updated bio only');
-      // Other fields should remain unchanged
-      expect(res.body).toHaveProperty('full_name', 'Updated Name');
+      expect(res.body.data).toHaveProperty('bio', 'Updated bio only');
+      // Other fields should remain unchanged -- this test only sends `bio`,
+      // so full_name stays whatever registration set it to (previously
+      // asserted 'Updated Name', a value only ever set by a *different*
+      // test's own PUT, which cannot carry over since beforeEach resets the
+      // database before every test).
+      expect(res.body.data).toHaveProperty('full_name', testFullName);
     });
 
     it('clears fields when set to empty string or null', async () => {
@@ -103,8 +118,8 @@ describe('Profile API', () => {
         });
 
       expect(res.status).toBe(200);
-      expect(res.body.bio).toBeFalsy();
-      expect(res.body.pronouns).toBeFalsy();
+      expect(res.body.data.bio).toBeFalsy();
+      expect(res.body.data.pronouns).toBeFalsy();
     });
 
     it('validates full_name length', async () => {
@@ -173,9 +188,9 @@ describe('Profile API', () => {
         });
 
       expect(res.status).toBe(200);
-      expect(res.body).toHaveProperty('full_name', 'New Name');
-      expect(res.body).toHaveProperty('email', 'profile@example.com'); // Unchanged
-      expect(res.body).toHaveProperty('user_id', testUserId); // Unchanged
+      expect(res.body.data).toHaveProperty('full_name', 'New Name');
+      expect(res.body.data).toHaveProperty('email', testEmail); // Unchanged
+      expect(res.body.data).toHaveProperty('user_id', testUserId); // Unchanged
     });
 
     it('preserves username immutability', async () => {
@@ -187,7 +202,7 @@ describe('Profile API', () => {
         });
 
       expect(res.status).toBe(200);
-      expect(res.body).toHaveProperty('username', 'profileuser'); // Should be unchanged
+      expect(res.body.data).toHaveProperty('username', testUsername); // Should be unchanged
     });
 
     it('does not expose password hash in response', async () => {
@@ -199,7 +214,7 @@ describe('Profile API', () => {
         });
 
       expect(res.status).toBe(200);
-      expect(res.body).not.toHaveProperty('password_hash');
+      expect(res.body.data).not.toHaveProperty('password_hash');
     });
 
     it('persists profile visibility flag', async () => {
@@ -211,14 +226,14 @@ describe('Profile API', () => {
         });
 
       expect(res1.status).toBe(200);
-      expect(res1.body).toHaveProperty('is_profile_public', false);
+      expect(res1.body.data).toHaveProperty('is_profile_public', false);
 
       const res2 = await request(app)
         .get('/api/users/me')
         .set(authHeader(testToken));
 
       expect(res2.status).toBe(200);
-      expect(res2.body).toHaveProperty('is_profile_public', false);
+      expect(res2.body.data).toHaveProperty('is_profile_public', false);
     });
   });
 
@@ -234,7 +249,7 @@ describe('Profile API', () => {
         });
 
       expect(res.status).toBe(200);
-      expect(res.body).toHaveProperty('full_name', 'Modified Name');
+      expect(res.body.data).toHaveProperty('full_name', 'Modified Name');
     });
   });
 });

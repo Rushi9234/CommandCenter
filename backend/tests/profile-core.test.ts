@@ -29,12 +29,12 @@ describe('Profile API (Core Tests)', () => {
       .set(authHeader(testToken));
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty('user_id', testUserId);
-    expect(res.body).toHaveProperty('email');
-    expect(res.body).toHaveProperty('username');
-    expect(res.body).toHaveProperty('full_name');
-    expect(res.body).toHaveProperty('is_profile_public');
-    expect(res.body).not.toHaveProperty('password_hash');
+    expect(res.body.data).toHaveProperty('user_id', testUserId);
+    expect(res.body.data).toHaveProperty('email');
+    expect(res.body.data).toHaveProperty('username');
+    expect(res.body.data).toHaveProperty('full_name');
+    expect(res.body.data).toHaveProperty('is_profile_public');
+    expect(res.body.data).not.toHaveProperty('password_hash');
   });
 
   it('PUT /api/users/me/profile updates profile fields', async () => {
@@ -50,11 +50,11 @@ describe('Profile API (Core Tests)', () => {
       });
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty('full_name', 'Updated Name');
-    expect(res.body).toHaveProperty('bio', 'My bio');
-    expect(res.body).toHaveProperty('pronouns', 'they/them');
-    expect(res.body).toHaveProperty('location', 'San Francisco');
-    expect(res.body).toHaveProperty('is_profile_public', true);
+    expect(res.body.data).toHaveProperty('full_name', 'Updated Name');
+    expect(res.body.data).toHaveProperty('bio', 'My bio');
+    expect(res.body.data).toHaveProperty('pronouns', 'they/them');
+    expect(res.body.data).toHaveProperty('location', 'San Francisco');
+    expect(res.body.data).toHaveProperty('is_profile_public', true);
   });
 
   it('GET /api/users/me returns updated profile after save', async () => {
@@ -72,7 +72,7 @@ describe('Profile API (Core Tests)', () => {
       .set(authHeader(testToken));
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty('bio', 'My new bio');
+    expect(res.body.data).toHaveProperty('bio', 'My new bio');
   });
 
   it('rejects unauthenticated requests', async () => {

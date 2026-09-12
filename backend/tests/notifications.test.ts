@@ -348,12 +348,17 @@ describe('Notifications -- preferences', () => {
   it('defaults to all categories ON for a fresh user', async () => {
     const owner = await registerAndLogin('notif_owner_r');
     const res = await getPreferences(owner.token).expect(200);
+    // password_change was added to NOTIFICATION_PREFERENCE_KEYS during the
+    // Phase 2 password-change security hardening work -- this assertion
+    // predates that and was never updated, a stale test against a real,
+    // already-shipped feature, not a production defect.
     expect(res.body.data).toEqual({
       team_join_request: true,
       goal_creation: true,
       goal_completion: true,
       task_assignment: true,
       blocker: true,
+      password_change: true,
     });
   });
 
