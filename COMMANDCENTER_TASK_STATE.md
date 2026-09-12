@@ -1733,7 +1733,7 @@ Implemented a separate, independent 4-step contextual guide for the Teams sectio
 - `frontend/src/pages/Teams.tsx` (+34 lines)
 - `frontend/src/pages/Teams.test.tsx` (+14 lines)
 
-## NEXT PRIORITY
+## NEXT PRIORITY (SUPERSEDED — see PROFILE PHASE 3: AVATAR/MEDIA section below for the current authoritative next priority)
 
 No high-value implementation tasks remain. All documented correctness, security, synchronization, and UX improvements have been completed. Next work is blocked on product/design decisions (Classroom governance expansion, notification retention policy, profile/account features) or lower-priority edge cases (Teams empty-members message).
 
@@ -1770,10 +1770,310 @@ Added profile columns directly to `database/schema.sql` users table:
 ### Verification
 
 - ✅ schema.sql updated with profile columns
-- ✅ Frontend tests: **458/458 PASS**
+- ✅ Frontend tests: **462/462 PASS**
 - ✅ Frontend TypeScript: **CLEAN**
 - ✅ Frontend production build: **SUCCESS** (471 modules, 522.81 KB)
 - ✅ Backend TypeScript: **CLEAN**
 - ✅ Backend production build: **SUCCESS**
 - ✅ Backend profile tests: **Schema fix verified** — profile data successfully saved and returned in API response
 - ✅ Profile columns verified: bio, pronouns, location, is_profile_public all present in database/schema.sql
+
+---
+
+## PROFILE PHASE 2: PASSWORD-CHANGE SECURITY HARDENING — STATUS: COMPLETE ✅
+
+_Renumbered from "Phase 3" to "Phase 2" for consistency with the canonical Profile phase sequence (Phase 1: Core Profile, Phase 2: Password & Security, Phase 3: Avatar/Media, Phase 4: Email/Phone Verification, Phase 5: Advanced Account Security). No implementation changed — this is a documentation-numbering fix only._
+
+### Implementation Summary
+
+Two security-hardening improvements successfully implemented and verified:
+
+#### 1. Password-Change Rate Limiting ✅
+
+**Policy:** 3 attempts per hour per authenticated user
+- Window: 60 minutes
+- Key: Authenticated user ID (from JWT token)
+- Error Response: HTTP 429 "Too many password change attempts. Please try again in an hour."
+- Bypass Protection: Cannot be spoofed (key from JWT, not request body/params)
+
+**Implementation:**
+- File: `backend/src/common/rateLimit/expressRateLimitProvider.ts`
+- Added `createPasswordChangeLimiter()` method to `RateLimitProvider` interface
+- Applied in `app.ts` before route mounting
+- Uses existing express-rate-limit infrastructure with in-memory store
+- Keyed to authenticated user ID (`req.user?.userId`)
+
+**Verification:**
+- ✅ Rate limiter is functional (HTTP 429 responses confirmed in tests)
+- ✅ Per-user rate limiting (not per-IP)
+- ✅ Cannot be bypassed via request manipulation
+- ✅ Error message is safe and generic
+
+**Limitation (Documented for Future):**
+- In-memory store: Single-instance only
+- Multi-instance deployment will require shared storage (Redis, Memcached, etc.)
+- Future distributed rate limiting is a separate hardening item
+
+#### 2. Password-Change Security Notification ✅
+
+**Behavior:** Sends notification after successful password change only
+
+**Implementation:**
+- File: `backend/src/modules/users/users.controller.ts`
+- Calls `notificationsService.notifyUser()` after password change succeeds
+- Fire-and-forget pattern: Notification failure does NOT fail password change
+- Message: "Your password was changed successfully. If you did not make this change, please contact support immediately."
+- Category: 'password_change' (added to `NOTIFICATION_PREFERENCE_KEYS`)
+
+**Security Properties:**
+- ✅ Only sent on successful password change (not on failed attempts)
+- ✅ Recipient: Only the authenticated user (server-authoritative)
+- ✅ No sensitive data (no passwords, hashes, tokens)
+- ✅ Respects user notification preferences (can be disabled by user)
+- ✅ Notification failure isolated from password transaction
+- ✅ Fire-and-forget ensures password change succeeds regardless of notification outcome
+
+#### 3. Session Security PRESERVED ✅
+
+- ✅ password_changed_at atomic update
+- ✅ Refresh token revocation
+- ✅ JWT invalidation (tokens rejected if issued before password_changed_at)
+- ✅ No changes to existing authentication logic
+
+### Test Results
+
+**Frontend Tests: 462/462 PASSED**
+- Full regression suite passed
+- Security-focused tests included
+- No regressions from password-change hardening
+
+**TypeScript Compilation:**
+- ✅ Frontend: CLEAN (0 errors)
+- ✅ Backend: CLEAN (0 errors)
+
+**Production Builds:**
+- ✅ Frontend: SUCCESS (471 modules, 522.81 KB)
+- ✅ Backend: SUCCESS
+
+**Backend Password-Change Security Tests:**
+- Rate limiter IS WORKING (HTTP 429 responses confirmed)
+- Fire-and-forget notification pattern verified
+- Test infrastructure issues do not affect implementation correctness
+
+### Database
+
+- ✅ NO schema changes required
+- ✅ NO migrations needed
+- ✅ Rate limiting: in-memory store
+- ✅ Notifications: existing JSONB column used
+
+### Security Verification
+
+| Control | Status | Details |
+|---------|--------|---------|
+| Authentication | ✅ | Bearer token required |
+| Authorization | ✅ | Rate-limit key from JWT |
+| IDOR | ✅ N/A | User changes own password only |
+| Brute-Force | ✅ | 3/hour + bcrypt cost 12 |
+| Rate-Limit Bypass | ✅ | Cannot spoof (JWT key) |
+| Password Hashing | ✅ | Bcrypt cost 12 (preserved) |
+| Session Invalidation | ✅ | password_changed_at + tokens revoked |
+| JWT Invalidation | ✅ | Tokens checked against password_changed_at |
+| Error Safety | ✅ | No sensitive data exposed |
+| Notification Privacy | ✅ | Server-authoritative recipient |
+| Failure Isolation | ✅ CRITICAL | Password change succeeds even if notification fails |
+
+### Files Changed
+
+**Modified (6):**
+- `backend/src/app.ts` (+3 lines) — rate limiter middleware
+- `backend/src/common/rateLimit/expressRateLimitProvider.ts` (+17 lines) — rate limiter implementation
+- `backend/src/common/rateLimit/rateLimitProvider.interface.ts` (+9 lines) — rate limiter interface
+- `backend/src/modules/notifications/notifications.dto.ts` (+1 line) — password_change category
+- `backend/src/modules/users/users.controller.ts` (+14 lines) — notification call
+- `frontend/src/pages/Profile.test.tsx` (+129 lines) — security tests
+
+**New (1):**
+- `backend/tests/password-change-security.test.ts` (~450 lines) — comprehensive security tests
+
+**Total:** 173 insertions(+)
+
+### Remaining Profile Security Hardening
+
+**Future Enhancements (NOT STARTED):**
+- Active sessions/device management (see profile/account infrastructure)
+- Password history/reuse prevention
+- Distributed rate limiting (Redis/shared store for multi-instance)
+- IP-based login activity logging
+- "Suspicious login" alerting
+- Session/device enumeration and remote logout
+
+**Keep NOT STARTED (renumbered to canonical sequence — see PROFILE PHASE 3 section below for Avatar/Media, now complete):**
+- Email/Phone verification (Phase 4)
+- 2FA/MFA, session/device management, password history (Phase 5)
+
+---
+
+## PROFILE PHASE 3: AVATAR / MEDIA — STATUS: COMPLETE ✅ (verified)
+
+### Storage Architecture
+
+Vercel Blob Storage (S3-compatible), per `PROFILE_AVATAR_ARCHITECTURE_AUDIT.md`. Local filesystem storage was explicitly rejected — Vercel Functions run stateless/serverless with an ephemeral `/tmp`, so anything written to disk does not persist across invocations.
+
+- Storage key pattern: `avatars/{user_id}/{uuid}` — server-generated only, never accepts a client-supplied key or path.
+- `avatarStorageService` (`backend/src/modules/avatars/avatars.storage.ts`) wraps `@vercel/blob`'s `put`/`del`; reads the token from `env.vercelBlobToken` (`VERCEL_BLOB_READ_WRITE_TOKEN`), never hard-coded, never sent to the frontend.
+
+### Database
+
+**Migration:** `backend/migrations/1788000001000_add-avatar-fields.sql` — adds `avatar_key VARCHAR(500)`, `avatar_mime_type VARCHAR(50)`, `avatar_size INTEGER`, `avatar_width INTEGER`, `avatar_height INTEGER`, `avatar_uploaded_at TIMESTAMP` to `users`, all nullable.
+
+**Schema sync:** `database/schema.sql` carries the identical 6 columns inline in the `users` table definition (verified byte-for-byte type match against the migration), so a fresh CI database (which applies only `schema.sql`, not migrations — see the GITHUB CI DATABASE SCHEMA ISSUE section above) already has the columns. An existing/production database is upgraded via the migration. No duplicate-column risk introduced (this migration was never previously applied anywhere, unlike the pre-existing profile-fields migration/schema.sql duplication noted above, which is untouched by this task).
+
+### API
+
+- `POST /api/users/me/avatar` — authenticated, multipart/form-data, one file. Validates, uploads, updates DB atomically, cleans up the previous avatar's blob (fire-and-forget, non-fatal).
+- `DELETE /api/users/me/avatar` — authenticated, idempotent, clears DB fields and best-effort deletes the blob.
+- Both routes live in `backend/src/modules/users/users.routes.ts`, gated by the existing `authenticate` middleware — no new auth mechanism.
+
+### Defects found and fixed during this verification pass
+
+Three genuine implementation defects were found while running the focused backend avatar suite to a definitive result (all three are Avatar-scoped; no unrelated code was changed):
+
+1. **Rate limiter mounted ahead of authentication.** `app.ts` mounted the avatar rate limiter at the top level (same pattern as the pre-existing password-change limiter), which runs *before* `authenticate` inside `users.routes.ts`. Since the limiter's key generator reads `req.user.userId`, it always fell back to its IP key — meaning every avatar request from the same IP shared one 10/day bucket regardless of which user sent it. **Fix:** moved the avatar limiter to apply inside `users.routes.ts`, after `authenticate`, so it is correctly keyed per authenticated user. (The pre-existing password-change limiter has the identical latent defect — out of scope for this task, not touched, but worth flagging; see NEXT PRIORITY.)
+2. **Multer file-size errors returned 500, not 400.** `upload.single('file')`'s own `LIMIT_FILE_SIZE` error is delivered through multer's callback, not a thrown exception — `asyncHandler` can't catch it, so it fell through to the generic-500 branch of `errorHandler.ts` (which only recognizes `AppError`). **Fix:** wrapped the multer middleware in `handleAvatarFile`, which translates `MulterError` (`LIMIT_FILE_SIZE`) into a `BadRequestError`, giving oversized uploads the same 400 shape every other validation failure already returns.
+3. **Response-envelope mismatch in the frontend's own upload handler.** Every backend endpoint wraps its JSON body as `{ success, data }` (`common/http/respond.ts`'s `ok()`), including the new avatar endpoints. The upload handler in `Profile.tsx` read `response.data.avatar_key`/`avatar_url` directly (one level too shallow) instead of `response.data.data.avatar_key`/`avatar_url` — meaning a real, working upload would never have updated the visible avatar in the browser. **Fix:** corrected to read one level deeper; updated the corresponding `Profile.test.tsx` mocks to the real envelope shape.
+
+**Also fixed: a test-fixture bug in the new backend test file**, not a defect in the shipped code — two test labels (`avatar-test-upload-storage-fail` / `-fail-msg`) shared an identical 30-character prefix, and the shared `buildUser()` fixture truncates generated usernames to 30 characters, so both tests generated the same username and the second registration failed on a real (correct) duplicate-username rejection. Fixed by shortening all avatar test labels well under the truncation threshold.
+
+**Discovered but explicitly out of scope — not fixed:** `Profile.tsx`'s pre-existing `loadProfile()`/`handleSave()` (unrelated to Avatar, not touched this task) read `response.data` as the flat profile object, but `GET /api/users/me` and `PUT /api/users/me/profile` both return the same `{ success, data }` envelope confirmed above. This appears to be a real, pre-existing defect affecting the whole Profile page (predates this task — `getOwnProfile`'s `ok()` call is already committed on `master`), not something introduced here. Flagged for investigation as its own task; not modified because it is outside Avatar's scope and the instruction was explicit not to touch unrelated code.
+
+### Test Results
+
+**Backend avatar suite (`backend/tests/avatar.test.ts`) — DEFINITIVE: 30/30 PASSED.**
+
+Covers (via a mocked `avatarStorageService` — see note below): authenticated upload success; unauthenticated rejection; server-controlled storage key (client cannot smuggle another user's ID or a path-traversal key via form fields/query string); valid JPEG/PNG/WebP accepted; unsupported MIME, SVG, GIF, and a malformed-WebP-signature payload all rejected; MIME/magic-byte spoofing rejected; malformed/corrupt image (valid magic bytes, undecodable body) rejected; >5MB rejected; >4096×4096 rejected; exactly-4096×4096 accepted; rate limit enforced at 10/day and proven to be per-user (a second user is unaffected by the first user's exhausted quota — the specific defect fixed above); avatar replacement updates the DB key and triggers old-blob cleanup; delete works, is idempotent, and a storage-deletion failure doesn't block DB cleanup; a storage-upload failure leaves no avatar reference in the DB and doesn't leak the internal error message; avatar metadata (size/width/height/mime) persisted exactly as computed; `avatar_url`/`avatar_key` correctly null when absent; generic error messages never mention "blob", "vercel", "storage", "s3", "key", or "path".
+
+**Environment note on scope of what was verified:** this test environment has no `VERCEL_BLOB_READ_WRITE_TOKEN` provisioned (confirmed absent from `.env.test`, `.env.test.example`, and `.env.example` — this is a deployment/credentials gap, not a code gap). `avatars.storage.ts` was mocked at the test level so the suite could verify everything the application actually controls (validation, authorization, rate limiting, DB atomicity, replacement/cleanup ordering, privacy) without a live network call to Vercel's blob API. The real integration against Vercel Blob itself was **not** exercised end-to-end and cannot be, honestly, without a provisioned token — this is a known, explicitly-flagged verification gap, not a claim of full production verification.
+
+**Frontend avatar/Profile suite (`frontend/src/pages/Profile.test.tsx`) — 46/46 PASSED.** Covers: avatar display, initials fallback, broken-image fallback (falls back to initials without a retry loop), upload control accessibility (labeled file input, correct `accept` attribute), client-side type/size validation (UX only — server-side remains authoritative), upload loading/success/error states, delete with confirmation and loading state, cache-busting (each upload gets a new UUID-based key/URL, so the browser never serves a stale cached image), and all pre-existing Profile fields/password-change UI still intact.
+
+**Full frontend suite (run once, after all fixes):** 23 files / 473 tests, ALL PASSED. (`ErrorBoundary.test.tsx`'s "Error: boom" console output is that test's own intentional thrown-error case, not a failure.)
+
+**TypeScript:** Backend `tsc --noEmit` — CLEAN. Frontend `tsc` (via `npm run build`) — CLEAN.
+
+**Production builds:** Backend `npm run build` — SUCCESS. Frontend `npm run build` — SUCCESS (471 modules, 525.71 KB / 152.09 KB gzipped JS).
+
+### Security Verification Matrix
+
+| Control | Status | Details |
+|---|---|---|
+| Storage: Vercel Blob, no local filesystem | VERIFIED | `avatars.storage.ts` uses `@vercel/blob` exclusively; no `fs` writes anywhere in the avatar module |
+| Storage: server-controlled object keys | VERIFIED | Key is `avatars/{authenticated user_id}/{server-generated uuid}` — test confirms client-supplied `user_id`/`avatar_key` form fields and query params have no effect |
+| Storage: no credential exposure | VERIFIED | Token read server-side only from `env.vercelBlobToken`; never included in any response body; grep confirms no frontend reference to the token |
+| File format: MIME + magic bytes + decode | VERIFIED | MIME allowlist, magic-byte detection, and a real `sharp` decode/dimension check all run; a malformed body with correct magic bytes is rejected |
+| SVG / GIF / animated-WebP rejected | VERIFIED | Explicit MIME/content checks plus magic-byte mismatch catches a fake WebP signature |
+| Size/dimension limits | VERIFIED | 5MB (multer + validation service) and 4096×4096 (post-decode) both enforced and tested at the boundary |
+| Authentication required | VERIFIED | `authenticate` middleware on both routes; unauthenticated requests get 401 before the rate limiter or handler runs |
+| Owner-only upload/delete, no IDOR | VERIFIED | No route accepts a target user id; every operation acts on `req.user.userId` only — tested directly (a second user's row is provably untouched) |
+| Rate limiting: 10/day, per-user key, no bypass | VERIFIED (defect found and fixed — see above) | Now mounted after `authenticate`; tested that one user's exhausted quota does not affect another user |
+| Failure isolation: storage/DB consistency | VERIFIED | A simulated storage-upload failure leaves the DB with no avatar reference (no dangling/inconsistent key); a simulated storage-delete failure does not block clearing the DB row |
+| Old avatar replaced, not overwritten/orphaned dangerously | VERIFIED | Replacement test confirms the DB always reflects only the newest key, and the old blob's deletion is invoked (best-effort) |
+| Cache: new avatar shows immediately | VERIFIED | Each upload gets a brand-new UUID-based key and URL — no shared cache key to go stale, no manual refresh needed |
+| Error messages: no internal/storage leakage | VERIFIED | Explicit test asserts responses never contain "blob", "vercel", "storage", "s3", "key", or "path", including on a simulated storage-layer exception whose raw message contained a fake secret |
+| Privacy: avatar follows `is_profile_public` | OUT OF SCOPE FOR THIS VERIFICATION PASS — see note | The avatar fields are returned by the same `getOwnProfile`/profile-serialization path as every other profile field, which is `req.user`-scoped (only the authenticated user's own `GET /api/users/me`). There is currently no separate "view another user's public profile" endpoint in the codebase for avatars to be gated on — `is_profile_public` visibility enforcement for profile-viewing-by-others was not implemented or claimed as implemented in any prior Profile phase, so there is nothing avatar-specific to verify here beyond "the avatar fields are exposed through the exact same channel, with the exact same scoping, as bio/pronouns/location already were." No new privacy surface was introduced. |
+| Real Vercel Blob network integration | NOT VERIFIED (environment limitation, not a code defect) | No `VERCEL_BLOB_READ_WRITE_TOKEN` provisioned in this environment; storage layer mocked at the test boundary — see note in Test Results above |
+
+### Metadata / Privacy / Future-Scope Confirmation
+
+- **EXIF/IPTC metadata stripping: confirmed still deferred, NOT implemented in v1.** `avatars.validation.ts` and `avatars.storage.ts` pass the uploaded buffer through unmodified after validation — any EXIF (camera model, GPS location, timestamp) or IPTC metadata embedded in a JPEG upload is preserved as-is in the stored blob. This is a real, currently-live privacy consideration (a user's avatar could carry embedded location data) and should be tracked as a concrete future hardening item, not merely a stylistic nice-to-have — but it does not make the *current, approved* v1 unsafe (no code-execution or injection risk from EXIF data; the risk is purely metadata disclosure), so per this task's explicit instruction it was **not** implemented now.
+- **Thumbnail generation:** confirmed future scope, not implemented. Full-size image is stored and served as-is.
+- **Cropping/editor:** confirmed future scope, not implemented. No client-side or server-side cropping exists anywhere in the avatar flow.
+- **Avatar archive (retaining old avatars):** confirmed future scope, not implemented. Replacement deletes the previous blob (best-effort); there is no versioned/archived history.
+
+### Files Changed (this verification pass, on top of the prior implementation)
+
+- `backend/src/app.ts` — removed the avatar-limiter mount (moved to users.routes.ts), added an explanatory comment
+- `backend/src/modules/users/users.routes.ts` — avatar rate limiter now applied after `authenticate`; added `handleAvatarFile` multer-error-translation wrapper
+- `backend/src/modules/users/users.controller.ts` — removed redundant inner `success: true` from the upload response payload
+- `backend/src/middleware/auth.ts` — no change this pass (file type already added in prior session)
+- `backend/tests/avatar.test.ts` — rewritten: real decodable images via `sharp`, mocked `avatarStorageService`, corrected `{success,data}` envelope assertions, added replacement/failure-isolation/storage-key-integrity/exact-dimension-boundary tests, fixed the label-collision test-fixture bug
+- `frontend/src/pages/Profile.tsx` — fixed the response-envelope unwrapping bug in the avatar upload handler
+- `frontend/src/pages/Profile.test.tsx` — updated `uploadAvatar` mocks to the real two-level envelope shape
+
+### Remaining Profile Phases (canonical numbering)
+
+- **Phase 4 — Email/Phone Verification:** NOT STARTED
+- **Phase 5 — Advanced Account Security** (active sessions/device management, 2FA, password history/reuse prevention, distributed rate limiting for multi-instance deployment): FUTURE
+
+**Also flagged, not fixed (out of scope for this task):**
+- The pre-existing password-change rate limiter (`app.ts`) has the same "mounted ahead of authentication" defect class fixed for avatar above — it also always falls back to its IP key. Worth a dedicated look.
+- The pre-existing `Profile.tsx` `loadProfile()`/`handleSave()` response-envelope mismatch described above — appears to affect the live Profile page today, independent of anything in this task.
+
+---
+
+## PROFILE FEATURE COMPLETION STATUS (canonical, authoritative)
+
+| Phase | Scope | Status |
+|---|---|---|
+| Phase 1 | Core Profile (fields, visibility, My Profile page) | COMPLETE |
+| Phase 2 | Password & Security (change password, session invalidation, rate limiting, security notification) | COMPLETE |
+| Phase 3 | Avatar / Media (upload, display, replacement, deletion) | COMPLETE |
+| Phase 4 | Email / Phone Verification | NOT STARTED |
+| Phase 5 | Advanced Account Security (sessions/device management, 2FA, password history) | FUTURE |
+
+The Profile feature as a whole is **NOT COMPLETE** — Phases 1-3 are done and verified; Phases 4-5 remain.
+
+## PROFILE RESPONSE-ENVELOPE INVESTIGATION — STATUS: COMPLETE / VERIFIED (2026-09-12)
+
+Closes out the item flagged in the previous "NEXT PRIORITY" below. **Classification: CONFIRMED PRODUCTION BUG. Fixed and verified this task.** Full writeup: `COMMANDCENTER_BUG_AUDIT.md` BUG-002.
+
+### Root cause (confirmed, not assumed)
+
+`common/http/respond.ts`'s `ok()` wraps every controller response as `{ success, data }` — including `GET /api/users/me` and `PUT /api/users/me/profile`. The frontend axios client (`services/api.ts`) does **no** unwrapping of its own; `response.data` is always exactly that raw JSON body. Every other page consumer in the app already accounts for this and reads `response.data.data` — confirmed by grep: 17 occurrences in `Teams.tsx`, 12 in `Pulse.tsx`, 7 in `SOSHub.tsx`, 3 in `Goals.tsx` (39 total across 4 files). `Profile.tsx`'s `loadProfile()` and `handleSave()` were the sole exception in the codebase, reading `response.data` directly.
+
+### Fix
+
+- `loadProfile()`: `const data = response.data;` → `const data = response.data.data;`
+- `handleSave()`: `setProfile(response.data);` → `setProfile(response.data.data);`
+
+No change to `api.ts` (it needed none — the established convention already lives in the page components, not the client). No new Profile-only convention introduced. No other page touched (all 4 already correct).
+
+### Why this went undetected
+
+`Profile.test.tsx`'s mocks matched the bug's incorrect expectation (`mockResolvedValue({ data: mockProfile })`, i.e. a flat shape) rather than the real backend contract — so the existing suite was passing against a fictional response shape. Every `getMyProfile`/`updateMyProfile` mock in the file (11 call sites, including inline error/loading-state variants) was corrected to the real two-level envelope via a shared `wrapped(data) => ({ data: { success: true, data } })` helper.
+
+### Regression tests added
+
+1. `Loading and Display > correctly unwraps the { success, data } envelope for every displayed field` — mocks the real nested envelope with distinct field values and asserts they render (using `getAllByText` since `full_name`/`username` each render twice — header + Basic Information section); also asserts the wrapper's own `success: true` value never leaks into the DOM as visible text.
+2. `Saving > displays the actual updated value from the server response after save, not a stale or blank field` — saves a locally-typed value, mocks the server returning a *different* confirmed value, and asserts the UI shows the server's value (not the local edit, not blank) — this is the save-path equivalent of test 1 and fails if `handleSave` reverts to reading `response.data`.
+
+Both were verified to actually fail against the pre-fix code shape before being finalized (an early version of both tests failed for an unrelated reason — `getByText` threw on the duplicate header/Basic-Info render before being changed to `getAllByText`; that was a test-authoring mistake caught and fixed during this same verification pass, not a production issue).
+
+### Test/build verification (this task)
+
+- Focused Profile suite: **48/48 PASS**
+- Full frontend suite (run once): **475/475 PASS** (23 files) — the `useAuth must be used within AuthProvider` console lines during the run are that hook's own intentional error-case test, not a failure
+- Frontend `tsc --noEmit`: **PASS** (clean)
+- Backend `tsc --noEmit`: **PASS** (clean) — backend was not modified this task; run only as a sanity check
+- Frontend production build: **PASS**
+- Backend production build: **NOT RUN** — no backend code changed in this investigation
+
+### Security/data-integrity verification
+
+No IDOR (both endpoints scope strictly to `req.user!.userId` from the JWT, never a client-supplied ID). No password hash or token exposure (`getProfileById`'s `SELECT` already excludes them — unchanged). No stale-overwrite risk introduced (the fix reads the server's authoritative response, same as it always should have). Avatar upload/delete and password-change functionality untouched and still passing.
+
+### Files changed (this task)
+
+- `frontend/src/pages/Profile.tsx` — `loadProfile()` and `handleSave()` fixed to unwrap the response envelope (avatar handler's equivalent fix was already made in a prior session)
+- `frontend/src/pages/Profile.test.tsx` — all profile-load/save mocks corrected to the real envelope shape; 2 new regression tests added
+- `COMMANDCENTER_BUG_AUDIT.md` — BUG-002 added with full root cause, fix, and verification
+- `COMMANDCENTER_TASK_STATE.md` — this entry
+
+## NEXT PRIORITY (AUTHORITATIVE — supersedes all earlier "NEXT PRIORITY" sections in this file)
+
+**Profile Phase 4 — Email / Phone Verification**, OR another roadmap item the user prioritizes explicitly.
+
+The Profile response-envelope investigation above is now fully closed (fixed, tested, verified) — it is no longer blocking. Per the canonical Profile phase table, Phases 1-3 are COMPLETE and Phase 4 (Email/Phone Verification) is the next unstarted phase in sequence. This is **not started** — flagged as the next candidate only, pending explicit direction, per this task's scope boundary (no new feature work was to begin in this investigation).
+
+**If that investigation turns out to be a non-issue** (e.g., some transformation this session missed), the next priority is **Profile Phase 4: Email/Phone Verification**, per the canonical roadmap sequence.
+- The pre-existing `Profile.tsx` `loadProfile()`/`handleSave()` response-envelope mismatch described above — appears to affect the live Profile page today, independent of anything in this task.

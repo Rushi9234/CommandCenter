@@ -825,9 +825,16 @@ CommandCenter is a lightweight, team-focused productivity platform designed for 
 ### I. Profile & Account
 
 #### I.1 User Profile & Account Settings
-**Status:** Planned  
+**Status:** In Progress — Phases 1-3 complete, Phases 4-5 not started
 **Priority:** P2  
 **Effort:** Medium
+
+**Canonical phase breakdown (see COMMANDCENTER_TASK_STATE.md for implementation detail):**
+- Phase 1 — Core Profile (fields, visibility, My Profile page): **COMPLETE**
+- Phase 2 — Password & Security (change password, session invalidation, rate limiting, security notification): **COMPLETE**
+- Phase 3 — Avatar/Media (upload, display, replacement, deletion via Vercel Blob Storage): **COMPLETE**
+- Phase 4 — Email/Phone Verification (email change verification, phone verification): NOT STARTED
+- Phase 5 — Advanced Account Security (active sessions/device management, 2FA, password history/reuse prevention): FUTURE
 
 **User Problem:** No dedicated profile page; minimal account management
 

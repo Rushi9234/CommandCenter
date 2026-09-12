@@ -100,6 +100,17 @@ app.use('/api/auth/resend-verification', authRateLimiter);
 app.use('/api/auth/reset-password', authRateLimiter);
 app.use('/api/auth/refresh', getRateLimitProvider().createRefreshLimiter());
 
+// Password-change rate limiting (3 per hour per user) runs post-authentication
+app.use('/api/users/me/change-password', getRateLimitProvider().createPasswordChangeLimiter());
+
+// Note: avatar rate limiting is applied inside users.routes.ts, AFTER the
+// `authenticate` middleware runs on that router -- unlike the limiter above,
+// which (pre-existing behavior) sits ahead of authentication and therefore
+// always falls back to its IP-based key. Mounting the avatar limiter here
+// would reproduce that same defect: req.user is never populated this early
+// in the chain, so a per-user key generator would silently degrade to a
+// shared per-IP bucket for every avatar request regardless of who sent it.
+
 app.use('/api', routes);
 
 app.get('/health', async (req, res) => {

@@ -50,4 +50,5 @@ export const env = {
   autoVerify: !isProduction && process.env.AUTO_VERIFY === 'true',
   isProduction,
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
+  vercelBlobToken: process.env.VERCEL_BLOB_READ_WRITE_TOKEN,
 };

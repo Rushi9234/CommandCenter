@@ -2,6 +2,7 @@ import bcrypt from 'bcrypt';
 import { usersRepository } from './users.repository';
 import { authRepository } from '../auth/auth.repository';
 import { BadRequestError, UnauthorizedError } from '../../common/errors';
+import { avatarStorageService } from '../avatars/avatars.storage';
 
 const BCRYPT_COST = 12;
 
@@ -20,7 +21,18 @@ export class UsersService {
   }
 
   async getProfile(userId: string) {
-    return usersRepository.getProfileById(userId);
+    const profile = await usersRepository.getProfileById(userId);
+    if (!profile) return null;
+
+    // Add avatar_url if avatar_key exists
+    const profileWithUrl = { ...profile };
+    if (profile.avatar_key) {
+      profileWithUrl.avatar_url = avatarStorageService.getAvatarUrl(profile.avatar_key);
+    } else {
+      profileWithUrl.avatar_url = null;
+    }
+
+    return profileWithUrl;
   }
 
   async updateProfile(userId: string, updates: Record<string, any>) {

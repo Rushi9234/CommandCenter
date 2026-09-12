@@ -308,6 +308,30 @@ export const updateMyProfile = (data: Record<string, any>) =>
 export const changePassword = (currentPassword: string, newPassword: string) =>
   api.post('/users/me/change-password', { current_password: currentPassword, new_password: newPassword });
 
+export const uploadAvatar = (formData: FormData) => {
+  const uploadApi = axios.create({
+    baseURL: import.meta.env.PROD ? 'https://commandcenter-backend.vercel.app/api' : '/api',
+    timeout: 30000, // 30 second timeout for file upload
+  });
+
+  uploadApi.interceptors.request.use((config) => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  });
+
+  return uploadApi.post('/users/me/avatar', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+};
+
+export const deleteAvatar = () =>
+  api.delete('/users/me/avatar');
+
 // Notifications
 export const getMyNotifications = (limit = 20, offset = 0) =>
   api.get(`/notifications?limit=${limit}&offset=${offset}`);

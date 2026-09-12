@@ -14,6 +14,7 @@ export const NOTIFICATION_PREFERENCE_KEYS = [
   'goal_completion',
   'task_assignment',
   'blocker',
+  'password_change',
 ] as const;
 
 // Every key optional/partial -- a caller only sends the categories they

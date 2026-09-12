@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import type { File } from 'multer';
 import { verifyAccessToken } from '../modules/auth/jwt';
 import { csrfTokenMatches } from '../common/security/csrf';
 import { authRepository } from '../modules/auth/auth.repository';
@@ -10,6 +11,7 @@ export interface AuthRequest extends Request {
     role: string;
   };
   authViaCookie?: boolean;
+  file?: File;
 }
 
 const UNSAFE_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];

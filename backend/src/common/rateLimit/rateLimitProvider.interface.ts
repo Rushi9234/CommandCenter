@@ -33,4 +33,19 @@ export interface RateLimitProvider {
   // guessing/replay probing without false-positiving a shared office IP's
   // worth of legitimately-refreshing sessions.
   createRefreshLimiter(): RequestHandler;
+
+  // Password-change rate limiting: keyed by authenticated user ID (not IP),
+  // since this is a sensitive account-modifying operation that requires
+  // authentication. The limit is per-user, not per-IP, to prevent one user's
+  // legitimate password changes from being throttled by another user's abuse.
+  // 3 attempts per hour (key: user_id) balances security (prevents brute-force
+  // password-change attacks) with usability (a legitimate user might need to
+  // retry after fat-fingering).
+  createPasswordChangeLimiter(): RequestHandler;
+
+  // Avatar upload rate limiting: keyed by authenticated user ID (not IP),
+  // since users own their avatars. 10 uploads per day (24 hours) is generous
+  // enough for legitimate replacements while preventing abuse/spam. Applied
+  // to POST /api/users/me/avatar.
+  createAvatarLimiter(): RequestHandler;
 }

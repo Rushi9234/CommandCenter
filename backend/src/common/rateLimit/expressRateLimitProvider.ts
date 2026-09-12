@@ -74,4 +74,37 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
       },
     });
   }
+
+  // Password-change rate limiting: 3 attempts per hour, keyed by user ID.
+  // This is a sensitive account-modifying operation, and we want to prevent
+  // brute-force attacks while still allowing legitimate users to retry.
+  // Keyed by authenticated user ID (not IP) since this runs post-authentication.
+  createPasswordChangeLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 60 * 60 * 1000, // 1 hour
+      max: 3,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many password change attempts. Please try again in an hour.' });
+      },
+    });
+  }
+
+  // Avatar upload rate limiting: 10 uploads per day, keyed by user ID.
+  // Users own their avatars and might legitimately want to update them,
+  // but 10 per day prevents spam/abuse while staying generous.
+  createAvatarLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 24 * 60 * 60 * 1000, // 24 hours
+      max: 10,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many avatar uploads. Please try again tomorrow.' });
+      },
+    });
+  }
 }

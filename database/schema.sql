@@ -33,6 +33,13 @@ CREATE TABLE users (
     pronouns VARCHAR(50),
     location VARCHAR(100),
     is_profile_public BOOLEAN DEFAULT false,
+    -- Avatar fields (migration 1788000001000_add-avatar-fields.sql)
+    avatar_key VARCHAR(500),
+    avatar_mime_type VARCHAR(50),
+    avatar_size INTEGER,
+    avatar_width INTEGER,
+    avatar_height INTEGER,
+    avatar_uploaded_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

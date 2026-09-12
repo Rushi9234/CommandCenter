@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import * as api from '../services/api';
 import { motion } from 'framer-motion';
 
@@ -11,6 +11,8 @@ interface ProfileData {
   pronouns: string | null;
   location: string | null;
   is_profile_public: boolean;
+  avatar_key: string | null;
+  avatar_url: string | null;
   role: string;
   created_at: string;
   updated_at: string;
@@ -41,6 +43,10 @@ export default function Profile() {
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordSuccess, setPasswordSuccess] = useState(false);
 
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const [avatarError, setAvatarError] = useState('');
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     loadProfile();
   }, []);
@@ -50,7 +56,10 @@ export default function Profile() {
       setLoading(true);
       setError('');
       const response = await api.getMyProfile();
-      const data = response.data;
+      // Backend wraps every response as { success, data } (common/http/respond.ts) --
+      // same convention every other page consumer already unwraps (Teams.tsx,
+      // Goals.tsx, Pulse.tsx, SOSHub.tsx all read response.data.data).
+      const data = response.data.data;
       setProfile(data);
       setEditData({
         full_name: data.full_name || '',
@@ -85,7 +94,7 @@ export default function Profile() {
       }
 
       const response = await api.updateMyProfile(updates);
-      setProfile(response.data);
+      setProfile(response.data.data);
       setEditMode(false);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -152,6 +161,96 @@ export default function Profile() {
       confirm_password: '',
     });
     setError('');
+  };
+
+  const getAvatarInitials = (): string => {
+    if (!profile?.full_name) return '?';
+    return profile.full_name
+      .split(' ')
+      .map((n) => n[0])
+      .join('')
+      .toUpperCase()
+      .substring(0, 2);
+  };
+
+  const handleAvatarSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Client-side validation
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      setAvatarError('Only JPG, PNG, and WebP images are supported');
+      if (avatarInputRef.current) avatarInputRef.current.value = '';
+      return;
+    }
+
+    const maxSize = 5 * 1024 * 1024; // 5MB
+    if (file.size > maxSize) {
+      setAvatarError('File size must be less than 5MB');
+      if (avatarInputRef.current) avatarInputRef.current.value = '';
+      return;
+    }
+
+    await handleAvatarUpload(file);
+  };
+
+  const handleAvatarUpload = async (file: File) => {
+    try {
+      setAvatarUploading(true);
+      setAvatarError('');
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await api.uploadAvatar(formData);
+
+      // Backend wraps every response as { success, data } (common/http/respond.ts);
+      // the actual avatar fields are one level deeper than axios's response.data.
+      const avatarData = response.data.data;
+
+      // Update profile with new avatar URL
+      if (profile) {
+        setProfile({
+          ...profile,
+          avatar_key: avatarData.avatar_key,
+          avatar_url: avatarData.avatar_url,
+        });
+      }
+
+      // Clear input
+      if (avatarInputRef.current) {
+        avatarInputRef.current.value = '';
+      }
+    } catch (err: any) {
+      setAvatarError(err.response?.data?.error || 'Failed to upload avatar');
+    } finally {
+      setAvatarUploading(false);
+    }
+  };
+
+  const handleAvatarDelete = async () => {
+    if (!window.confirm('Are you sure you want to delete your avatar?')) return;
+
+    try {
+      setAvatarUploading(true);
+      setAvatarError('');
+
+      await api.deleteAvatar();
+
+      // Clear avatar from profile
+      if (profile) {
+        setProfile({
+          ...profile,
+          avatar_key: null,
+          avatar_url: null,
+        });
+      }
+    } catch (err: any) {
+      setAvatarError(err.response?.data?.error || 'Failed to delete avatar');
+    } finally {
+      setAvatarUploading(false);
+    }
   };
 
   if (loading) {
@@ -234,18 +333,74 @@ export default function Profile() {
           className="pro-card shadow-lg overflow-hidden"
         >
           {/* Avatar Section */}
-          <div className="bg-gradient-to-r from-blue-500 to-indigo-600 px-6 py-8 flex items-center space-x-4">
-            <div className="w-16 h-16 rounded-full bg-white flex items-center justify-center text-2xl font-bold text-indigo-600">
-              {profile.full_name
-                .split(' ')
-                .map((n) => n[0])
-                .join('')
-                .toUpperCase()}
+          <div className="bg-gradient-to-r from-blue-500 to-indigo-600 px-6 py-8">
+            <div className="flex items-center space-x-4">
+              <div className="relative group">
+                {profile.avatar_url ? (
+                  <img
+                    src={profile.avatar_url}
+                    alt="Profile"
+                    className="w-20 h-20 rounded-full object-cover border-4 border-white"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none';
+                      const fallback = document.getElementById('avatar-fallback');
+                      if (fallback) fallback.style.display = 'flex';
+                    }}
+                  />
+                ) : null}
+                <div
+                  id="avatar-fallback"
+                  className={`w-20 h-20 rounded-full bg-white flex items-center justify-center text-2xl font-bold text-indigo-600 border-4 border-white ${
+                    profile.avatar_url ? 'hidden' : ''
+                  }`}
+                >
+                  {getAvatarInitials()}
+                </div>
+                <button
+                  onClick={() => avatarInputRef.current?.click()}
+                  disabled={avatarUploading}
+                  className="absolute bottom-0 right-0 bg-white rounded-full p-2 shadow-lg opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
+                  title="Change avatar"
+                  aria-label="Change avatar"
+                >
+                  <svg className="w-4 h-4 text-indigo-600" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z" />
+                  </svg>
+                </button>
+                <input
+                  ref={avatarInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={handleAvatarSelect}
+                  className="hidden"
+                  aria-label="Upload avatar"
+                  disabled={avatarUploading}
+                />
+              </div>
+              <div className="text-white">
+                <h2 className="text-xl font-semibold">{profile.full_name}</h2>
+                <p className="text-blue-100">@{profile.username}</p>
+              </div>
             </div>
-            <div className="text-white">
-              <h2 className="text-xl font-semibold">{profile.full_name}</h2>
-              <p className="text-blue-100">@{profile.username}</p>
-            </div>
+            {avatarError && (
+              <div className="mt-4 p-3 bg-red-500 bg-opacity-20 border border-red-300 rounded text-sm text-red-100">
+                {avatarError}
+              </div>
+            )}
+            {avatarUploading && (
+              <div className="mt-4 text-sm text-blue-100">Updating avatar...</div>
+            )}
+            {profile.avatar_key && (
+              <div className="mt-4">
+                <button
+                  onClick={handleAvatarDelete}
+                  disabled={avatarUploading}
+                  className="text-sm text-red-100 hover:text-red-50 font-medium disabled:opacity-50"
+                >
+                  Remove avatar
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Content */}
