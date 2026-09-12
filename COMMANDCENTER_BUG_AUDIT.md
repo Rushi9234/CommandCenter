@@ -9,13 +9,13 @@
 
 ## EXECUTIVE SUMMARY
 
-**Total Confirmed Bugs:** 2 (1 open P3, 1 fixed P1 — see BUG-002)  
+**Total Confirmed Bugs:** 3 (1 open P3, 2 fixed P1 — see BUG-002, BUG-003)  
 **Total Confirmed Incomplete Behaviors:** 1  
 **Total Suspected/Manual-QA Items:** 0  
 **Total Stale Documentation Items:** 0  
 **Total Already-Fixed Historical Bugs:** 9  
 
-The CommandCenter codebase is in strong condition. All major bugs documented in prior audits have been systematically fixed, including a newly-discovered P1 response-envelope defect in the Profile page (BUG-002, fixed 2026-09-12). Only one small UX completeness gap remains open (P3 priority).
+The CommandCenter codebase is in strong condition. All major bugs documented in prior audits have been systematically fixed, including two newly-discovered P1 defects: a response-envelope mismatch in the Profile page (BUG-002, fixed 2026-09-12) and a rate-limiter authentication-ordering defect that silently degraded password-change throttling from per-user to per-IP (BUG-003, fixed 2026-09-12). Only one small UX completeness gap remains open (P3 priority). Verification of BUG-003 additionally surfaced (but did not fix, per that task's scope) 11 backend tests in `tests/profile.test.ts`/`tests/profile-core.test.ts` carrying the same defect class as BUG-002, and one stale test assertion in `tests/notifications.test.ts` — tracked in COMMANDCENTER_TASK_STATE.md as candidate follow-up work.
 
 ---
 
@@ -58,6 +58,21 @@ The CommandCenter codebase is in strong condition. All major bugs documented in 
 - **Also found and fixed in the same defect class (Avatar, same task family):** `Profile.tsx`'s avatar upload handler had the identical bug reading `response.data.avatar_key`/`avatar_url` instead of `response.data.data.avatar_key`/`avatar_url` — fixed at the same time.
 - **Tests:** `frontend/src/pages/Profile.test.tsx` — all `getMyProfile`/`updateMyProfile` mocks corrected to the real `{ data: { success: true, data: {...} } }` shape via a shared `wrapped()` helper (previously `{ data: {...profile} }`, which had been silently matching the bug rather than the real contract). Two explicit regression tests added: "correctly unwraps the `{ success, data }` envelope for every displayed field" (load path) and "displays the actual updated value from the server response after save, not a stale or blank field" (save path) — both fail if the one-level-shallow read is reintroduced.
 - **Verification:** Focused Profile suite 48/48 passed; full frontend suite 475/475 passed (23 files); frontend `tsc --noEmit` clean; backend `tsc --noEmit` clean; frontend production build succeeded. Backend was not modified, so no backend build was run.
+
+---
+
+### BUG-003 — Password-Change Rate Limiter Mounted Ahead of Authentication, Always Fell Back to IP Keying (P1, FIXED 2026-09-12)
+
+- **Severity:** P1 (a documented security control — 3 password-change attempts/hour per user — was silently enforcing a shared per-IP bucket instead)
+- **Feature:** POST /api/users/me/change-password rate limiting
+- **Status:** **CONFIRMED, FIXED, VERIFIED.** Same defect class already found and fixed for the avatar rate limiter one task earlier; the password-change limiter had been explicitly flagged at that time as "worth a dedicated look" and left unfixed.
+- **Root Cause:** `backend/src/app.ts` mounted `createPasswordChangeLimiter()` at the top level (`app.use('/api/users/me/change-password', ...)`), which runs before Express reaches `users.routes.ts`'s router and therefore before that router's own `authenticate` middleware. The limiter's `keyGenerator: (req) => req.user?.userId || ipKeyGenerator(req.ip || '')` always saw `req.user` as `undefined`, so it always fell back to its IP key.
+- **File:** [backend/src/app.ts](backend/src/app.ts), [backend/src/modules/users/users.routes.ts](backend/src/modules/users/users.routes.ts)
+- **User/Security Impact:** Every user changing their password from behind the same IP (a shared office/school/NAT network, or any multi-tenant deployment) shared one 3/hour bucket instead of each getting their own — one user's legitimate retries could exhaust another user's quota, and conversely the *intended* per-account brute-force throttle was never actually per-account.
+- **Fix:** Removed the app-level mount; added the limiter inside `users.routes.ts` after `authenticate`, before `validate`/the controller — identical pattern already used for the avatar limiter on the same router. No change to the limiter's threshold, window, or key-generator logic.
+- **Tests:** `backend/tests/password-change-security.test.ts` — rewrote "rate-limits by user ID, not by IP" to actually exhaust one user's bucket and prove a second user (same IP) is unaffected (the previous version made only one request per user, too few to distinguish per-user from per-IP keying either way); added "rejects unauthenticated password-change requests before the rate limiter or handler runs".
+- **Verification:** Focused rate-limiting tests (6 tests) pass. Backend `tsc --noEmit` clean. Backend production build succeeds. Full backend suite run once: 504/526 passed; all 22 failures independently root-caused as pre-existing and unrelated (see COMMANDCENTER_TASK_STATE.md's "PASSWORD-CHANGE RATE LIMITER AUTHENTICATION-ORDERING FIX" entry for the full breakdown) — none trace to this change, confirmed for the most directly-relevant case by reproducing the identical failure against the unmodified pre-fix code via `git stash`.
+- **Newly discovered during this verification, not fixed (separate, pre-existing, unrelated):** `tests/profile.test.ts` and `tests/profile-core.test.ts` (11 failing tests total) assert the pre-BUG-002 flat response shape (`res.body.user_id` instead of `res.body.data.user_id`) against `GET`/`PUT /api/users/me` — the identical defect class as BUG-002, in backend test files BUG-002's frontend-only fix never touched. `tests/notifications.test.ts` has one test with a stale hardcoded preferences object missing the `password_change` key added during Phase 2 hardening.
 
 ---
 

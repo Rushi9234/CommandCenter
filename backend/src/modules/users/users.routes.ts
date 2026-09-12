@@ -35,13 +35,15 @@ const handleAvatarFile = (req: Request, res: Response, next: NextFunction) => {
   });
 };
 
-// Applied here (after `authenticate` runs below), not in app.ts -- the
-// limiter's key generator reads req.user.userId, which does not exist yet
-// if this middleware runs ahead of authentication. Mounting it at the
-// app.ts level (as the pre-existing change-password limiter does) would
-// make every avatar request fall back to the limiter's IP key regardless
-// of which authenticated user sent it.
+// Both applied here (after `authenticate` runs below), not in app.ts -- each
+// limiter's key generator reads req.user.userId, which does not exist yet if
+// this middleware runs ahead of authentication. Mounting either one at the
+// app.ts level (as the password-change limiter previously did, on its own,
+// before this fix) would make every request fall back to the limiter's IP
+// key regardless of which authenticated user sent it -- silently merging
+// every user behind a shared IP into one bucket instead of one each.
 const avatarRateLimiter = getRateLimitProvider().createAvatarLimiter();
+const passwordChangeRateLimiter = getRateLimitProvider().createPasswordChangeLimiter();
 
 // GET /api/users — list all users in the caller's teams
 router.get('/', authenticate, asyncHandler(usersController.getAllUsers));
@@ -53,7 +55,7 @@ router.get('/me', authenticate, asyncHandler(usersController.getOwnProfile));
 router.put('/me/profile', authenticate, validate(updateProfileSchema), asyncHandler(usersController.updateProfile));
 
 // POST /api/users/me/change-password — change the authenticated user's password
-router.post('/me/change-password', authenticate, validate(changePasswordSchema), asyncHandler(usersController.changePassword));
+router.post('/me/change-password', authenticate, passwordChangeRateLimiter, validate(changePasswordSchema), asyncHandler(usersController.changePassword));
 
 // POST /api/users/me/avatar — upload/replace user's avatar
 router.post('/me/avatar', authenticate, avatarRateLimiter, handleAvatarFile, asyncHandler(usersController.uploadAvatar));

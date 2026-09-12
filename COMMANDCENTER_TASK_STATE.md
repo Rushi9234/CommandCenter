@@ -2069,11 +2069,54 @@ No IDOR (both endpoints scope strictly to `req.user!.userId` from the JWT, never
 - `COMMANDCENTER_BUG_AUDIT.md` — BUG-002 added with full root cause, fix, and verification
 - `COMMANDCENTER_TASK_STATE.md` — this entry
 
+## PASSWORD-CHANGE RATE LIMITER AUTHENTICATION-ORDERING FIX — STATUS: COMPLETE / VERIFIED (2026-09-12)
+
+Closes the item flagged above ("worth a dedicated look") and in the Avatar verification pass before it — the password-change limiter had the identical "mounted ahead of authentication" defect already found and fixed for the avatar limiter.
+
+### Root cause (confirmed by inspection, not assumed)
+
+`app.ts` mounted `createPasswordChangeLimiter()` at the top level, `app.use('/api/users/me/change-password', ...)`, which runs *before* Express even reaches `users.routes.ts`'s router — and therefore before that router's own `authenticate` middleware. The limiter's `keyGenerator: (req) => req.user?.userId || ipKeyGenerator(req.ip || '')` always saw `req.user` as `undefined` at that point in the chain, so it always fell back to the IP key — every user behind the same IP shared one 3/hour bucket instead of each getting their own.
+
+### Fix
+
+- Removed the app-level mount from `backend/src/app.ts`.
+- Added `const passwordChangeRateLimiter = getRateLimitProvider().createPasswordChangeLimiter();` in `backend/src/modules/users/users.routes.ts`, applied to the route as `authenticate, passwordChangeRateLimiter, validate(...), asyncHandler(...)` — same pattern already used for the avatar limiter on the same router. No change to the limiter's own configuration (still 3/hour, still keyed the same way) — only where it runs.
+- Confirmed no duplicate mount: exactly one `createPasswordChangeLimiter()` call site exists post-fix (in `users.routes.ts`); `app.ts` no longer references it.
+
+### Regression tests
+
+`backend/tests/password-change-security.test.ts`:
+- Rewrote **"rate-limits by user ID, not by IP"** to actually prove bucket isolation: user 1 exhausts their own 3/hour bucket using 3 wrong-password attempts (each still counted by the limiter, since it runs before validation/the controller, but a wrong password never succeeds and so never triggers the unrelated session-invalidation-on-password-change behavior — see the pitfall note below), confirms their own 4th attempt gets 429, then confirms user 2 (same test-process IP, different authenticated user) is completely unaffected — still gets a full quota of their own. The previous version of this test made exactly one request per user, which is too few to distinguish "keyed by user" from "keyed by shared IP" either way, so it could never actually have caught this defect.
+- Added **"rejects unauthenticated password-change requests before the rate limiter or handler runs"** — confirms a request with no token gets 401 from `authenticate` itself (not 429, not a validation error), then confirms the account's password was genuinely untouched by successfully changing it with a valid token afterward.
+
+### A pitfall discovered and worked around during verification (not fixed — pre-existing, unrelated)
+
+Several existing tests in this file (and 11 more failures in two entirely separate pre-existing files, `tests/profile.test.ts` and `tests/profile-core.test.ts`) reuse one JWT across multiple *successful* password changes in a loop. `authenticate` (Milestone 38, correct, unrelated to this task) rejects any JWT issued before the account's current `password_changed_at` — so the token used for attempt 1 becomes invalid for attempt 2 the moment attempt 1 succeeds, producing a 401 that looks like a rate-limit or auth regression but is neither. **Verified this is pre-existing and unrelated to this fix** by stashing this task's changes, running the exact same test against the original unmodified `app.ts`/`users.routes.ts`, and reproducing the identical 401 — proving the mount-ordering change is not the cause. Not fixed (out of scope for this task); the two tests in this file that hit it (`rejects the 4th password change attempt with 429`, `does not expose rate-limit timing details`) and 4 more in the "Security Notification" block (which hit both this and a separate fire-and-forget-notification/database-truncation race — visible as `deadlock detected` and `notifications_user_id_fkey` violations in a captured log during this investigation) were left as-is, not modified.
+
+### Verification
+
+- Focused suite (`password-change-security.test.ts`): the 6 tests under "Rate Limiting: 3 attempts per hour per user" plus the new unauthenticated-rejection test — **all PASS** (this task's actual deliverable). 8 unrelated pre-existing failures remain in the same file (Security Notification block + 2 stale token-reuse tests), root-caused above, not touched.
+- Backend `tsc --noEmit`: **PASS** (clean).
+- Backend production build: **PASS**.
+- Full backend suite (run once): **504/526 passed, 22 failed, across 39 suites**. All 22 failures independently root-caused and confirmed pre-existing/unrelated: 2 are the codebase's already-documented Neon-latency 30-second Jest timeouts (`rbac.test.ts`'s Blockers write-access test, `rateLimit.test.ts`'s AI-chat limiter test — neither touches password-change); 1 is `notifications.test.ts` asserting a stale 5-key preferences object that predates this task's own earlier `password_change` key addition; 11 are `tests/profile.test.ts`/`tests/profile-core.test.ts` asserting the flat `res.body.user_id` shape instead of `res.body.data.user_id` — the same defect class as BUG-002, but in backend test files BUG-002's frontend-only fix never touched; 8 are the token-reuse pitfall described above. **Zero of the 22 trace to this task's change.**
+
+### Files changed (this task)
+
+- `backend/src/app.ts` — removed the app-level password-change limiter mount
+- `backend/src/modules/users/users.routes.ts` — added the limiter after `authenticate`, before `validate`/the controller
+- `backend/tests/password-change-security.test.ts` — rewrote the bucket-isolation test to actually prove per-user keying; added the unauthenticated-rejection test
+
+### Newly documented, still-open, unrelated pre-existing issues (found during this verification, not fixed)
+
+- `tests/profile.test.ts` and `tests/profile-core.test.ts` (11 failures total) assert the pre-BUG-002 flat response shape against endpoints that have always returned `{success, data}` — these test files need the same one-level unwrap fix BUG-002 applied to `Profile.tsx`, but were out of scope for that frontend-only fix and out of scope here.
+- `tests/notifications.test.ts`'s "defaults to all categories ON for a fresh user" test has a stale hardcoded preferences object missing the `password_change` key added during Phase 2 hardening.
+- The token-reuse-across-successful-changes pitfall described above affects `tests/password-change-security.test.ts`'s own "rejects the 4th password change attempt with 429" and "does not expose rate-limit timing details" tests, plus its entire "Security Notification" describe block (which also independently races a fire-and-forget notification INSERT against the next test's `resetDatabase()` TRUNCATE).
+
 ## NEXT PRIORITY (AUTHORITATIVE — supersedes all earlier "NEXT PRIORITY" sections in this file)
 
 **Profile Phase 4 — Email / Phone Verification**, OR another roadmap item the user prioritizes explicitly.
 
-The Profile response-envelope investigation above is now fully closed (fixed, tested, verified) — it is no longer blocking. Per the canonical Profile phase table, Phases 1-3 are COMPLETE and Phase 4 (Email/Phone Verification) is the next unstarted phase in sequence. This is **not started** — flagged as the next candidate only, pending explicit direction, per this task's scope boundary (no new feature work was to begin in this investigation).
+This task (password-change rate limiter ordering) is now closed. No blocking defect remains in either of the two rate limiters that were audited (avatar, password-change) — both are correctly user-ID-keyed. Per the canonical Profile phase table, Phases 1-3 are COMPLETE and Phase 4 (Email/Phone Verification) is the next unstarted phase in sequence — flagged as the next candidate only, not started, pending explicit direction.
 
-**If that investigation turns out to be a non-issue** (e.g., some transformation this session missed), the next priority is **Profile Phase 4: Email/Phone Verification**, per the canonical roadmap sequence.
+Also newly available as an alternative next priority, if preferred over Phase 4: fix the response-envelope assertions in `tests/profile.test.ts`/`tests/profile-core.test.ts` (11 failing tests, same root cause as BUG-002, backend-side, never previously touched) — a small, well-understood, already-diagnosed correctness fix in the same spirit as this task.
 - The pre-existing `Profile.tsx` `loadProfile()`/`handleSave()` response-envelope mismatch described above — appears to affect the live Profile page today, independent of anything in this task.

@@ -131,32 +131,75 @@ describe('Password Change Security Hardening', () => {
     });
 
     it('rate-limits by user ID, not by IP', async () => {
-      // Two different users should have independent rate limits
-      // This test verifies the limiter key is user ID, not IP
+      // Two different users should have independent rate limits.
+      // A single request per user (as this test previously did) can't
+      // actually distinguish "keyed by user" from "keyed by IP" -- both
+      // supertest requests share the same loopback IP, and 1+1 requests is
+      // still well under a shared IP bucket's limit of 3 either way.
+      //
+      // This version deliberately uses a WRONG current_password on every
+      // counted attempt rather than successful changes: the rate limiter
+      // (mounted ahead of validate()/the controller) still counts each of
+      // these requests toward the 3/hour bucket, but a wrong-password
+      // request never actually changes the password -- so it never trips
+      // the unrelated (and correct) session-invalidation-on-password-change
+      // behavior (authenticate rejects a JWT issued before password_changed_at),
+      // which would otherwise invalidate the very token this test is using
+      // after the first genuine success. That would produce a 401 with no
+      // relation to rate limiting and make this test meaningless for its
+      // actual purpose: proving bucket isolation between users.
       const result2 = await registerAndLogin('password-change-security-2');
       const token2 = result2.token;
 
-      // First user makes a request
-      const res1 = await request(app)
+      for (let i = 0; i < 3; i++) {
+        const res = await request(app)
+          .post('/api/users/me/change-password')
+          .set(authHeader(testToken))
+          .send({ current_password: 'WrongPassword!', new_password: `NewPass111${i}!` });
+        expect(res.status).not.toBe(429);
+        expect(res.status).not.toBe(401);
+      }
+
+      // User 1's bucket is now exhausted -- confirm their own 4th attempt
+      // 429s (same-IP sanity check that the limiter is actually active).
+      const user1FourthRes = await request(app)
         .post('/api/users/me/change-password')
         .set(authHeader(testToken))
-        .send({
-          current_password: TEST_PASSWORD,
-          new_password: 'NewPass1234!',
-        });
+        .send({ current_password: 'WrongPassword!', new_password: 'NewPass1114!' });
+      expect(user1FourthRes.status).toBe(429);
 
-      expect(res1.status).toBe(204);
+      // If the limiter were IP-keyed (the pre-fix defect), user 2 would
+      // already be rate-limited here too, despite never having made a
+      // request -- proving the fix by exercising user 2's own full quota,
+      // same IP, immediately after user 1's bucket was exhausted.
+      for (let i = 0; i < 3; i++) {
+        const res = await request(app)
+          .post('/api/users/me/change-password')
+          .set(authHeader(token2))
+          .send({ current_password: 'WrongPassword!', new_password: `NewPass222${i}!` });
+        expect(res.status).not.toBe(429);
+        expect(res.status).not.toBe(401);
+      }
+    });
 
-      // Second user should also be able to change password (not rate-limited by first user's IP)
-      const res2 = await request(app)
+    it('rejects unauthenticated password-change requests before the rate limiter or handler runs', async () => {
+      // authenticate now runs ahead of the rate limiter (the fix) -- an
+      // unauthenticated request must be rejected by authentication itself,
+      // never reach the limiter's key generator, and never touch password
+      // validation/hashing.
+      const res = await request(app)
         .post('/api/users/me/change-password')
-        .set(authHeader(token2))
-        .send({
-          current_password: TEST_PASSWORD, // Same default password from fixtures
-          new_password: 'NewPass5678!',
-        });
+        .send({ current_password: TEST_PASSWORD, new_password: 'NewPass9999!' });
 
-      expect(res2.status).toBe(204);
+      expect(res.status).toBe(401);
+
+      // Confirm the account's password was genuinely untouched: the
+      // authenticated user can still log in and change it normally.
+      const followUp = await request(app)
+        .post('/api/users/me/change-password')
+        .set(authHeader(testToken))
+        .send({ current_password: TEST_PASSWORD, new_password: 'NewPass9998!' });
+      expect(followUp.status).toBe(204);
     });
   });
 
