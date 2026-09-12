@@ -3,10 +3,27 @@ import request from 'supertest';
 import { app } from './utils/testApp';
 import { pgPool } from '../src/utils/database';
 import { closeTestPool, resetDatabase } from './utils/db';
-import { registerAndLogin, authHeader } from './utils/fixtures';
+import { registerAndLogin, authHeader, login } from './utils/fixtures';
+
+// A successful password change intentionally invalidates the JWT used to
+// make it (Milestone 38 -- authenticate() rejects a token issued before
+// the account's password_changed_at). Any test that needs to make a
+// further authenticated request against the SAME account after a
+// successful change (another change, or reading that account's own
+// notifications) must re-login with the NEW password first, exactly like
+// a real client would -- reusing the old token gets a 401 that has
+// nothing to do with whatever the test actually intends to verify. The
+// rate limiter itself is keyed by authenticated user ID, not by which
+// token is presented, so a fresh token for the same user still counts
+// against the same bucket.
+const reloginWithNewPassword = async (email: string, newPassword: string): Promise<string> => {
+  const res = await login(email, newPassword).expect(200);
+  return res.body.data.token;
+};
 
 let testToken: string;
 let testUserId: string;
+let testEmail: string;
 const TEST_PASSWORD = 'Passw0rd!123'; // Default password from fixtures.ts buildUser
 
 beforeEach(async () => {
@@ -16,6 +33,7 @@ beforeEach(async () => {
   const result = await registerAndLogin('password-change-security');
   testUserId = result.userId;
   testToken = result.token;
+  testEmail = result.user.email;
 });
 
 afterAll(async () => {
@@ -74,7 +92,8 @@ describe('Password Change Security Hardening', () => {
     it('rejects the 4th password change attempt with 429', async () => {
       // Create a fresh user for this test to avoid interference from other tests
       const freshResult = await registerAndLogin('rate-limit-test-4th');
-      const freshToken = freshResult.token;
+      let freshToken = freshResult.token;
+      const freshEmail = freshResult.user.email;
 
       // Use correct password for first 3 successful changes
       const passwords = [
@@ -85,7 +104,11 @@ describe('Password Change Security Hardening', () => {
 
       let currentPassword = TEST_PASSWORD;
 
-      // First 3 attempts - should succeed
+      // First 3 attempts - should succeed. Each successful change
+      // invalidates the token that made it, so re-login with the new
+      // password before the next attempt -- exactly what a real client
+      // would do, and the limiter (keyed by user ID, not by token) still
+      // counts each of these three real requests against the same bucket.
       for (let i = 0; i < 3; i++) {
         const res = await request(app)
           .post('/api/users/me/change-password')
@@ -97,6 +120,7 @@ describe('Password Change Security Hardening', () => {
 
         expect(res.status).toBe(204);
         currentPassword = passwords[i];
+        freshToken = await reloginWithNewPassword(freshEmail, currentPassword);
       }
 
       // 4th attempt - should be rate limited
@@ -215,15 +239,20 @@ describe('Password Change Security Hardening', () => {
 
       expect(res.status).toBe(204);
 
+      // The change above invalidated testToken -- re-login with the new
+      // password before making any further authenticated request, exactly
+      // like a real client would after changing their own password.
+      const freshToken = await reloginWithNewPassword(testEmail, 'NewPassword123!');
+
       // Check notifications for this user
       // Note: Due to fire-and-forget nature, the notification might take a moment,
       // but since this is an in-memory store, it should be available immediately
       const notificationsRes = await request(app)
         .get('/api/notifications?limit=10')
-        .set(authHeader(testToken));
+        .set(authHeader(freshToken));
 
       expect(notificationsRes.status).toBe(200);
-      const passwordChangeNotifs = notificationsRes.body.notifications.filter(
+      const passwordChangeNotifs = notificationsRes.body.data.notifications.filter(
         (n: any) => n.category === 'password_change'
       );
 
@@ -245,13 +274,14 @@ describe('Password Change Security Hardening', () => {
 
       expect(res.status).toBe(400);
 
-      // Check notifications - should not have a password_change notification
+      // A failed change never touches password_changed_at, so testToken is
+      // still valid -- no re-login needed here.
       const notificationsRes = await request(app)
         .get('/api/notifications?limit=10')
         .set(authHeader(testToken));
 
       expect(notificationsRes.status).toBe(200);
-      const passwordChangeNotifs = notificationsRes.body.notifications.filter(
+      const passwordChangeNotifs = notificationsRes.body.data.notifications.filter(
         (n: any) => n.category === 'password_change'
       );
 
@@ -274,25 +304,28 @@ describe('Password Change Security Hardening', () => {
 
       expect(res.status).toBe(204);
 
-      // Check that second user has NO password_change notification
+      // Check that second user has NO password_change notification.
+      // token2 was never used to change a password, so it's still valid.
       const notificationsRes2 = await request(app)
         .get('/api/notifications?limit=10')
         .set(authHeader(token2));
 
       expect(notificationsRes2.status).toBe(200);
-      const passwordChangeNotifs = notificationsRes2.body.notifications.filter(
+      const passwordChangeNotifs = notificationsRes2.body.data.notifications.filter(
         (n: any) => n.category === 'password_change'
       );
 
       expect(passwordChangeNotifs.length).toBe(0);
 
-      // But first user should have the notification
+      // But first user should have the notification. testToken was
+      // invalidated by the change above -- re-login with the new password.
+      const freshToken = await reloginWithNewPassword(testEmail, 'NewPassword123!');
       const notificationsRes1 = await request(app)
         .get('/api/notifications?limit=10')
-        .set(authHeader(testToken));
+        .set(authHeader(freshToken));
 
       expect(notificationsRes1.status).toBe(200);
-      const firstUserNotifs = notificationsRes1.body.notifications.filter(
+      const firstUserNotifs = notificationsRes1.body.data.notifications.filter(
         (n: any) => n.category === 'password_change'
       );
 
@@ -310,13 +343,16 @@ describe('Password Change Security Hardening', () => {
 
       expect(res.status).toBe(204);
 
+      // Re-login: the change above invalidated testToken.
+      const freshToken = await reloginWithNewPassword(testEmail, 'NewPassword123!');
+
       // Get notifications
       const notificationsRes = await request(app)
         .get('/api/notifications?limit=10')
-        .set(authHeader(testToken));
+        .set(authHeader(freshToken));
 
       expect(notificationsRes.status).toBe(200);
-      const passwordChangeNotifs = notificationsRes.body.notifications.filter(
+      const passwordChangeNotifs = notificationsRes.body.data.notifications.filter(
         (n: any) => n.category === 'password_change'
       );
 
@@ -324,11 +360,16 @@ describe('Password Change Security Hardening', () => {
 
       const notif = passwordChangeNotifs[0];
 
-      // Ensure no sensitive data in notification
-      const notifStr = JSON.stringify(notif);
-      expect(notifStr).not.toMatch(/password/i);
-      expect(notifStr).not.toMatch(/hash/i);
-      expect(notifStr).not.toMatch(/token/i);
+      // Ensure no sensitive data in the notification's user-facing content.
+      // Checking the whole serialized object (as this test previously did)
+      // is too broad: the notification's OWN category field is legitimately
+      // named 'password_change' -- that string match is expected, safe
+      // metadata, not a leak. What must never appear is an actual password
+      // value, hash, or token inside the title/message a user reads.
+      const notifContent = `${notif.title} ${notif.message}`;
+      expect(notifContent).not.toMatch(/passw0rd|newpassword123/i);
+      expect(notifContent).not.toMatch(/hash/i);
+      expect(notifContent).not.toMatch(/token/i);
     });
 
     it('notification failure does not fail the password change', async () => {
@@ -346,16 +387,17 @@ describe('Password Change Security Hardening', () => {
     });
 
     it('respects notification preferences for password_change category', async () => {
-      // Update notification preferences to disable password_change
+      // Update notification preferences to disable password_change.
+      // notifications.routes.ts defines this as PUT, not POST.
       const prefRes = await request(app)
-        .post('/api/notifications/preferences')
+        .put('/api/notifications/preferences')
         .set(authHeader(testToken))
         .send({
           password_change: false,
         });
 
       expect(prefRes.status).toBe(200);
-      expect(prefRes.body.password_change).toBe(false);
+      expect(prefRes.body.data.password_change).toBe(false);
 
       // Now change password
       const changeRes = await request(app)
@@ -368,13 +410,16 @@ describe('Password Change Security Hardening', () => {
 
       expect(changeRes.status).toBe(204);
 
+      // Re-login: the change above invalidated testToken.
+      const freshToken = await reloginWithNewPassword(testEmail, 'NewPassword123!');
+
       // Check that no password_change notification was created
       const notificationsRes = await request(app)
         .get('/api/notifications?limit=10')
-        .set(authHeader(testToken));
+        .set(authHeader(freshToken));
 
       expect(notificationsRes.status).toBe(200);
-      const passwordChangeNotifs = notificationsRes.body.notifications.filter(
+      const passwordChangeNotifs = notificationsRes.body.data.notifications.filter(
         (n: any) => n.category === 'password_change'
       );
 
@@ -429,7 +474,10 @@ describe('Password Change Security Hardening', () => {
         });
 
       expect(loginRes.status).toBe(200);
-      expect(loginRes.body).toHaveProperty('access_token');
+      // authController.ts's login() returns { success, message, data: { user, token } }
+      // -- 'access_token' at the top level never existed in this codebase's
+      // login response shape.
+      expect(loginRes.body.data).toHaveProperty('token');
     });
   });
 
@@ -439,17 +487,14 @@ describe('Password Change Security Hardening', () => {
       const freshResult = await registerAndLogin('error-safety-timing');
       const freshToken = freshResult.token;
 
-      const res = await request(app)
-        .post('/api/users/me/change-password')
-        .set(authHeader(freshToken))
-        .send({
-          current_password: TEST_PASSWORD,
-          new_password: 'NewPass1234!',
-        });
-
-      expect(res.status).toBe(204);
-
-      // Make 3 more attempts (should hit rate limit on 4th)
+      // Exhaust the 3/hour bucket with wrong-password attempts -- these
+      // still count (the limiter runs before validate()/the controller),
+      // but never actually change the password, so freshToken is never
+      // invalidated by the account's own password_changed_at check. A
+      // genuine successful change here (as this test previously did on its
+      // first attempt) would invalidate freshToken and turn every
+      // subsequent request, including the one meant to hit the rate
+      // limit, into an unrelated 401.
       for (let i = 0; i < 3; i++) {
         await request(app)
           .post('/api/users/me/change-password')
@@ -465,7 +510,7 @@ describe('Password Change Security Hardening', () => {
         .post('/api/users/me/change-password')
         .set(authHeader(freshToken))
         .send({
-          current_password: TEST_PASSWORD,
+          current_password: 'WrongPassword',
           new_password: 'NewPass9999!',
         });
 
