@@ -43,7 +43,7 @@
     "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.18.0",
     "@types/supertest": "^7.2.1",
-    "jest": "^30.4.2",
+    "jest": "^30.5.1",
     "node-pg-migrate": "^9.0.0",
     "supertest": "^7.2.2",
     "ts-jest": "^29.4.12",
