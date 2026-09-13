@@ -2293,7 +2293,7 @@ Confirmed still intact and untouched throughout this investigation (migration, `
 
 The password-hash-exposure fix and Profile Phase 4 Step 1 changes referenced in the (now-stale) "NEXT PRIORITY" section below were committed and pushed in a subsequent task (`5d28d39`, then `3ff1fc6` for a separate, later-discovered `password_changed_at`/JWT `iat` session-invalidation CI flake — see `COMMANDCENTER_BUG_AUDIT.md` for full root-cause detail). GitHub Actions confirmed GREEN on `3ff1fc6` for both `backend` and `frontend` jobs before this section's task began.
 
-## Profile Phase 4 — Email-Change Backend (implemented, not yet committed)
+## Profile Phase 4 — Email-Change Backend (COMPLETE, committed `481a821`, pushed, GitHub Actions GREEN)
 
 Per `PROFILE_PHASE4_EMAIL_PHONE_VERIFICATION_AUDIT.md` §7/§13 step 3, following directly from commit `3ff1fc6`'s verified-green baseline (531/531 backend tests, 40/40 suites).
 
@@ -2312,12 +2312,38 @@ Per `PROFILE_PHASE4_EMAIL_PHONE_VERIFICATION_AUDIT.md` §7/§13 step 3, followin
 - `detectOpenHandles` (no `--forceExit`) on the four affected suites: 86/86 PASS, Jest exited cleanly on its own.
 - Backend `tsc --noEmit`: PASS. Backend production build: PASS.
 - Full backend suite, one run: 563/564 PASS, 40/41 suites (41st is the new `emailChange.test.ts` file itself). The one failure is `tests/dailyWork.test.ts`'s "caps entries at 50 per day per team" — the same pre-existing, already-documented Neon-latency timeout (60s Jest timeout against 50+ sequential remote-DB round-trips) seen and explicitly flagged as unrelated/environmental in the `3ff1fc6` CI-fix task; not touched by, and not caused by, this task's changes. 563 = 531 (prior verified baseline) + 33 (new) − 1 (this one pre-existing, unrelated flake).
-- Not committed or pushed — explicit instruction for this task.
+- Committed as `481a821` ("feat: implement profile email change verification") and pushed to `origin/master`. GitHub Actions confirmed GREEN (backend + frontend, all steps including Test) on this commit.
 
 **Explicitly NOT touched by this task:** phone verification/OTP, SMS provider, Profile frontend/UI, Chat, the Phase 4 architecture audit document itself (no correction was needed).
 
+## Profile Phase 4 — Email-Change Frontend/UI (implemented, not yet committed)
+
+Following directly from `481a821`'s verified-green backend. Per the audit's §8 frontend UX proposal, adapted to what the codebase's actual current patterns support (see below).
+
+**Genuine backend contract gap found and resolved before UI work began:** `GET /api/users/me` (`usersRepository.getProfileById`) did not return `pending_email` — only the request/resend endpoints' own responses did. Without it, a page reload during a pending change would lose the "pending" banner with no way to re-fetch it. Per this task's explicit instruction to stop and report a contract gap rather than silently patch it, this was surfaced and the user chose to extend the backend: `pending_email` (the caller's own, read-only, already-existing column) added to `getProfileById`'s SELECT — one line, no migration, no write-path change. Verified no regression: `profile.test.ts` + `profile-core.test.ts` + `profileVerificationStatus.test.ts` + `emailChange.test.ts` all still 59/59 PASS after the change; backend `tsc`/build both PASS.
+
+**Implemented:**
+- `Profile.tsx`'s email field: the static "Email changes coming in a future phase" placeholder is gone. Normal state shows the current email plus a "Verified" badge driven by `is_verified` (now finally consumed — Phase 4 Step 1 exposed it months of implementation ago but nothing rendered it until now), and a "Change email" text action.
+- Change-email flow implemented as an **inline expanding form** (new_email + current_password, `type="email" required` for native client-side format validation matching every other email input in this app — Login/Register/ForgotPassword/VerifyEmail all use the same convention, no custom regex), not a modal. This deliberately mirrors `Profile.tsx`'s own existing pattern for the closest analogous flow (`changePasswordMode`'s inline toggle), rather than importing the modal pattern used elsewhere in the app (Goals.tsx/Teams.tsx) for a page that has never used modals itself — chosen after inspecting the actual current code, per this task's explicit instruction not to assume architecture. (Note: since no modal was used, the task's dialog-specific accessibility bullets — Escape-to-close, focus-trap, return-focus-to-trigger — don't apply; the page's own existing accessibility baseline, labeled inputs + `disabled` while saving, is what's matched.)
+- On successful request: a page-level success banner ("Verification email sent to X..."), and a pending-state box (current + pending email, "Verification pending", "Resend verification" button). No cancel action — the backend has no endpoint for it, and none was invented.
+- Resend: loading state, disabled while in flight (duplicate-submission-proof), inline success/error feedback distinct from the top-level banner (matches `avatarError`'s existing inline-not-global placement).
+- New unauthenticated route `/verify-email-change` (`VerifyEmailChange.tsx`) — modeled on `ResetPassword.tsx`, not `VerifyEmail.tsx`: `POST /auth/verify-email-change` never returns a session (confirmed against `auth.service.ts`), so this page links to `/login` on success rather than auto-logging in. Reads `token` from the URL, submits exactly once (a `useRef` guard makes the network call idempotent under React StrictMode's dev-mode double-invoke, which the pre-existing `VerifyEmail.tsx` does not guard against), shows the generic backend error verbatim for invalid/expired/replayed tokens (never distinguishing which), strips the token from the visible URL (`setSearchParams({}, { replace: true })`) on success, and calls the existing `logout()` from `useAuth` to clear any stale local session — since every refresh token was just revoked server-side and the old JWT will fail its next `authenticate()` check regardless.
+- `services/api.ts` gained three thin wrappers (`requestEmailChange`, `resendEmailChangeVerification`, `verifyEmailChange`) following the file's own existing one-function-per-endpoint convention — no second API client, no new envelope handling.
+
+**Files changed:** `frontend/src/pages/Profile.tsx`, `frontend/src/pages/VerifyEmailChange.tsx` (new), `frontend/src/App.tsx` (new route), `frontend/src/services/api.ts`, `frontend/src/pages/Profile.test.tsx` (+18 tests, mockProfile extended with `is_verified`/`pending_email`), `frontend/src/pages/VerifyEmailChange.test.tsx` (new, 8 tests) — plus the one backend line: `backend/src/modules/users/users.repository.ts`.
+
+**Verification:**
+- Focused: `Profile.test.tsx` + `VerifyEmailChange.test.tsx` = 73/73 PASS.
+- Directly-affected: `useAuth.test.tsx` = 5/5 PASS (unmodified; `VerifyEmailChange.tsx` only calls its existing, unmodified `logout()`).
+- Full frontend suite, one run: 500/500 PASS, 24/24 suites.
+- Frontend `tsc` (via `npm run build`): PASS. Frontend production build: PASS.
+- Backend re-verification after the one-line repository change: `profile.test.ts` + `profile-core.test.ts` + `profileVerificationStatus.test.ts` + `emailChange.test.ts` = 59/59 PASS; backend `tsc`/build both PASS.
+- Not committed or pushed — explicit instruction for this task.
+
+**Explicitly NOT touched:** phone verification/OTP, SMS provider, Chat, the email-change backend's actual logic (only the one additive SELECT-list line), the Phase 4 architecture audit document.
+
 ## NEXT PRIORITY (AUTHORITATIVE — supersedes all earlier "NEXT PRIORITY" sections in this file)
 
-**Review and commit the email-change backend changes above** (once explicitly directed — this task was told not to commit/push). After that: Profile Phase 4's remaining slices are phone verification (audit §4/§7, needs an `SmsProvider` decision first — see audit §12) and the corresponding frontend/UI work (audit §8) — neither has been started.
+**Review and commit the email-change frontend/UI changes above** (once explicitly directed — this task was told not to commit/push). Email-change backend is already committed/pushed/green (`481a821`). After the frontend is committed: Profile Phase 4's only remaining slice is phone verification (audit §4/§7, needs an `SmsProvider` decision first — see audit §12) and its own frontend/UI (audit §8) — not started.
 
 Also still open, unrelated, lower priority: the `dailyWork.test.ts` timeout-margin issue flagged during the earlier CI-stabilization task (confirmed pre-existing/environmental, not touched here either).

@@ -16,6 +16,13 @@ interface ProfileData {
   role: string;
   created_at: string;
   updated_at: string;
+  // Phase 4 email-change: is_verified is the ORIGINAL signup-verification
+  // flag (untouched by an email change, by design -- see
+  // auth.service.ts's verifyEmailChange). pending_email is the in-progress
+  // target address, if any -- present only while a request-email-change
+  // has been submitted but not yet verified.
+  is_verified: boolean;
+  pending_email: string | null;
 }
 
 export default function Profile() {
@@ -42,6 +49,16 @@ export default function Profile() {
   });
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordSuccess, setPasswordSuccess] = useState(false);
+
+  const [emailChangeMode, setEmailChangeMode] = useState(false);
+  const [emailChangeData, setEmailChangeData] = useState({ new_email: '', current_password: '' });
+  const [emailChangeSaving, setEmailChangeSaving] = useState(false);
+  const [emailChangeSuccess, setEmailChangeSuccess] = useState(false);
+  const [resendSaving, setResendSaving] = useState(false);
+  // Distinct from the shared `error`/success banner above -- this feedback
+  // is contextual to the pending-change box itself (matches avatarError's
+  // own inline-not-global placement), not a page-level event.
+  const [resendMessage, setResendMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarError, setAvatarError] = useState('');
@@ -161,6 +178,67 @@ export default function Profile() {
       confirm_password: '',
     });
     setError('');
+  };
+
+  // Phase 4 email-change. current_password confirmation and the
+  // request/pending/verify lifecycle are exactly what
+  // POST /api/users/me/request-email-change already implements server-side
+  // (users.service.ts) -- this only calls it and reflects the result.
+  // Client-side validation here is UX only (the <input type="email"
+  // required> below, matching every other email field in this app --
+  // Login/Register/ForgotPassword/VerifyEmail all use the same native
+  // validation rather than a custom regex); the server remains
+  // authoritative and returns the same generic, enumeration-resistant
+  // error for both "already in use" and "same as current".
+  const handleRequestEmailChange = async () => {
+    try {
+      setEmailChangeSaving(true);
+      setError('');
+      setEmailChangeSuccess(false);
+
+      const response = await api.requestEmailChange(emailChangeData.new_email, emailChangeData.current_password);
+      const pendingEmail = response.data.data.pending_email;
+
+      if (profile) {
+        setProfile({ ...profile, pending_email: pendingEmail });
+      }
+      setEmailChangeMode(false);
+      setEmailChangeData({ new_email: '', current_password: '' });
+      setEmailChangeSuccess(true);
+      setTimeout(() => setEmailChangeSuccess(false), 5000);
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to request email change');
+    } finally {
+      setEmailChangeSaving(false);
+    }
+  };
+
+  const handleCancelEmailChange = () => {
+    setEmailChangeMode(false);
+    setEmailChangeData({ new_email: '', current_password: '' });
+    setError('');
+  };
+
+  // No "cancel pending change" action -- the backend has no endpoint for
+  // it (only request/resend/verify exist), and inventing one client-side
+  // with no server counterpart would be misleading UI. Resend is the only
+  // available action on an already-pending change.
+  const handleResendEmailChange = async () => {
+    try {
+      setResendSaving(true);
+      setResendMessage(null);
+
+      const response = await api.resendEmailChangeVerification();
+      const pendingEmail = response.data.data.pending_email;
+      if (profile) {
+        setProfile({ ...profile, pending_email: pendingEmail });
+      }
+      setResendMessage({ type: 'success', text: `Verification email resent to ${pendingEmail}.` });
+    } catch (err: any) {
+      setResendMessage({ type: 'error', text: err.response?.data?.error || 'Failed to resend verification email' });
+    } finally {
+      setResendSaving(false);
+    }
   };
 
   const getAvatarInitials = (): string => {
@@ -318,10 +396,14 @@ export default function Profile() {
         )}
 
         {/* Success */}
-        {(saveSuccess || passwordSuccess) && (
+        {(saveSuccess || passwordSuccess || emailChangeSuccess) && (
           <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
             <p className="text-sm text-green-700">
-              {passwordSuccess ? 'Password changed successfully!' : 'Profile updated successfully!'}
+              {emailChangeSuccess
+                ? `Verification email sent to ${profile.pending_email}. Your current email stays active until you confirm the new one.`
+                : passwordSuccess
+                  ? 'Password changed successfully!'
+                  : 'Profile updated successfully!'}
             </p>
           </div>
         )}
@@ -413,8 +495,110 @@ export default function Profile() {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Email
                 </label>
-                <div className="text-gray-900">{profile.email}</div>
-                <p className="text-xs text-gray-500 mt-1">Email changes coming in a future phase</p>
+
+                {profile.pending_email ? (
+                  // Pending state: current (still-authoritative) email
+                  // remains visible and unchanged -- login continues to use
+                  // it until the new address is verified (see
+                  // PROFILE_PHASE4_EMAIL_PHONE_VERIFICATION_AUDIT.md §3.1).
+                  // No "cancel" action: the backend has no endpoint for it.
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-gray-900 break-all">{profile.email}</span>
+                      {profile.is_verified && (
+                        <span className="inline-flex items-center text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
+                          Verified
+                        </span>
+                      )}
+                    </div>
+                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                      <p className="text-sm text-amber-800">
+                        <span className="font-medium">Verification pending</span> for{' '}
+                        <span className="break-all">{profile.pending_email}</span>
+                      </p>
+                      <p className="text-xs text-amber-700 mt-1">
+                        Check that inbox for a verification link. Your current email above stays active until you confirm the new one.
+                      </p>
+                      <div className="mt-3 flex items-center gap-3 flex-wrap">
+                        <button
+                          onClick={handleResendEmailChange}
+                          disabled={resendSaving}
+                          className="btn-secondary text-sm disabled:opacity-50"
+                        >
+                          {resendSaving ? 'Resending...' : 'Resend verification'}
+                        </button>
+                      </div>
+                      {resendMessage && (
+                        <p className={`text-xs mt-2 ${resendMessage.type === 'success' ? 'text-green-700' : 'text-red-700'}`}>
+                          {resendMessage.text}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ) : emailChangeMode ? (
+                  <div className="space-y-3">
+                    <div>
+                      <label htmlFor="new_email" className="block text-xs font-medium text-gray-600 mb-1">
+                        New email
+                      </label>
+                      <input
+                        id="new_email"
+                        type="email"
+                        required
+                        value={emailChangeData.new_email}
+                        onChange={(e) => setEmailChangeData({ ...emailChangeData, new_email: e.target.value })}
+                        className="input-field"
+                        placeholder="you@newdomain.com"
+                        autoComplete="email"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="email_change_current_password" className="block text-xs font-medium text-gray-600 mb-1">
+                        Current password
+                      </label>
+                      <input
+                        id="email_change_current_password"
+                        type="password"
+                        required
+                        value={emailChangeData.current_password}
+                        onChange={(e) => setEmailChangeData({ ...emailChangeData, current_password: e.target.value })}
+                        className="input-field"
+                        placeholder="Confirm your current password"
+                        autoComplete="current-password"
+                      />
+                    </div>
+                    <div className="flex gap-3 justify-end">
+                      <button
+                        onClick={handleCancelEmailChange}
+                        disabled={emailChangeSaving}
+                        className="btn-secondary text-sm disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleRequestEmailChange}
+                        disabled={emailChangeSaving || !emailChangeData.new_email || !emailChangeData.current_password}
+                        className="btn-primary text-sm disabled:opacity-50"
+                      >
+                        {emailChangeSaving ? 'Sending...' : 'Send verification'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-gray-900 break-all">{profile.email}</span>
+                      {profile.is_verified && (
+                        <span className="inline-flex items-center text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
+                          Verified
+                        </span>
+                      )}
+                    </div>
+                    <button onClick={() => setEmailChangeMode(true)} className="text-sm text-blue-600 hover:text-blue-700 font-medium">
+                      Change email
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div>

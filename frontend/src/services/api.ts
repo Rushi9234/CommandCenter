@@ -308,6 +308,19 @@ export const updateMyProfile = (data: Record<string, any>) =>
 export const changePassword = (currentPassword: string, newPassword: string) =>
   api.post('/users/me/change-password', { current_password: currentPassword, new_password: newPassword });
 
+// Profile Phase 4 email-change. requestEmailChange/resendEmailChangeVerification
+// are authenticated (this api instance's request interceptor already attaches
+// the bearer token); verifyEmailChange deliberately is not -- the token itself
+// is the credential, matching verifyEmail's existing unauthenticated shape.
+export const requestEmailChange = (newEmail: string, currentPassword: string) =>
+  api.post('/users/me/request-email-change', { new_email: newEmail, current_password: currentPassword });
+
+export const resendEmailChangeVerification = () =>
+  api.post('/users/me/resend-email-change-verification');
+
+export const verifyEmailChange = (token: string) =>
+  api.post('/auth/verify-email-change', { token });
+
 export const uploadAvatar = (formData: FormData) => {
   const uploadApi = axios.create({
     baseURL: import.meta.env.PROD ? 'https://commandcenter-backend.vercel.app/api' : '/api',

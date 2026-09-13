@@ -22,6 +22,8 @@ const mockProfile = {
   role: 'member',
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-09-02T00:00:00Z',
+  is_verified: true,
+  pending_email: null,
 };
 
 const renderProfile = () => {
@@ -42,6 +44,8 @@ beforeEach(() => {
   mockApi.getMyProfile.mockResolvedValue(wrapped(mockProfile));
   mockApi.updateMyProfile.mockResolvedValue(wrapped(mockProfile));
   mockApi.changePassword.mockResolvedValue({});
+  mockApi.requestEmailChange.mockResolvedValue(wrapped({ pending_email: 'new@example.com' }));
+  mockApi.resendEmailChangeVerification.mockResolvedValue(wrapped({ pending_email: 'new@example.com' }));
 });
 
 describe('Profile Page', () => {
@@ -832,6 +836,262 @@ describe('Profile Page', () => {
         // Form should remain open for user to retry
         expect(screen.getByLabelText(/Current Password/i)).toBeInTheDocument();
       });
+    });
+  });
+
+  describe('Email Change', () => {
+    it('renders the current email and a Verified badge from is_verified', async () => {
+      renderProfile();
+
+      await waitFor(() => {
+        expect(screen.getByText('user@example.com')).toBeInTheDocument();
+      });
+
+      expect(screen.getByText('Verified')).toBeInTheDocument();
+    });
+
+    it('does not render a Verified badge when is_verified is false', async () => {
+      mockApi.getMyProfile.mockResolvedValue(wrapped({ ...mockProfile, is_verified: false }));
+      renderProfile();
+
+      await waitFor(() => {
+        expect(screen.getByText('user@example.com')).toBeInTheDocument();
+      });
+
+      expect(screen.queryByText('Verified')).not.toBeInTheDocument();
+    });
+
+    it('shows a Change email action', async () => {
+      renderProfile();
+
+      await waitFor(() => {
+        expect(screen.getByText('user@example.com')).toBeInTheDocument();
+      });
+
+      expect(screen.getByRole('button', { name: /Change email/i })).toBeInTheDocument();
+    });
+
+    it('opens the email-change form when Change email is clicked', async () => {
+      renderProfile();
+
+      await waitFor(() => {
+        expect(screen.getByText('user@example.com')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Change email/i }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/New email/i)).toBeInTheDocument();
+        expect(screen.getByLabelText(/Current password/i)).toBeInTheDocument();
+      });
+    });
+
+    it('blocks a malformed email client-side (native type="email" validation)', async () => {
+      renderProfile();
+
+      await waitFor(() => {
+        expect(screen.getByText('user@example.com')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Change email/i }));
+
+      const newEmailInput = (await screen.findByLabelText(/New email/i)) as HTMLInputElement;
+      expect(newEmailInput.type).toBe('email');
+      expect(newEmailInput.required).toBe(true);
+    });
+
+    it('requires current password before the submit button is enabled', async () => {
+      renderProfile();
+
+      await waitFor(() => {
+        expect(screen.getByText('user@example.com')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Change email/i }));
+
+      const newEmailInput = await screen.findByLabelText(/New email/i);
+      fireEvent.change(newEmailInput, { target: { value: 'new@example.com' } });
+
+      const submitButton = screen.getByRole('button', { name: /Send verification/i });
+      expect(submitButton).toBeDisabled();
+
+      const passwordInput = screen.getByLabelText(/Current password/i);
+      fireEvent.change(passwordInput, { target: { value: 'mypassword123' } });
+
+      expect(submitButton).not.toBeDisabled();
+    });
+
+    it('calls requestEmailChange with the entered new_email and current_password', async () => {
+      renderProfile();
+
+      await waitFor(() => {
+        expect(screen.getByText('user@example.com')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Change email/i }));
+
+      fireEvent.change(await screen.findByLabelText(/New email/i), { target: { value: 'new@example.com' } });
+      fireEvent.change(screen.getByLabelText(/Current password/i), { target: { value: 'mypassword123' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /Send verification/i }));
+
+      await waitFor(() => {
+        expect(mockApi.requestEmailChange).toHaveBeenCalledWith('new@example.com', 'mypassword123');
+      });
+    });
+
+    it('shows a pending-state confirmation and the pending email after a successful request', async () => {
+      renderProfile();
+
+      await waitFor(() => {
+        expect(screen.getByText('user@example.com')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Change email/i }));
+      fireEvent.change(await screen.findByLabelText(/New email/i), { target: { value: 'new@example.com' } });
+      fireEvent.change(screen.getByLabelText(/Current password/i), { target: { value: 'mypassword123' } });
+      fireEvent.click(screen.getByRole('button', { name: /Send verification/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Verification email sent to new@example.com/i)).toBeInTheDocument();
+      });
+
+      expect(screen.getByText('Verification pending')).toBeInTheDocument();
+      expect(screen.getAllByText(/new@example\.com/).length).toBeGreaterThan(0);
+      // Current, still-authoritative email must remain visible during the pending period.
+      expect(screen.getByText('user@example.com')).toBeInTheDocument();
+    });
+
+    it('renders a Resend verification action while a change is pending, and calls the resend endpoint', async () => {
+      mockApi.getMyProfile.mockResolvedValue(wrapped({ ...mockProfile, pending_email: 'new@example.com' }));
+      renderProfile();
+
+      await waitFor(() => {
+        expect(screen.getByText('Verification pending')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Resend verification/i }));
+
+      await waitFor(() => {
+        expect(mockApi.resendEmailChangeVerification).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it('shows a success message after a successful resend', async () => {
+      mockApi.getMyProfile.mockResolvedValue(wrapped({ ...mockProfile, pending_email: 'new@example.com' }));
+      renderProfile();
+
+      await waitFor(() => {
+        expect(screen.getByText('Verification pending')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Resend verification/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Verification email resent to new@example\.com/i)).toBeInTheDocument();
+      });
+    });
+
+    it('shows an error message when resend fails', async () => {
+      mockApi.getMyProfile.mockResolvedValue(wrapped({ ...mockProfile, pending_email: 'new@example.com' }));
+      mockApi.resendEmailChangeVerification.mockRejectedValue({
+        response: { data: { error: 'Too many resend attempts. Please try again in an hour.' } },
+      });
+      renderProfile();
+
+      await waitFor(() => {
+        expect(screen.getByText('Verification pending')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Resend verification/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Too many resend attempts. Please try again in an hour.')).toBeInTheDocument();
+      });
+    });
+
+    it('disables the resend button while the request is in flight, preventing duplicate submissions', async () => {
+      let resolveResend: (value: any) => void = () => {};
+      mockApi.resendEmailChangeVerification.mockReturnValue(
+        new Promise((resolve) => {
+          resolveResend = resolve;
+        })
+      );
+      mockApi.getMyProfile.mockResolvedValue(wrapped({ ...mockProfile, pending_email: 'new@example.com' }));
+      renderProfile();
+
+      await waitFor(() => {
+        expect(screen.getByText('Verification pending')).toBeInTheDocument();
+      });
+
+      const resendButton = screen.getByRole('button', { name: /Resend verification/i });
+      fireEvent.click(resendButton);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Resending/i })).toBeDisabled();
+      });
+
+      expect(mockApi.resendEmailChangeVerification).toHaveBeenCalledTimes(1);
+
+      resolveResend(wrapped({ pending_email: 'new@example.com' }));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /^Resend verification$/i })).not.toBeDisabled();
+      });
+    });
+
+    it('shows the backend validation error when the request fails (e.g. wrong password)', async () => {
+      mockApi.requestEmailChange.mockRejectedValue({
+        response: { data: { error: 'Current password is incorrect' } },
+      });
+      renderProfile();
+
+      await waitFor(() => {
+        expect(screen.getByText('user@example.com')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Change email/i }));
+      fireEvent.change(await screen.findByLabelText(/New email/i), { target: { value: 'new@example.com' } });
+      fireEvent.change(screen.getByLabelText(/Current password/i), { target: { value: 'wrongpassword' } });
+      fireEvent.click(screen.getByRole('button', { name: /Send verification/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Current password is incorrect')).toBeInTheDocument();
+      });
+
+      // Form should remain open for the user to retry, matching the
+      // Change Password form's own established error-recovery behavior.
+      expect(screen.getByLabelText(/New email/i)).toBeInTheDocument();
+      expect(mockApi.requestEmailChange).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not render a pending banner when there is no pending_email', async () => {
+      renderProfile();
+
+      await waitFor(() => {
+        expect(screen.getByText('user@example.com')).toBeInTheDocument();
+      });
+
+      expect(screen.queryByText('Verification pending')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Resend verification/i })).not.toBeInTheDocument();
+    });
+
+    it('closes the form and clears fields when Cancel is clicked', async () => {
+      renderProfile();
+
+      await waitFor(() => {
+        expect(screen.getByText('user@example.com')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Change email/i }));
+      const newEmailInput = (await screen.findByLabelText(/New email/i)) as HTMLInputElement;
+      fireEvent.change(newEmailInput, { target: { value: 'typed@example.com' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
+
+      await waitFor(() => {
+        expect(screen.queryByLabelText(/New email/i)).not.toBeInTheDocument();
+      });
+      expect(mockApi.requestEmailChange).not.toHaveBeenCalled();
     });
   });
 

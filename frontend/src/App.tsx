@@ -8,6 +8,7 @@ import { useQuickOverview } from './hooks/useQuickOverview';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import VerifyEmail from './pages/VerifyEmail';
+import VerifyEmailChange from './pages/VerifyEmailChange';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
 import Pulse from './pages/Pulse';
@@ -62,6 +63,7 @@ function AppRoutes() {
       <Route path="/login" element={<PublicOnlyRoute><Login /></PublicOnlyRoute>} />
       <Route path="/register" element={<PublicOnlyRoute><Register /></PublicOnlyRoute>} />
       <Route path="/verify-email" element={<VerifyEmail />} />
+      <Route path="/verify-email-change" element={<VerifyEmailChange />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
 

@@ -13,6 +13,14 @@ export class UsersRepository {
       SELECT
         user_id, email, username, full_name, role,
         is_verified,
+        -- Phase 4 email-change frontend: exposes the caller's OWN pending
+        -- target address (never anyone else's -- this is GET /me, always
+        -- scoped to req.user.userId) so the "verification pending" banner
+        -- survives a page reload instead of only living in client-side
+        -- React state set from request/resend's own response. Never the
+        -- token hash or expiry -- those stay write-path-only, nothing a
+        -- profile read needs.
+        pending_email,
         bio, pronouns, location, is_profile_public,
         avatar_key, avatar_mime_type, avatar_size, avatar_width, avatar_height, avatar_uploaded_at,
         privacy_settings, notification_preferences,
