@@ -57,6 +57,12 @@ const DEFAULT_TOUR_STEPS: TourStep[] = [
     targetSelector: '[data-tour-target="analytics"]',
   },
   {
+    id: 'chat',
+    title: 'Chat (Coming Soon)',
+    text: 'Direct and team messaging inside CommandCenter is on its way — this is where you\'ll find it once it launches.',
+    targetSelector: '[data-tour-target="chat"]',
+  },
+  {
     id: 'notifications',
     title: 'Stay in the Loop',
     text: 'Get the updates that matter without constantly checking every page.',

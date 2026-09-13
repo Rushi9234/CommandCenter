@@ -2463,6 +2463,18 @@ All of the following are true and verified, not assumed:
 
 **Explicitly still open, by design, and not part of "Phase 4 complete":** the India DLT registration chain and MSG91 production account/credential setup (`PROFILE_PHASE4_PHONE_SMS_PROVIDER_AUDIT.md` §6) is an operational/business track, not code — production SMS delivery is not claimed to work until that is genuinely done. Phase 5 (2FA, active sessions/device management, password history) and Chat remain untouched and not started.
 
+## Global Quick Overview — Chat representation added (not committed)
+
+**Finding (audit, not assumption):** the global product walkthrough already existed and was already wired up app-wide — `SpotlightTour.tsx` + `useQuickOverview.ts`, mounted once in `App.tsx`'s `ProtectedLayoutWithWalkthrough` for every protected route (so it fires on first authenticated visit, which lands on `/pulse`), reopenable via the Sidebar's "How to Use" button. It was not missing, hidden, or duplicated — it was already the single, working global architecture. A separate `components/QuickOverview.tsx` (modal, `WALKTHROUGH_CARDS`) is orphaned dead code, superseded by `SpotlightTour` and never imported/rendered anywhere; left untouched (out of scope, no duplication risk since it's never mounted). The Team-section "How to Use Teams" guide (`useTeamsGuide.ts` + `Teams.tsx` steps, same `SpotlightTour` component) is a fully independent instance with its own dismissal keys — verified unaffected.
+
+**Gap found:** the global tour's step list (`DEFAULT_TOUR_STEPS` in `SpotlightTour.tsx`) covered every real nav section (Pulse, Teams, Goals, Projects, SOS Hub, Leaderboard, Analytics, Notifications, Profile) except Chat, which has no page yet (Sidebar renders it as a disabled `#chat` stub).
+
+**Fix:** added one new tour step (`id: 'chat'`, title "Chat (Coming Soon)", honest coming-soon wording, no capability overclaim) targeting a new `data-tour-target="chat"` attribute added to the Sidebar's Chat nav entry, so the spotlight points at the same disabled stub. No new component, no second overview system.
+
+**Tests:** `SpotlightTour.test.tsx` updated step-count/step-index assertions (11→12 steps) and added 2 new tests (Chat step content + full-walkthrough section coverage including Chat); `Sidebar.test.tsx` added 1 test asserting the Chat link's tour-target attribute. Verified: focused suite (Sidebar/SpotlightTour/useQuickOverview/useTeamsGuide/Teams — 140 tests) PASS, `tsc --noEmit` clean, production build succeeds, full frontend suite once: 24/24 files, 532/532 tests PASS.
+
+**Not committed** — awaiting explicit commit instruction per standing process.
+
 ## NEXT PRIORITY (AUTHORITATIVE — supersedes all earlier "NEXT PRIORITY" sections in this file)
 
 Profile Phase 4 is closed out. No further Phase 4 work is expected unless a genuine defect surfaces. Candidates for future, separately-scoped work (none started, none implied by this entry):

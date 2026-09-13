@@ -67,6 +67,12 @@ describe('Sidebar', () => {
       expect(chatLink).toBeInTheDocument();
     });
 
+    it('tags the Chat link with a tour target for the global walkthrough', () => {
+      renderWithProviders(<Sidebar />);
+      const chatLink = screen.getByText('Chat').closest('a');
+      expect(chatLink).toHaveAttribute('data-tour-target', 'chat');
+    });
+
     it('renders help section', () => {
       renderWithProviders(<Sidebar />);
       const helpLink = screen.getByText('Help Center');

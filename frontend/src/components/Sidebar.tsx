@@ -35,7 +35,7 @@ export default function Sidebar() {
     {
       title: 'Workspace',
       items: [
-        { path: '#chat', label: 'Chat' },
+        { path: '#chat', label: 'Chat', tourTarget: 'chat' },
       ],
     },
     {
