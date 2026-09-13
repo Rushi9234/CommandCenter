@@ -107,4 +107,53 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
       },
     });
   }
+
+  // Phase 4 email-change request rate limiting: 3 attempts per hour, keyed
+  // by user ID -- same threshold as createPasswordChangeLimiter (both are
+  // sensitive account-mutation actions with a legitimate-retry ceiling).
+  createEmailChangeLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 60 * 60 * 1000, // 1 hour
+      max: 3,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many email change attempts. Please try again in an hour.' });
+      },
+    });
+  }
+
+  // Phase 4 email-change resend: slightly more generous than the request
+  // limiter above -- resending targets the same already-pending address,
+  // a lower-risk action than initiating a new change.
+  createEmailChangeResendLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 60 * 60 * 1000, // 1 hour
+      max: 5,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many resend attempts. Please try again in an hour.' });
+      },
+    });
+  }
+
+  // Phase 4 email-change verification: IP-only, matching
+  // createRefreshLimiter's exact shape and generosity -- the caller may
+  // not be authenticated as (or even logged in as) the account in
+  // question when this runs.
+  createEmailChangeVerifyLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 15 * 60 * 1000, // 15 minutes
+      max: 30,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req) => ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many attempts. Please try again later.' });
+      },
+    });
+  }
 }

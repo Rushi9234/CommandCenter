@@ -2289,8 +2289,35 @@ Re-ran `password-change-security.test.ts` fresh (not reusing old logs): identica
 
 Confirmed still intact and untouched throughout this investigation (migration, `schema.sql`, `is_verified` exposure, `profileVerificationStatus.test.ts`) — nothing in this task discarded or modified them.
 
+### Password-change/session-invalidation CI fix (superseded the "NEXT PRIORITY" below)
+
+The password-hash-exposure fix and Profile Phase 4 Step 1 changes referenced in the (now-stale) "NEXT PRIORITY" section below were committed and pushed in a subsequent task (`5d28d39`, then `3ff1fc6` for a separate, later-discovered `password_changed_at`/JWT `iat` session-invalidation CI flake — see `COMMANDCENTER_BUG_AUDIT.md` for full root-cause detail). GitHub Actions confirmed GREEN on `3ff1fc6` for both `backend` and `frontend` jobs before this section's task began.
+
+## Profile Phase 4 — Email-Change Backend (implemented, not yet committed)
+
+Per `PROFILE_PHASE4_EMAIL_PHONE_VERIFICATION_AUDIT.md` §7/§13 step 3, following directly from commit `3ff1fc6`'s verified-green baseline (531/531 backend tests, 40/40 suites).
+
+**Implemented:**
+- `POST /api/users/me/request-email-change` (auth required, per-user rate limit 3/hour, mounted after `authenticate` per the BUG-003 lesson) — verifies current password, rejects same-email and already-registered-elsewhere with the SAME generic message (`'Unable to change email to the address provided'`, enumeration-resistant per audit §2.7), generates an opaque token, stores only its SHA-256 hash + 1-hour expiry + `pending_email`, sends the verification link to the NEW address only, sends an in-app security notification to the account (new `email_change` notification-preference group).
+- `POST /api/users/me/resend-email-change-verification` (auth required, per-user rate limit 5/hour) — reuses the existing `pending_email`, issues a fresh token that supersedes the previous one.
+- `POST /api/auth/verify-email-change` (no auth — the token is the credential, IP-only rate limit) — `authRepository.consumeEmailChangeToken` atomically finds-and-consumes a still-valid token in one UPDATE (`email = pending_email`, pending fields cleared, `email_changed_at` set) plus revokes every refresh token, all in one transaction; a null result (invalid/expired/already-consumed, indistinguishable by design) produces the same generic 400 as `verifyEmail`'s existing wording.
+- `email_changed_at` now participates in JWT session invalidation exactly like `password_changed_at` does: `jwt.ts` gained a second claim (`ecv`, mirroring the already-shipped `pwv`) checked for **exact equality** against the current value at verify time in `middleware/auth.ts` — not a timestamp comparison, avoiding the same same-wall-clock-second ambiguity `pwv` was introduced to fix for passwords (see `3ff1fc6`). `is_verified` is untouched by this flow, matching the audit's explicit recommendation (§1.2, §2.8).
+- `notifications.dto.ts` gained a new preference key, `email_change`, covering both the request-time and completion-time notifications (one group, matching `password_change`'s existing single-group precedent).
+
+**Files changed (backend only, no migration needed — Phase 4 Step 1 already added every required column):** `src/middleware/auth.ts`, `src/modules/auth/jwt.ts`, `src/modules/auth/auth.service.ts`, `src/modules/auth/auth.repository.ts`, `src/modules/auth/auth.dto.ts`, `src/controllers/authController.ts`, `src/modules/users/users.service.ts`, `src/modules/users/users.controller.ts`, `src/modules/users/users.routes.ts`, `src/modules/users/users.dto.ts`, `src/modules/notifications/notifications.dto.ts`, `src/services/emailService.ts` (new `sendEmailChangeVerification`), `src/common/rateLimit/rateLimitProvider.interface.ts` + `expressRateLimitProvider.ts` (three new limiter methods), `src/routes/index.ts`. New test file: `backend/tests/emailChange.test.ts` (33 tests). One pre-existing test fixed as a direct, expected consequence of the new preference key: `backend/tests/notifications.test.ts`'s "defaults to all categories ON" assertion (stale the same way it already was for `password_change`'s own addition — see that test's own comment).
+
+**Verification:**
+- `emailChange.test.ts`: 33/33 PASS (standalone, and combined with the affected suites below).
+- Combined affected suites (`emailChange`, `password-change-security`, `authSecurityHardening`, `auth`, `notifications`): 109/109 PASS after the one stale-assertion fix above (108/109 before it — the single failure was exactly that stale assertion, confirmed via diff: only the new `email_change: true` key was unexpectedly present).
+- `detectOpenHandles` (no `--forceExit`) on the four affected suites: 86/86 PASS, Jest exited cleanly on its own.
+- Backend `tsc --noEmit`: PASS. Backend production build: PASS.
+- Full backend suite, one run: 563/564 PASS, 40/41 suites (41st is the new `emailChange.test.ts` file itself). The one failure is `tests/dailyWork.test.ts`'s "caps entries at 50 per day per team" — the same pre-existing, already-documented Neon-latency timeout (60s Jest timeout against 50+ sequential remote-DB round-trips) seen and explicitly flagged as unrelated/environmental in the `3ff1fc6` CI-fix task; not touched by, and not caused by, this task's changes. 563 = 531 (prior verified baseline) + 33 (new) − 1 (this one pre-existing, unrelated flake).
+- Not committed or pushed — explicit instruction for this task.
+
+**Explicitly NOT touched by this task:** phone verification/OTP, SMS provider, Profile frontend/UI, Chat, the Phase 4 architecture audit document itself (no correction was needed).
+
 ## NEXT PRIORITY (AUTHORITATIVE — supersedes all earlier "NEXT PRIORITY" sections in this file)
 
-**Get explicit approval on this CI-investigation task's fixes (including the genuine password-hash-exposure security fix), then commit and push both this and the still-pending local Profile Phase 4 Step 1 changes.** After that: continue Profile Phase 4 with its next implementation slice (email-change request/verify backend endpoints, audit §7/§13 step 3), once explicitly directed.
+**Review and commit the email-change backend changes above** (once explicitly directed — this task was told not to commit/push). After that: Profile Phase 4's remaining slices are phone verification (audit §4/§7, needs an `SmsProvider` decision first — see audit §12) and the corresponding frontend/UI work (audit §8) — neither has been started.
 
 Also still open, unrelated, lower priority: the `dailyWork.test.ts` timeout-margin issue flagged during the earlier CI-stabilization task (confirmed pre-existing/environmental, not touched here either).

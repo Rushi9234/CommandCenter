@@ -2,6 +2,7 @@ import { Router } from 'express';
 import * as authController from '../controllers/authController';
 import { asyncHandler } from '../common/middleware/asyncHandler';
 import { validate } from '../common/middleware/validate';
+import { getRateLimitProvider } from '../common/rateLimit/rateLimitProviderFactory';
 import {
   registerSchema,
   loginSchema,
@@ -9,6 +10,7 @@ import {
   resendVerificationSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  verifyEmailChangeSchema,
 } from '../modules/auth/auth.dto';
 import usersRoutes from '../modules/users/users.routes';
 import teamsRoutes from '../modules/teams/teams.routes';
@@ -41,6 +43,19 @@ router.post('/auth/refresh', asyncHandler(authController.refresh));
 router.post('/auth/logout', asyncHandler(authController.logout));
 router.post('/auth/forgot-password', validate(forgotPasswordSchema), asyncHandler(authController.forgotPassword));
 router.post('/auth/reset-password', validate(resetPasswordSchema), asyncHandler(authController.resetPassword));
+
+// Phase 4 email-change verification: no authenticate() -- the token itself
+// is the credential (see auth.service.ts's verifyEmailChange) -- so this
+// is rate-limited by IP rather than by user, matching /auth/refresh's
+// existing IP-only shape below rather than the per-user pattern the
+// authenticated email-change endpoints (users.routes.ts) use.
+const emailChangeVerifyRateLimiter = getRateLimitProvider().createEmailChangeVerifyLimiter();
+router.post(
+  '/auth/verify-email-change',
+  emailChangeVerifyRateLimiter,
+  validate(verifyEmailChangeSchema),
+  asyncHandler(authController.verifyEmailChange)
+);
 
 // Everything else is now a module router. Each one owns the exact same
 // paths the old monolithic router defined -- see each module's *.routes.ts

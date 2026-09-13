@@ -6,7 +6,7 @@ import { validate } from '../../common/middleware/validate';
 import { getRateLimitProvider } from '../../common/rateLimit/rateLimitProviderFactory';
 import { BadRequestError } from '../../common/errors';
 import * as usersController from './users.controller';
-import { updateProfileSchema, changePasswordSchema } from './users.dto';
+import { updateProfileSchema, changePasswordSchema, requestEmailChangeSchema } from './users.dto';
 
 const router = Router();
 
@@ -44,6 +44,8 @@ const handleAvatarFile = (req: Request, res: Response, next: NextFunction) => {
 // every user behind a shared IP into one bucket instead of one each.
 const avatarRateLimiter = getRateLimitProvider().createAvatarLimiter();
 const passwordChangeRateLimiter = getRateLimitProvider().createPasswordChangeLimiter();
+const emailChangeRateLimiter = getRateLimitProvider().createEmailChangeLimiter();
+const emailChangeResendRateLimiter = getRateLimitProvider().createEmailChangeResendLimiter();
 
 // GET /api/users — list all users in the caller's teams
 router.get('/', authenticate, asyncHandler(usersController.getAllUsers));
@@ -56,6 +58,23 @@ router.put('/me/profile', authenticate, validate(updateProfileSchema), asyncHand
 
 // POST /api/users/me/change-password — change the authenticated user's password
 router.post('/me/change-password', authenticate, passwordChangeRateLimiter, validate(changePasswordSchema), asyncHandler(usersController.changePassword));
+
+// POST /api/users/me/request-email-change — request an email change (verification sent to new_email)
+router.post(
+  '/me/request-email-change',
+  authenticate,
+  emailChangeRateLimiter,
+  validate(requestEmailChangeSchema),
+  asyncHandler(usersController.requestEmailChange)
+);
+
+// POST /api/users/me/resend-email-change-verification — resend the verification link for an existing pending email change
+router.post(
+  '/me/resend-email-change-verification',
+  authenticate,
+  emailChangeResendRateLimiter,
+  asyncHandler(usersController.resendEmailChangeVerification)
+);
 
 // POST /api/users/me/avatar — upload/replace user's avatar
 router.post('/me/avatar', authenticate, avatarRateLimiter, handleAvatarFile, asyncHandler(usersController.uploadAvatar));

@@ -31,10 +31,10 @@ const UNSAFE_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
 //     request authenticated this way must also present a matching
 //     X-CSRF-Token header (double-submit pattern) or it's rejected.
 // Milestone 38: wrapped in asyncHandler since this now does a DB lookup
-// (getPasswordChangedAt) -- an async middleware whose promise rejects is
-// NOT automatically caught by Express 4.x, unlike a synchronous throw;
-// asyncHandler's existing .catch(next) is the same fix every async route
-// handler in this app already relies on.
+// (getSessionInvalidationFields) -- an async middleware whose promise
+// rejects is NOT automatically caught by Express 4.x, unlike a synchronous
+// throw; asyncHandler's existing .catch(next) is the same fix every async
+// route handler in this app already relies on.
 export const authenticate = asyncHandler<AuthRequest>(async (req: AuthRequest, res: Response, next: NextFunction) => {
   const headerToken = req.headers.authorization?.split(' ')[1];
   const cookieToken = (req as any).cookies?.access_token;
@@ -89,13 +89,39 @@ export const authenticate = asyncHandler<AuthRequest>(async (req: AuthRequest, r
   // already in circulation the moment this deploys (they aged out
   // within LEGACY_BEARER_TOKEN_TTL_SECONDS / ACCESS_TOKEN_TTL_SECONDS
   // of that deploy either way).
-  const passwordChangedAt = await authRepository.getPasswordChangedAt(decoded.userId);
+  const invalidationFields = await authRepository.getSessionInvalidationFields(decoded.userId);
+  const passwordChangedAt = invalidationFields?.password_changed_at ?? null;
   if (decoded.pwv !== undefined) {
     const currentPwv = passwordChangedAt ? passwordChangedAt.getTime() : null;
     if (decoded.pwv !== currentPwv) {
       return res.status(401).json({ error: 'Invalid token' });
     }
   } else if (passwordChangedAt && decoded.iat && decoded.iat * 1000 < passwordChangedAt.getTime()) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+
+  // Phase 4 email-change: identical mechanism and identical exact-match
+  // rationale as pwv above, applied to email_changed_at instead of
+  // password_changed_at (set by authRepository.consumeEmailChangeToken).
+  // Unlike pwv, there is no pre-existing population of tokens signed
+  // under an iat-based email comparison to preserve compatibility with --
+  // this check did not exist before Phase 4 -- but the same undefined-ecv
+  // fallback is kept anyway for the one real edge case it still covers: a
+  // token signed by a login that happened before this deploy (ecv
+  // undefined) whose account then changes its email after the deploy. Since
+  // that token's iat necessarily predates any email_changed_at Phase 4
+  // could possibly have just set, the fallback's iat comparison is not
+  // vulnerable to the same-second ambiguity pwv's history warns about here
+  // (that ambiguity is specific to a change and a login racing within the
+  // same second, not to a session that already existed before the change
+  // was even possible).
+  const emailChangedAt = invalidationFields?.email_changed_at ?? null;
+  if (decoded.ecv !== undefined) {
+    const currentEcv = emailChangedAt ? emailChangedAt.getTime() : null;
+    if (decoded.ecv !== currentEcv) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+  } else if (emailChangedAt && decoded.iat && decoded.iat * 1000 < emailChangedAt.getTime()) {
     return res.status(401).json({ error: 'Invalid token' });
   }
 

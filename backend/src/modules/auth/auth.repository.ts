@@ -8,6 +8,17 @@ const AUTH_UPDATABLE_COLUMNS = [
   'password_reset_token_hash',
   'password_reset_expires',
   'password_changed_at',
+  // Phase 4 email-change verification -- request/resend both go through
+  // this same generic updateUser() (matching how every other single-slot
+  // token pair above is written), not a dedicated method, since neither
+  // sets more than these three columns at once. The actual email swap
+  // (email = pending_email) is deliberately NOT reachable through this
+  // allowlisted generic path -- see consumeEmailChangeToken() below,
+  // which is the one and only place `email` itself is ever written by
+  // this repository outside of createUser.
+  'pending_email',
+  'email_change_token_hash',
+  'email_change_expires',
 ];
 
 export class AuthRepository {
@@ -86,15 +97,72 @@ export class AuthRepository {
     return queryOne<any>(text, [tokenHash]);
   }
 
-  // Milestone 38: the one extra query middleware/auth.ts's authenticate()
-  // now runs on every authenticated request -- deliberately narrow (one
-  // column, primary-key lookup) rather than fetching the whole user row.
-  async getPasswordChangedAt(userId: string): Promise<Date | null> {
-    const result = await queryOne<{ password_changed_at: Date | null }>(
-      'SELECT password_changed_at FROM users WHERE user_id = $1',
+  // Milestone 38, extended by Phase 4 email-change: the one extra query
+  // middleware/auth.ts's authenticate() now runs on every authenticated
+  // request -- deliberately narrow (two columns, primary-key lookup)
+  // rather than fetching the whole user row. Combined into one query
+  // (rather than a second getEmailChangedAt-style method) so email-change
+  // invalidation doesn't double this already-hot-path query.
+  async getSessionInvalidationFields(userId: string): Promise<{ password_changed_at: Date | null; email_changed_at: Date | null } | null> {
+    return queryOne<{ password_changed_at: Date | null; email_changed_at: Date | null }>(
+      'SELECT password_changed_at, email_changed_at FROM users WHERE user_id = $1',
       [userId]
     );
-    return result?.password_changed_at ?? null;
+  }
+
+  // Looks a user up by the HASH of their raw email-change verification
+  // token, matching getUserByVerificationTokenHash/
+  // getUserByPasswordResetTokenHash's exact pattern above. Only used to
+  // check "is this token currently valid" (e.g. before generating a fresh
+  // one on resend) -- actually consuming a valid token goes through
+  // consumeEmailChangeToken() below, not this method plus a separate
+  // UPDATE, precisely to avoid a lookup-then-write race.
+  async getUserByEmailChangeTokenHash(tokenHash: string) {
+    const text = `
+      SELECT * FROM users
+      WHERE email_change_token_hash = $1
+        AND email_change_expires > CURRENT_TIMESTAMP
+    `;
+    return queryOne<any>(text, [tokenHash]);
+  }
+
+  // Atomically finds-and-consumes a still-valid email-change token in one
+  // UPDATE: Postgres row-level locking means at most one concurrent call
+  // with the same token hash can ever match and clear it, so a replayed or
+  // double-submitted verify request safely resolves to "second one finds
+  // nothing" rather than a race between a separate SELECT and UPDATE. A
+  // null return covers invalid, expired, and already-consumed alike --
+  // deliberately indistinguishable to the caller (see auth.service.ts's
+  // verifyEmailChange), matching this codebase's existing generic-message
+  // convention for every other token-verification failure. Revoking every
+  // refresh token in the same transaction mirrors
+  // resetPasswordAndRevokeSessions's exact rationale: an email change is at
+  // least as sensitive as a password change, and must not leave a
+  // session that predates it (possibly the very session that completed an
+  // account takeover) still valid afterward.
+  async consumeEmailChangeToken(tokenHash: string) {
+    return withTransaction(async (client) => {
+      const result = await client.query(
+        `UPDATE users
+         SET email = pending_email,
+             pending_email = NULL,
+             email_change_token_hash = NULL,
+             email_change_expires = NULL,
+             email_changed_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE email_change_token_hash = $1
+           AND email_change_expires > CURRENT_TIMESTAMP
+         RETURNING *`,
+        [tokenHash]
+      );
+      const user = result.rows[0] || null;
+      if (user) {
+        await client.query(`UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND revoked_at IS NULL`, [
+          user.user_id,
+        ]);
+      }
+      return user;
+    });
   }
 
   // Milestone 38: the password update and the refresh-token revocation

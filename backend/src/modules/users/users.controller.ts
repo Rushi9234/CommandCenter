@@ -61,6 +61,21 @@ export const changePassword = async (req: AuthRequest, res: Response) => {
   res.status(204).send();
 };
 
+// Phase 4 email-change request. current_password gates this (see
+// users.service.ts's requestEmailChange) -- no session token is ever
+// returned here, and pending_email is the only email-change-related field
+// safe to echo back (never the raw token).
+export const requestEmailChange = async (req: AuthRequest, res: Response) => {
+  const { new_email, current_password } = req.body;
+  const result = await usersService.requestEmailChange(req.user!.userId, new_email, current_password);
+  ok(res, result);
+};
+
+export const resendEmailChangeVerification = async (req: AuthRequest, res: Response) => {
+  const result = await usersService.resendEmailChangeVerification(req.user!.userId);
+  ok(res, result);
+};
+
 export const uploadAvatar = async (req: AuthRequest, res: Response) => {
   if (!req.file) {
     throw new BadRequestError('No file uploaded');

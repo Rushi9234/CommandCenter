@@ -48,4 +48,29 @@ export interface RateLimitProvider {
   // enough for legitimate replacements while preventing abuse/spam. Applied
   // to POST /api/users/me/avatar.
   createAvatarLimiter(): RequestHandler;
+
+  // Phase 4 email-change request: keyed by authenticated user ID (not IP),
+  // same rationale and threshold as createPasswordChangeLimiter -- an
+  // email change is a comparably sensitive account-mutation action.
+  // Applied to POST /api/users/me/request-email-change, mounted AFTER
+  // authenticate (BUG-003's lesson: req.user must already exist before
+  // this middleware runs, or every user behind a shared IP silently
+  // shares one bucket instead of getting their own).
+  createEmailChangeLimiter(): RequestHandler;
+
+  // Phase 4 email-change resend: a separate, slightly more generous
+  // per-user limiter than the request limiter above -- a user who
+  // mistyped the new address and needs the link resent to the SAME
+  // pending target shouldn't burn their request-change budget doing so.
+  // Applied to POST /api/users/me/resend-email-change-verification,
+  // mounted after authenticate for the same reason as above.
+  createEmailChangeResendLimiter(): RequestHandler;
+
+  // Phase 4 email-change verification: IP-only, matching
+  // createRefreshLimiter's exact rationale -- this endpoint is reached
+  // with a token in hand, not by an authenticated user retrying, and may
+  // be opened on a different device/session than the one that requested
+  // the change (req.user does not exist here at all). Applied to
+  // POST /api/auth/verify-email-change, which requires no authentication.
+  createEmailChangeVerifyLimiter(): RequestHandler;
 }

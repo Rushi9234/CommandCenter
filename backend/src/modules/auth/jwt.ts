@@ -29,6 +29,15 @@ export interface AccessTokenPayload {
   // all force-logged-out by this deploy -- see middleware/auth.ts's
   // fallback for that legacy case.
   pwv?: number | null;
+  // Email-version fingerprint, Phase 4: the signing user's
+  // email_changed_at (epoch ms), or null if they've never changed it.
+  // Same exact-equality mechanism and rationale as pwv above, checked
+  // against email_changed_at instead of password_changed_at -- an email
+  // change is at least as sensitive as a password change (it's the
+  // account's recovery/login identifier) and gets the identical
+  // session-invalidation treatment, reusing the same fix rather than a
+  // second, subtly different one.
+  ecv?: number | null;
   // Added by jsonwebtoken itself at sign time -- not something callers set.
   iat?: number;
   exp?: number;

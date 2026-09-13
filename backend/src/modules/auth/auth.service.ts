@@ -12,6 +12,7 @@ import {
 import { BadRequestError, UnauthorizedError } from '../../common/errors';
 import { env } from '../../config/env';
 import { getLogger } from '../../common/logging/loggerFactory';
+import { notificationsService } from '../notifications/notifications.service';
 
 const BCRYPT_COST = 12; // raised from 10 -- existing hashes still verify fine, bcrypt embeds its own cost
 const VERIFICATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -139,8 +140,9 @@ export class AuthService {
   // cookies (tracked in the rebuild blueprint, not this milestone).
   private async issueSession(user: any) {
     const pwv = user.password_changed_at ? new Date(user.password_changed_at).getTime() : null;
-    const legacyToken = signAccessToken({ userId: user.user_id, role: user.role, pwv }, LEGACY_BEARER_TOKEN_TTL_SECONDS);
-    const accessToken = signAccessToken({ userId: user.user_id, role: user.role, pwv }, ACCESS_TOKEN_TTL_SECONDS);
+    const ecv = user.email_changed_at ? new Date(user.email_changed_at).getTime() : null;
+    const legacyToken = signAccessToken({ userId: user.user_id, role: user.role, pwv, ecv }, LEGACY_BEARER_TOKEN_TTL_SECONDS);
+    const accessToken = signAccessToken({ userId: user.user_id, role: user.role, pwv, ecv }, ACCESS_TOKEN_TTL_SECONDS);
 
     const rawRefreshToken = generateOpaqueToken();
     const refreshTokenHash = hashToken(rawRefreshToken);
@@ -183,7 +185,8 @@ export class AuthService {
     await authRepository.revokeRefreshToken(stored.token_id);
 
     const pwv = user.password_changed_at ? new Date(user.password_changed_at).getTime() : null;
-    const accessToken = signAccessToken({ userId: user.user_id, role: user.role, pwv }, ACCESS_TOKEN_TTL_SECONDS);
+    const ecv = user.email_changed_at ? new Date(user.email_changed_at).getTime() : null;
+    const accessToken = signAccessToken({ userId: user.user_id, role: user.role, pwv, ecv }, ACCESS_TOKEN_TTL_SECONDS);
     const newRawRefreshToken = generateOpaqueToken();
     const newExpiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
     await authRepository.createRefreshToken(user.user_id, hashToken(newRawRefreshToken), newExpiresAt);
@@ -270,6 +273,41 @@ export class AuthService {
 
     const passwordHash = await bcrypt.hash(newPassword, BCRYPT_COST);
     await authRepository.resetPasswordAndRevokeSessions(user.user_id, passwordHash, new Date());
+  }
+
+  // Phase 4 email-change, step 2 of 2 (see users.service.ts's
+  // requestEmailChange for step 1). Deliberately unauthenticated -- the
+  // token itself is the credential, matching verifyEmail/resetPassword's
+  // existing shape, since this may be opened on a different device/session
+  // than the one that requested the change (audit §2.2 step 6). One
+  // generic message covers invalid, expired, AND already-consumed alike
+  // (matching verifyEmail's exact wording and this codebase's established
+  // convention) -- consumeEmailChangeToken's single atomic UPDATE can't
+  // distinguish those three cases at the database level, and there's no
+  // security or UX reason to try. No session is issued here (contrast
+  // with verifyEmail, an intentionally different UX moment) -- every
+  // refresh token was just revoked in the same transaction, so the
+  // correct next step for the caller is to log in again with the new
+  // email, not to be silently handed a fresh one.
+  async verifyEmailChange(rawToken: string) {
+    const user = await authRepository.consumeEmailChangeToken(hashToken(rawToken));
+    if (!user) {
+      throw new BadRequestError('Invalid or expired verification token');
+    }
+
+    // In-app security notice to the account -- single call, matching the
+    // password-change precedent's exact shape (one notifyUser call, no
+    // separate email side-channel). Awaited for the same reason as every
+    // other notifyUser call site added since Milestone 38's deadlock fix.
+    await notificationsService.notifyUser({
+      recipientUserId: user.user_id,
+      category: 'email_change_completed',
+      preferenceGroup: 'email_change',
+      title: 'Email Changed',
+      message: `Your account email was changed to ${user.email}. If you did not make this change, please contact support immediately.`,
+    });
+
+    return { email: user.email };
   }
 }
 

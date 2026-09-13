@@ -20,5 +20,18 @@ export const changePasswordSchema = z.object({
   new_password: requiredString('New password must be at least 8 characters', 8),
 });
 
+// Phase 4 email-change request. Only format is validated here (a
+// malformed address is safe to reject plainly -- it's a client input
+// problem, not an account-existence oracle). "Already registered to
+// someone else" and "identical to current email" are deliberately NOT
+// distinguished from each other by this schema or by users.service.ts's
+// requestEmailChange -- both collapse into the same generic error there,
+// per the Phase 4 audit's enumeration-resistance recommendation (§2.7).
+export const requestEmailChangeSchema = z.object({
+  new_email: z.string().email('Invalid email address').max(255),
+  current_password: requiredString('Current password required'),
+});
+
 export type UpdateProfileRequest = z.infer<typeof updateProfileSchema>;
 export type ChangePasswordRequest = z.infer<typeof changePasswordSchema>;
+export type RequestEmailChangeRequest = z.infer<typeof requestEmailChangeSchema>;

@@ -15,6 +15,12 @@ export const NOTIFICATION_PREFERENCE_KEYS = [
   'task_assignment',
   'blocker',
   'password_change',
+  // Phase 4: covers both 'email_change_requested' (sent to the old
+  // account at request time) and 'email_change_completed' (sent on
+  // successful verification) -- one preference group, like
+  // 'password_change' covers a single security-sensitive event family
+  // rather than a granular per-category toggle.
+  'email_change',
 ] as const;
 
 // Every key optional/partial -- a caller only sends the categories they

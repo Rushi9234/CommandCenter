@@ -63,6 +63,28 @@ export const sendVerificationEmail = async (email: string, token: string, fullNa
   });
 };
 
+// Phase 4 email-change verification. Sent to the NEW address only -- see
+// modules/users/users.service.ts's requestEmailChange for why: possession
+// of the new address must be proven before it becomes authoritative, and
+// the raw token itself (not just a notification) is what proves it. The
+// current/old address gets a separate, token-free security notice via the
+// existing in-app notification system instead (notifications.service.ts),
+// not a second email from this file -- matching the established
+// password-change precedent, which also only ever notifies in-app.
+export const sendEmailChangeVerification = async (newEmail: string, token: string, fullName: string) => {
+  const verificationUrl = `${getBaseUrl()}/verify-email-change?token=${token}`;
+
+  return sendSafely({
+    to: newEmail,
+    subject: 'Confirm your new CommandCenter email address',
+    body: `Hi ${fullName}, confirm your new email address by visiting: ${verificationUrl} (expires in 1 hour)`,
+    templateData: { fullName, verificationUrl },
+    // Same Milestone 11 rule as every other credential-bearing link in
+    // this file -- the raw token/URL never goes into `metadata`.
+    metadata: { event: 'email.email_change_verification_sent', to: newEmail, name: fullName },
+  });
+};
+
 export const sendPasswordResetEmail = async (email: string, token: string, fullName: string) => {
   const resetUrl = `${getBaseUrl()}/reset-password?token=${token}`;
 
