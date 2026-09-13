@@ -138,8 +138,9 @@ export class AuthService {
   // session; the legacy token is retired once the frontend migrates to
   // cookies (tracked in the rebuild blueprint, not this milestone).
   private async issueSession(user: any) {
-    const legacyToken = signAccessToken({ userId: user.user_id, role: user.role }, LEGACY_BEARER_TOKEN_TTL_SECONDS);
-    const accessToken = signAccessToken({ userId: user.user_id, role: user.role }, ACCESS_TOKEN_TTL_SECONDS);
+    const pwv = user.password_changed_at ? new Date(user.password_changed_at).getTime() : null;
+    const legacyToken = signAccessToken({ userId: user.user_id, role: user.role, pwv }, LEGACY_BEARER_TOKEN_TTL_SECONDS);
+    const accessToken = signAccessToken({ userId: user.user_id, role: user.role, pwv }, ACCESS_TOKEN_TTL_SECONDS);
 
     const rawRefreshToken = generateOpaqueToken();
     const refreshTokenHash = hashToken(rawRefreshToken);
@@ -181,7 +182,8 @@ export class AuthService {
     // usable once before it stops working for either party.
     await authRepository.revokeRefreshToken(stored.token_id);
 
-    const accessToken = signAccessToken({ userId: user.user_id, role: user.role }, ACCESS_TOKEN_TTL_SECONDS);
+    const pwv = user.password_changed_at ? new Date(user.password_changed_at).getTime() : null;
+    const accessToken = signAccessToken({ userId: user.user_id, role: user.role, pwv }, ACCESS_TOKEN_TTL_SECONDS);
     const newRawRefreshToken = generateOpaqueToken();
     const newExpiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
     await authRepository.createRefreshToken(user.user_id, hashToken(newRawRefreshToken), newExpiresAt);

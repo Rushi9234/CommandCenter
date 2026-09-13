@@ -13,10 +13,23 @@ import { env } from '../../config/env';
 export interface AccessTokenPayload {
   userId: string;
   role: string;
+  // Password-version fingerprint: the signing user's password_changed_at
+  // (epoch ms), or null if they've never reset it. middleware/auth.ts
+  // rejects a token whose pwv doesn't exactly match the user's CURRENT
+  // password_changed_at -- an exact-equality check, not a timestamp
+  // comparison. iat only has whole-second resolution (jsonwebtoken floors
+  // Date.now()/1000 at sign time), which was tried first and is
+  // fundamentally unable to tell a fresh post-reset login from a stale
+  // pre-reset token whenever both land in the same wall-clock second
+  // (routine on a fast local DB, e.g. CI's Postgres container) --
+  // whichever way that comparison rounds, one of the two genuine cases
+  // (reject the old session / accept the new one) breaks. Embedding the
+  // exact value sidesteps rounding entirely. Optional (absent on tokens
+  // signed before this claim existed) so already-issued sessions aren't
+  // all force-logged-out by this deploy -- see middleware/auth.ts's
+  // fallback for that legacy case.
+  pwv?: number | null;
   // Added by jsonwebtoken itself at sign time -- not something callers set.
-  // Milestone 38: middleware/auth.ts compares this against the user's
-  // password_changed_at to reject a token issued before their most recent
-  // password reset.
   iat?: number;
   exp?: number;
 }

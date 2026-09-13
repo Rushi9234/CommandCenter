@@ -61,8 +61,41 @@ export const authenticate = asyncHandler<AuthRequest>(async (req: AuthRequest, r
   // password_changed_at starts NULL and is only ever set by
   // resetPassword(), so this never rejects a token for an account that
   // has never reset its password -- no forced logout on migration.
+  //
+  // Originally implemented as `decoded.iat * 1000 < passwordChangedAt`.
+  // That's provably unfixable by adjusting the comparison alone: `iat` is
+  // whole seconds (jsonwebtoken floors Date.now()/1000 at sign time), so
+  // whenever a password change and the login that follows it land in the
+  // same wall-clock second -- routine when the DB is fast (a local
+  // Postgres, e.g. CI's service container), rare over a higher-latency
+  // one, which is why this only ever surfaced as a CI-only flake --
+  // both the old (correctly-rejected) token and the brand new
+  // (wrongly-rejected) one round to the identical iat second. No
+  // threshold placed at second granularity can separate them; every
+  // fix attempted here either let the old token back in or locked the
+  // new one out.
+  //
+  // pwv (jwt.ts) sidesteps rounding entirely: it's the exact
+  // password_changed_at the token was signed under, checked for exact
+  // equality against the CURRENT value rather than compared as a
+  // timestamp. A token from before the account's most recent change
+  // always carries a different (or null) pwv than the current one and
+  // is rejected; a token issued by the login that immediately follows a
+  // change always carries that change's own value and matches, no
+  // matter how little wall-clock time separates the two requests.
+  // Tokens signed before this claim existed have `pwv === undefined`;
+  // falling back to the old iat comparison for exactly those preserves
+  // their prior behavior instead of force-logging-out every session
+  // already in circulation the moment this deploys (they aged out
+  // within LEGACY_BEARER_TOKEN_TTL_SECONDS / ACCESS_TOKEN_TTL_SECONDS
+  // of that deploy either way).
   const passwordChangedAt = await authRepository.getPasswordChangedAt(decoded.userId);
-  if (passwordChangedAt && decoded.iat && decoded.iat * 1000 < passwordChangedAt.getTime()) {
+  if (decoded.pwv !== undefined) {
+    const currentPwv = passwordChangedAt ? passwordChangedAt.getTime() : null;
+    if (decoded.pwv !== currentPwv) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+  } else if (passwordChangedAt && decoded.iat && decoded.iat * 1000 < passwordChangedAt.getTime()) {
     return res.status(401).json({ error: 'Invalid token' });
   }
 
