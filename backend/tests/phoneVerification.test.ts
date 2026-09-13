@@ -53,7 +53,7 @@ describe('Phase 4 Phone Verification Backend', () => {
 
       const res = await requestPhoneVerification(testToken, VALID_PHONE).expect(200);
 
-      expect(res.body).toEqual({ success: true, data: { phone_number: EXPECTED_E164 } });
+      expect(res.body).toEqual({ success: true, data: { phone_number: EXPECTED_E164, phone_verified: false } });
     });
 
     it('rejects a malformed/unparseable phone number', async () => {
@@ -414,6 +414,91 @@ describe('Phase 4 Phone Verification Backend', () => {
       const res = await request(app).get('/api/users/me').set(authHeader(testToken)).expect(200);
       expect(res.body.data.phone_number).toBe(EXPECTED_E164);
       expect(res.body.data.phone_verified).toBe(true);
+    });
+  });
+
+  describe('state consistency: changing an already-verified number', () => {
+    const OTHER_PHONE = '9123456789';
+    const OTHER_EXPECTED_E164 = '+919123456789';
+
+    // Regression test for a real state-consistency bug: setPendingPhoneOtp
+    // previously left phone_verified untouched, so an already-verified
+    // account requesting a DIFFERENT number kept phone_verified = true
+    // (referring to the OLD number) while phone_number already pointed at
+    // the new, unproven one -- an internally inconsistent state GET /me
+    // would report verbatim (including across a page reload) until the
+    // new number was verified. Fixed by having setPendingPhoneOtp always
+    // set phone_verified = false alongside phone_number.
+    it('A-H: verifying one number, then requesting a different number, leaves the new number unverified until its own OTP is verified', async () => {
+      // A. Create user -- done in beforeEach (testToken/testUserId).
+      // B. Verify phone successfully.
+      const firstOtp = captureOtp();
+      await requestPhoneVerification(testToken, VALID_PHONE).expect(200);
+      await verifyPhone(testToken, firstOtp.getOtp()).expect(200);
+
+      // C. Confirm phone_verified = true.
+      const afterFirstVerify = await request(app).get('/api/users/me').set(authHeader(testToken)).expect(200);
+      expect(afterFirstVerify.body.data.phone_number).toBe(EXPECTED_E164);
+      expect(afterFirstVerify.body.data.phone_verified).toBe(true);
+
+      // D. Request verification for a DIFFERENT phone number.
+      const secondOtp = captureOtp();
+      const requestRes = await requestPhoneVerification(testToken, OTHER_PHONE).expect(200);
+
+      // E. Confirm BEFORE OTP verification: phone_number = new number,
+      // phone_verified = false -- asserted directly on the
+      // request-phone-verification response itself, not just the DB, so
+      // the frontend's own consumption of this exact response is covered.
+      expect(requestRes.body.data).toEqual({ phone_number: OTHER_EXPECTED_E164, phone_verified: false });
+
+      const dbRow = await testPool.query('SELECT phone_number, phone_verified FROM users WHERE user_id = $1', [testUserId]);
+      expect(dbRow.rows[0].phone_number).toBe(OTHER_EXPECTED_E164);
+      expect(dbRow.rows[0].phone_verified).toBe(false);
+
+      // F. Confirm GET /api/users/me reports the new number as
+      // unverified/pending -- this is also exactly what a page reload
+      // between D and G would see; the backend is the single source of
+      // truth either way, not a client-side assumption.
+      const midFlowProfile = await request(app).get('/api/users/me').set(authHeader(testToken)).expect(200);
+      expect(midFlowProfile.body.data.phone_number).toBe(OTHER_EXPECTED_E164);
+      expect(midFlowProfile.body.data.phone_verified).toBe(false);
+
+      // G. Verify the new OTP.
+      await verifyPhone(testToken, secondOtp.getOtp()).expect(200);
+
+      // H. Confirm phone_verified = true (for the NEW number).
+      const finalProfile = await request(app).get('/api/users/me').set(authHeader(testToken)).expect(200);
+      expect(finalProfile.body.data.phone_number).toBe(OTHER_EXPECTED_E164);
+      expect(finalProfile.body.data.phone_verified).toBe(true);
+    });
+
+    it('does not affect login, password, email, or any other account behavior -- phone remains a verified profile attribute only', async () => {
+      const otp = captureOtp();
+      await requestPhoneVerification(testToken, VALID_PHONE).expect(200);
+      await verifyPhone(testToken, otp.getOtp()).expect(200);
+
+      // Login continues to work by email/password exactly as before --
+      // no phone-based login/recovery/2FA path was introduced by this fix.
+      await request(app).get('/api/users/me').set(authHeader(testToken)).expect(200);
+    });
+
+    it('rejects resend against an already-verified number instead of silently un-verifying it', async () => {
+      // Closes the one gap the phone_verified-reset fix itself could have
+      // introduced: without this guard, calling resend on an
+      // ALREADY-verified number (unreachable through the UI, which never
+      // shows "resend" once verified, but not otherwise blocked at the API
+      // level) would go through the same setPendingPhoneOtp path and
+      // incorrectly flip phone_verified back to false for a number the
+      // caller never asked to change.
+      const otp = captureOtp();
+      await requestPhoneVerification(testToken, VALID_PHONE).expect(200);
+      await verifyPhone(testToken, otp.getOtp()).expect(200);
+
+      const res = await resendPhoneVerification(testToken).expect(400);
+      expect(res.body.error).toBe('No pending phone verification to resend');
+
+      const row = await testPool.query('SELECT phone_verified FROM users WHERE user_id = $1', [testUserId]);
+      expect(row.rows[0].phone_verified).toBe(true);
     });
   });
 

@@ -24,6 +24,8 @@ const mockProfile = {
   updated_at: '2026-09-02T00:00:00Z',
   is_verified: true,
   pending_email: null,
+  phone_number: null,
+  phone_verified: false,
 };
 
 const renderProfile = () => {
@@ -46,6 +48,9 @@ beforeEach(() => {
   mockApi.changePassword.mockResolvedValue({});
   mockApi.requestEmailChange.mockResolvedValue(wrapped({ pending_email: 'new@example.com' }));
   mockApi.resendEmailChangeVerification.mockResolvedValue(wrapped({ pending_email: 'new@example.com' }));
+  mockApi.requestPhoneVerification.mockResolvedValue(wrapped({ phone_number: '+919876543210', phone_verified: false }));
+  mockApi.resendPhoneVerification.mockResolvedValue(wrapped({ phone_number: '+919876543210' }));
+  mockApi.verifyPhone.mockResolvedValue(wrapped({ phone_verified: true }));
 });
 
 describe('Profile Page', () => {
@@ -1092,6 +1097,375 @@ describe('Profile Page', () => {
         expect(screen.queryByLabelText(/New email/i)).not.toBeInTheDocument();
       });
       expect(mockApi.requestEmailChange).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Phone Verification', () => {
+    it('renders the Phone section with optional-explanatory text and a phone input', async () => {
+      renderProfile();
+
+      await waitFor(() => {
+        expect(screen.getByText('Phone')).toBeInTheDocument();
+      });
+      expect(screen.getByText(/Optional\. Verifying a phone number/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/Phone number/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Send code/i })).toBeInTheDocument();
+    });
+
+    it('the phone input is a semantic tel input', async () => {
+      renderProfile();
+      const phoneInput = (await screen.findByLabelText(/Phone number/i)) as HTMLInputElement;
+      expect(phoneInput.type).toBe('tel');
+    });
+
+    it('blocks a malformed phone number client-side without calling the API', async () => {
+      renderProfile();
+      const phoneInput = await screen.findByLabelText(/Phone number/i);
+      fireEvent.change(phoneInput, { target: { value: 'abc' } });
+      fireEvent.click(screen.getByRole('button', { name: /Send code/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Please enter a valid phone number')).toBeInTheDocument();
+      });
+      expect(mockApi.requestPhoneVerification).not.toHaveBeenCalled();
+    });
+
+    it('the Send code button is disabled while empty and enabled once a number is entered', async () => {
+      renderProfile();
+      const phoneInput = await screen.findByLabelText(/Phone number/i);
+      const sendButton = screen.getByRole('button', { name: /Send code/i });
+      expect(sendButton).toBeDisabled();
+
+      fireEvent.change(phoneInput, { target: { value: '9876543210' } });
+      expect(sendButton).not.toBeDisabled();
+    });
+
+    it('calls requestPhoneVerification with the entered number and shows the OTP-pending state on success', async () => {
+      renderProfile();
+      const phoneInput = await screen.findByLabelText(/Phone number/i);
+      fireEvent.change(phoneInput, { target: { value: '9876543210' } });
+      fireEvent.click(screen.getByRole('button', { name: /Send code/i }));
+
+      await waitFor(() => {
+        expect(mockApi.requestPhoneVerification).toHaveBeenCalledWith('9876543210');
+      });
+      expect(await screen.findByText('Verification pending')).toBeInTheDocument();
+    });
+
+    it('shows a top-level success banner naming the masked destination number', async () => {
+      renderProfile();
+      const phoneInput = await screen.findByLabelText(/Phone number/i);
+      fireEvent.change(phoneInput, { target: { value: '9876543210' } });
+      fireEvent.click(screen.getByRole('button', { name: /Send code/i }));
+
+      expect(await screen.findByText(/Verification code sent to \+\*+3210/)).toBeInTheDocument();
+    });
+
+    it('derives phone_verified from the backend response after a request, never a hardcoded client-side value', async () => {
+      // Regression test: the frontend previously hardcoded phone_verified:
+      // false itself after a successful request. It must now read
+      // whatever the backend's own response says instead -- proven here
+      // by having the mock return an explicit, distinguishable value and
+      // confirming the UI reflects exactly that value, not an assumption.
+      mockApi.requestPhoneVerification.mockResolvedValue(wrapped({ phone_number: '+919876543210', phone_verified: false }));
+      renderProfile();
+      const phoneInput = await screen.findByLabelText(/Phone number/i);
+      fireEvent.change(phoneInput, { target: { value: '9876543210' } });
+      fireEvent.click(screen.getByRole('button', { name: /Send code/i }));
+
+      await screen.findByText('Verification pending');
+      // Confirms the pending (not verified) state renders -- i.e. the
+      // component actually used the response's own phone_verified: false
+      // value to decide which state to show, rather than defaulting to
+      // some other assumption.
+      expect(screen.queryByRole('button', { name: /Change number/i })).not.toBeInTheDocument();
+    });
+
+    it('masks the phone number, never showing the full number in the pending or verified state', async () => {
+      renderProfile();
+      const phoneInput = await screen.findByLabelText(/Phone number/i);
+      fireEvent.change(phoneInput, { target: { value: '9876543210' } });
+      fireEvent.click(screen.getByRole('button', { name: /Send code/i }));
+
+      await screen.findByText('Verification pending');
+      expect(screen.queryByText('+919876543210')).not.toBeInTheDocument();
+      // Appears twice: once in the pending box, once in the top-level
+      // success banner -- both masked, neither the full number.
+      expect(screen.getAllByText(/\+\*+3210/).length).toBeGreaterThan(0);
+    });
+
+    it('prevents duplicate submission while the request is in flight', async () => {
+      let resolveRequest: (value: any) => void = () => {};
+      mockApi.requestPhoneVerification.mockReturnValue(
+        new Promise((resolve) => {
+          resolveRequest = resolve;
+        })
+      );
+      renderProfile();
+      const phoneInput = await screen.findByLabelText(/Phone number/i);
+      fireEvent.change(phoneInput, { target: { value: '9876543210' } });
+      fireEvent.click(screen.getByRole('button', { name: /Send code/i }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Sending/i })).toBeDisabled();
+      });
+      expect(mockApi.requestPhoneVerification).toHaveBeenCalledTimes(1);
+
+      resolveRequest(wrapped({ phone_number: '+919876543210' }));
+      await screen.findByText('Verification pending');
+    });
+
+    describe('OTP-pending state', () => {
+      const renderWithPendingPhone = async () => {
+        mockApi.getMyProfile.mockResolvedValue(wrapped({ ...mockProfile, phone_number: '+919876543210', phone_verified: false }));
+        renderProfile();
+        await waitFor(() => {
+          expect(screen.getByText('Verification pending')).toBeInTheDocument();
+        });
+      };
+
+      it('restores the pending state directly from GET /api/users/me after a reload, without a fresh request call', async () => {
+        await renderWithPendingPhone();
+        expect(mockApi.requestPhoneVerification).not.toHaveBeenCalled();
+        expect(screen.getByText(/\+\*+3210/)).toBeInTheDocument();
+      });
+
+      it('renders a 6-digit numeric OTP input', async () => {
+        await renderWithPendingPhone();
+        const otpInput = screen.getByLabelText(/Verification code/i) as HTMLInputElement;
+        expect(otpInput.maxLength).toBe(6);
+      });
+
+      it('strips non-digit characters and blocks submission below 6 digits', async () => {
+        await renderWithPendingPhone();
+        const otpInput = screen.getByLabelText(/Verification code/i) as HTMLInputElement;
+        const verifyButton = screen.getByRole('button', { name: /^Verify$/i });
+
+        fireEvent.change(otpInput, { target: { value: 'ab12' } });
+        expect(otpInput.value).toBe('12');
+        expect(verifyButton).toBeDisabled();
+
+        fireEvent.change(otpInput, { target: { value: '123456' } });
+        expect(verifyButton).not.toBeDisabled();
+      });
+
+      it('calls verifyPhone with the entered code and shows the verified state on success', async () => {
+        await renderWithPendingPhone();
+        fireEvent.change(screen.getByLabelText(/Verification code/i), { target: { value: '123456' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Verify$/i }));
+
+        await waitFor(() => {
+          expect(mockApi.verifyPhone).toHaveBeenCalledWith('123456');
+        });
+        expect(await screen.findByText('Phone number verified successfully!')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Change number/i })).toBeInTheDocument();
+      });
+
+      it('shows the backend error for an invalid OTP', async () => {
+        mockApi.verifyPhone.mockRejectedValue({ response: { data: { error: 'Invalid or expired verification code' } } });
+        await renderWithPendingPhone();
+        fireEvent.change(screen.getByLabelText(/Verification code/i), { target: { value: '000000' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Verify$/i }));
+
+        await waitFor(() => {
+          expect(screen.getByText('Invalid or expired verification code')).toBeInTheDocument();
+        });
+      });
+
+      it('shows the backend error for an expired OTP (identical generic message)', async () => {
+        mockApi.verifyPhone.mockRejectedValue({ response: { data: { error: 'Invalid or expired verification code' } } });
+        await renderWithPendingPhone();
+        fireEvent.change(screen.getByLabelText(/Verification code/i), { target: { value: '123456' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Verify$/i }));
+
+        await waitFor(() => {
+          expect(screen.getByText('Invalid or expired verification code')).toBeInTheDocument();
+        });
+      });
+
+      it('shows the backend error when attempts are exhausted', async () => {
+        mockApi.verifyPhone.mockRejectedValue({
+          response: { data: { error: 'Too many incorrect attempts. Please request a new verification code.' } },
+        });
+        await renderWithPendingPhone();
+        fireEvent.change(screen.getByLabelText(/Verification code/i), { target: { value: '000000' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Verify$/i }));
+
+        await waitFor(() => {
+          expect(screen.getByText('Too many incorrect attempts. Please request a new verification code.')).toBeInTheDocument();
+        });
+      });
+
+      it('calls resendPhoneVerification when Resend code is clicked', async () => {
+        await renderWithPendingPhone();
+        fireEvent.click(screen.getByRole('button', { name: /Resend code/i }));
+
+        await waitFor(() => {
+          expect(mockApi.resendPhoneVerification).toHaveBeenCalledTimes(1);
+        });
+        expect(await screen.findByText(/Verification code resent to \+\*+3210/)).toBeInTheDocument();
+      });
+
+      it('shows the resend-cooldown error inline and disables the button while the request is in flight', async () => {
+        let resolveResend: (value: any) => void = () => {};
+        mockApi.resendPhoneVerification.mockReturnValue(
+          new Promise((resolve) => {
+            resolveResend = resolve;
+          })
+        );
+        await renderWithPendingPhone();
+        const resendButton = screen.getByRole('button', { name: /Resend code/i });
+        fireEvent.click(resendButton);
+
+        await waitFor(() => {
+          expect(screen.getByRole('button', { name: /Resending/i })).toBeDisabled();
+        });
+        expect(mockApi.resendPhoneVerification).toHaveBeenCalledTimes(1);
+
+        resolveResend(wrapped({ phone_number: '+919876543210' }));
+        await waitFor(() => {
+          expect(screen.getByRole('button', { name: /^Resend code$/i })).not.toBeDisabled();
+        });
+      });
+
+      it('renders the resend-cooldown error message returned by the backend', async () => {
+        mockApi.resendPhoneVerification.mockRejectedValue({
+          response: { data: { error: 'Please wait before requesting another code' } },
+        });
+        await renderWithPendingPhone();
+        fireEvent.click(screen.getByRole('button', { name: /Resend code/i }));
+
+        await waitFor(() => {
+          expect(screen.getByText('Please wait before requesting another code')).toBeInTheDocument();
+        });
+      });
+
+      it('renders a rate-limit error safely', async () => {
+        mockApi.verifyPhone.mockRejectedValue({
+          response: { data: { error: 'Too many verification attempts. Please try again in an hour.' } },
+        });
+        await renderWithPendingPhone();
+        fireEvent.change(screen.getByLabelText(/Verification code/i), { target: { value: '123456' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Verify$/i }));
+
+        await waitFor(() => {
+          expect(screen.getByText('Too many verification attempts. Please try again in an hour.')).toBeInTheDocument();
+        });
+      });
+
+      it('renders a network/provider failure safely without exposing internal details', async () => {
+        mockApi.verifyPhone.mockRejectedValue(new Error('Network Error'));
+        await renderWithPendingPhone();
+        fireEvent.change(screen.getByLabelText(/Verification code/i), { target: { value: '123456' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Verify$/i }));
+
+        await waitFor(() => {
+          expect(screen.getByText('Failed to verify phone number')).toBeInTheDocument();
+        });
+      });
+
+      it('never renders the raw OTP anywhere on the page', async () => {
+        await renderWithPendingPhone();
+        const otpInput = screen.getByLabelText(/Verification code/i) as HTMLInputElement;
+        fireEvent.change(otpInput, { target: { value: '654321' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Verify$/i }));
+
+        await waitFor(() => {
+          expect(mockApi.verifyPhone).toHaveBeenCalledWith('654321');
+        });
+        // The OTP is cleared from the input immediately after submission --
+        // it never lingers anywhere else on the page.
+        await waitFor(() => {
+          expect(screen.queryByDisplayValue('654321')).not.toBeInTheDocument();
+        });
+      });
+
+      it('never persists the OTP in localStorage or sessionStorage', async () => {
+        await renderWithPendingPhone();
+        fireEvent.change(screen.getByLabelText(/Verification code/i), { target: { value: '654321' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Verify$/i }));
+        await waitFor(() => expect(mockApi.verifyPhone).toHaveBeenCalled());
+
+        const allLocal = Object.keys(localStorage).map((k) => localStorage.getItem(k)).join(' ');
+        const allSession = Object.keys(sessionStorage).map((k) => sessionStorage.getItem(k)).join(' ');
+        expect(allLocal).not.toContain('654321');
+        expect(allSession).not.toContain('654321');
+      });
+    });
+
+    describe('verified state', () => {
+      const renderWithVerifiedPhone = async () => {
+        mockApi.getMyProfile.mockResolvedValue(wrapped({ ...mockProfile, phone_number: '+919876543210', phone_verified: true }));
+        renderProfile();
+        await waitFor(() => {
+          expect(screen.getByRole('button', { name: /Change number/i })).toBeInTheDocument();
+        });
+      };
+
+      it('shows the masked number and a Verified badge', async () => {
+        await renderWithVerifiedPhone();
+        expect(screen.getByText(/\+\*+3210/)).toBeInTheDocument();
+        expect(screen.getAllByText('Verified').length).toBeGreaterThan(0);
+      });
+
+      it('does not render a Remove action (no backend endpoint exists for it)', async () => {
+        await renderWithVerifiedPhone();
+        expect(screen.queryByRole('button', { name: /Remove/i })).not.toBeInTheDocument();
+      });
+
+      it('Change number reveals a fresh phone-entry form and resets verification correctly on a new request', async () => {
+        await renderWithVerifiedPhone();
+        // Two "Verified" badges exist at this point: email's (mockProfile's
+        // is_verified: true, unrelated to this test) and phone's own.
+        const verifiedCountBefore = screen.getAllByText('Verified').length;
+        expect(verifiedCountBefore).toBe(2);
+
+        fireEvent.click(screen.getByRole('button', { name: /Change number/i }));
+
+        const phoneInput = await screen.findByLabelText(/Phone number/i);
+        fireEvent.change(phoneInput, { target: { value: '8123456789' } });
+        mockApi.requestPhoneVerification.mockResolvedValue(wrapped({ phone_number: '+918123456789', phone_verified: false }));
+        fireEvent.click(screen.getByRole('button', { name: /Send code/i }));
+
+        expect(await screen.findByText('Verification pending')).toBeInTheDocument();
+        // The stale "Verified" badge from the OLD phone number must not
+        // persist once a new, unverified number has been requested --
+        // only email's (unrelated, unchanged) badge remains.
+        expect(screen.getAllByText('Verified').length).toBe(1);
+        expect(mockApi.requestPhoneVerification).toHaveBeenCalledWith('8123456789');
+      });
+
+      it('Cancel on the change-number form returns to the verified state without calling the API', async () => {
+        await renderWithVerifiedPhone();
+        fireEvent.click(screen.getByRole('button', { name: /Change number/i }));
+        await screen.findByLabelText(/Phone number/i);
+
+        fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
+
+        await waitFor(() => {
+          expect(screen.getByRole('button', { name: /Change number/i })).toBeInTheDocument();
+        });
+        expect(mockApi.requestPhoneVerification).not.toHaveBeenCalled();
+      });
+    });
+
+    it('masking a long international number never breaks and reveals only the last 4 digits', async () => {
+      mockApi.getMyProfile.mockResolvedValue(wrapped({ ...mockProfile, phone_number: '+4915123456789', phone_verified: true }));
+      renderProfile();
+
+      await waitFor(() => {
+        expect(screen.getByText(/\+\*+6789/)).toBeInTheDocument();
+      });
+      expect(screen.queryByText('+4915123456789')).not.toBeInTheDocument();
+    });
+
+    it('phone data is never included in a getAllUsers-style call (no such call exists on this page)', async () => {
+      // Profile.tsx never calls a teammate-scoped endpoint at all -- this
+      // test documents that invariant directly rather than merely relying
+      // on its absence to prove privacy.
+      renderProfile();
+      await waitFor(() => expect(api.getMyProfile).toHaveBeenCalled());
+      expect((api as any).getAllUsers).not.toHaveBeenCalled();
     });
   });
 

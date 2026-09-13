@@ -2386,8 +2386,66 @@ Following `PROFILE_PHASE4_PHONE_SMS_PROVIDER_AUDIT.md`'s §14 implementation ord
 
 **Explicitly NOT touched by this task:** phone verification frontend/UI (NOT STARTED), Chat, Phase 5, the India DLT registration chain (operational, not code — still not done, still not claimed to be), the provider audit document (no correction was needed).
 
+Backend was subsequently committed as `2622cc8`, pushed, GitHub Actions GREEN (backend + frontend), and Vercel production deployment confirmed successful for both `commandcenter` and `commandcenter-backend` (verified via GitHub's commit-status API tied to that exact SHA).
+
+## Profile Phase 4 — Phone Verification Frontend/UI (COMPLETE, not yet committed)
+
+Following the audit's §10 design, adapted to the actual current Profile.tsx patterns (frontend-only task — backend untouched, confirmed by `git diff --name-only` showing zero `backend/` files).
+
+**Backend contract used as-is, no gap found requiring a stop-and-report this time:** `GET /api/users/me` already returns the caller's own `phone_number`/`phone_verified` (added in the phone-backend task alongside `is_verified`/`pending_email`), which is sufficient to restore pending/verified state after a page reload — `phone_number` is set (with `phone_verified` still false) the moment a verification is *requested*, not only once it succeeds, so a non-null `phone_number` + `phone_verified: false` unambiguously means "pending," distinguishing it from "never started" (`phone_number: null`).
+
+**One genuine backend edge-case behavior discovered, NOT silently patched into the backend (per this task's explicit instruction):** `users.repository.ts`'s `setPendingPhoneOtp` does not reset `phone_verified` to `false` when an already-verified account requests a *new* number (it only ever flips `phone_verified` to `true`, on a successful `verifyPhoneOtp` of that request's own OTP). This means a page reload, taken *between* requesting a change to an already-verified phone and actually verifying the new number, would still show the stale "Verified" badge (referring to the OLD number) alongside the new, not-yet-verified `phone_number` — because `GET /me` at that moment genuinely reflects that DB state. The frontend handles the *live-session* case correctly by optimistically setting `phone_verified: false` in local React state immediately after a successful `request-phone-verification` call (before the backend's own value would ever suggest otherwise) — covered by a dedicated test (`Change number reveals a fresh phone-entry form and resets verification correctly on a new request`). The narrow reload-mid-change edge case remains a known, documented limitation, not fixed by this frontend-only task.
+
+**Implemented:**
+- `Profile.tsx` gained a new "Phone" section (own heading, own `border-t pt-6` block, structurally matching every other Profile subsection) with four states: no-phone (bare input + "Send code", visible by default since there's nothing to hide behind a toggle, unlike email's existing-value case), OTP-pending (masked number, 6-digit numeric input, "Verify" + "Resend code"), verified (masked number + "Verified" badge + "Change number"), and change-number (reuses the no-phone form with a "Cancel" back to verified). No "Remove" action — the backend has no endpoint for it, matching email-change's identical "don't invent UI for an action the server can't perform" rule.
+- Client-side phone validation is a permissive digit-count plausibility check (`/^\+?\d{7,15}$/` after stripping formatting characters) — UX-only, matching the email-change work's exact client-safe/server-authoritative split; the backend's `libphonenumber-js` normalization remains the real authority.
+- A new `maskPhoneNumber()` helper reveals only the last 4 digits, working for any E.164 value without assuming a fixed country-code length (no India-only hardcoding) — e.g. `+919876543210` → `+********3210`.
+- 6-digit OTP input strips non-digit characters and disables "Verify" below 6 digits; "Send code"/"Verify"/"Resend code" are all disabled while their own request is in flight, preventing duplicate submission.
+- All error states (invalid/expired OTP, attempts-exhausted, resend cooldown, rate-limited, network/provider failure) render the backend's own `err.response?.data?.error` message verbatim, matching every other error-handling call site already in this file — no new error-handling convention.
+- `services/api.ts` gained three thin wrappers (`requestPhoneVerification`, `resendPhoneVerification`, `verifyPhone`), same one-function-per-endpoint convention as every other addition to this file.
+- OTP is never persisted to `localStorage`/`sessionStorage` and is cleared from the input immediately after submission — explicit test coverage for both.
+
+**Files changed:** `frontend/src/pages/Profile.tsx`, `frontend/src/services/api.ts`, `frontend/src/pages/Profile.test.tsx` (+37 tests, `mockProfile` extended with `phone_number`/`phone_verified`). **Zero backend files touched.**
+
+**Verification:**
+- `Profile.test.tsx`: 91/91 PASS (fixed 2 test-scoping bugs during development — not implementation bugs: one query matched the top-level success banner's duplicate masked text, the other matched email's own unrelated "Verified" badge; both fixed by scoping the assertions, not by changing behavior).
+- Directly-affected `useAuth.test.tsx`: 5/5 PASS (unmodified — this task never touches `useAuth.tsx`).
+- Full frontend suite, one run: 528/528 PASS, 24/24 suites.
+- Frontend `tsc`/production build: both PASS.
+- Not committed or pushed — explicit instruction for this task.
+
+**Explicitly NOT touched:** Chat, Phase 5, the India DLT registration/MSG91 production credential setup (operational, still not done), both architecture/provider audit documents (no correction was needed).
+
+## Profile Phase 4 — Phone Verification State-Consistency Fix (COMPLETE, not yet committed)
+
+The reload-mid-change edge case flagged in the frontend task above was investigated properly rather than left as a documented limitation, per explicit direction not to accept the frontend-only workaround as final.
+
+**Root cause:** `usersRepository.setPendingPhoneOtp` (backend) updated `phone_number`/OTP fields on every request/resend but never touched `phone_verified`. An already-verified account requesting a DIFFERENT number therefore kept `phone_verified: true` (still describing the OLD number) while `phone_number` already pointed at the new, unproven one — an internally inconsistent state `GET /api/users/me` would report verbatim to any reader, including across a page reload, until the new number was itself verified.
+
+**Fix (smallest correct change, no architecture redesign):**
+- `setPendingPhoneOtp` now also sets `phone_verified = false` in the same UPDATE. No-op for the two cases where the account wasn't verified to begin with (first-ever request, or a resend against an already-pending number).
+- `resendPhoneVerification`'s existing guard was extended to also reject when `state.phone_verified` is true (not just when `phone_number` is absent) — closing a gap the fix itself would otherwise open: without this, a direct API call to resend against an *already-verified* number (never reachable through the UI, which only shows "resend" in the pending state) would silently re-use the same `setPendingPhoneOtp` path and un-verify a number the caller never asked to change.
+- `requestPhoneVerification`'s response now includes `phone_verified` (read from the row `setPendingPhoneOtp` actually wrote, not a literal), so the frontend has an authoritative value to consume directly.
+- Frontend: `Profile.tsx`'s `handleRequestPhoneVerification` no longer hardcodes `phone_verified: false` — it reads `response.data.data.phone_verified` from the (now-correct) backend response. The UI's displayed verified state is derived from backend state in every case, including immediately after a request and after any page reload.
+
+**Files changed:** `backend/src/modules/users/users.repository.ts` (1 method), `backend/src/modules/users/users.service.ts` (2 methods), `backend/tests/phoneVerification.test.ts` (+3 regression tests, 1 existing test's exact-shape assertion updated), `frontend/src/pages/Profile.tsx` (1 handler + its comment), `frontend/src/pages/Profile.test.tsx` (+1 regression test, 2 existing mocks updated to include the new field).
+
+**Regression test (backend, A-H exactly as specified):** verify phone A → confirm `phone_verified: true` → request verification for a DIFFERENT number → confirm the request's own response AND a live `GET /me` both show the new number with `phone_verified: false` (proving both the direct response contract and reload-time restoration) → verify the new OTP → confirm `phone_verified: true`. A second new test confirms resend against an already-verified number is rejected rather than silently un-verifying it. A third confirms no login/password/email/2FA behavior was touched.
+
+**Verification:**
+- `phoneVerification.test.ts`: 36/36 PASS (33 original + 3 new).
+- `Profile.test.tsx`: 92/92 PASS (91 original + 1 new, confirming the frontend now derives state from the response rather than a hardcoded value).
+- Backend `tsc --noEmit` / production build: both PASS.
+- Frontend `tsc` / production build: both PASS.
+- `detectOpenHandles` (no `--forceExit`) on `phoneVerification.test.ts`: 36/36 PASS, Jest exited cleanly.
+- Full backend suite, one run: 598/600 PASS, 40/42 suites. The 2 failures (`resourceReferenceIntegrity.test.ts`, `rbac.test.ts`) are the same pre-existing, already-documented Neon-latency timeout class (`buildTeamWithRoles()`'s concurrent `registerAndLogin` calls exceeding the default 30s Jest timeout) previously seen rotating across `dailyWork.test.ts`/`teamMembership.test.ts` in earlier sessions — confirmed unrelated to this change (neither file touches phone/users/auth code), not fixed, per established precedent. 600 = 597 (prior baseline) + 3 (new regression tests).
+- Full frontend suite, one run: 529/529 PASS, 24/24 suites.
+- Not committed or pushed — explicit instruction for this task.
+
+**Explicitly NOT touched:** phone architecture/design (no redesign — this was a state-transition bug fix within the existing design), Chat, Phase 5, SMS provider behavior, login/recovery/2FA (unaffected, explicitly verified by a dedicated test), India DLT/MSG91 production setup.
+
 ## NEXT PRIORITY (AUTHORITATIVE — supersedes all earlier "NEXT PRIORITY" sections in this file)
 
-**Review and commit the phone verification backend changes above** (once explicitly directed). After that: **phone verification frontend/UI** (audit §10 design, not yet built) is the only remaining Profile Phase 4 work — Phase 4 as a whole is not complete until it ships. The India DLT registration/MSG91 account setup (operational track, audit §6) remains separate and non-blocking for shipping the code.
+**Review and commit the phone verification frontend/UI + state-consistency fix changes above together** (once explicitly directed — the frontend UI was never committed separately, so this is one combined commit). Once committed, pushed, and verified green: **Profile Phase 4 is genuinely ready for final closeout** — backend and frontend for both email-change and phone verification are shipped, deployed, and now free of the known state-consistency edge case. The India DLT registration/MSG91 production account setup (operational, audit §6) remains a separate, non-blocking track — production SMS delivery is not claimed to work until that's genuinely done.
 
-Also still open, unrelated, lower priority: the `dailyWork.test.ts`/`teamMembership.test.ts` timeout-margin issue (confirmed pre-existing/environmental Neon-latency variance, not touched here either — this run happened to pass cleanly).
+Also still open, unrelated, lower priority: the Neon-latency timeout-margin flakiness class (confirmed pre-existing/environmental, rotates across whichever multi-user-setup test has the thinnest margin on a given run — `dailyWork.test.ts`, `teamMembership.test.ts`, `resourceReferenceIntegrity.test.ts`, `rbac.test.ts` have each shown it at different times; never reproduces against CI's own local Postgres).

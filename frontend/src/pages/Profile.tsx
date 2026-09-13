@@ -23,7 +23,30 @@ interface ProfileData {
   // has been submitted but not yet verified.
   is_verified: boolean;
   pending_email: string | null;
+  // Phase 4 phone verification: phone_number is E.164-normalized, set as
+  // soon as a verification is REQUESTED (before it's actually verified --
+  // see users.repository.ts's setPendingPhoneOtp), so `phone_number` set
+  // + `phone_verified` false together mean "pending," not "no phone."
+  phone_number: string | null;
+  phone_verified: boolean;
 }
+
+// Masks an E.164 phone number for display, revealing only the last 4
+// digits -- deliberately does NOT try to separate out the country code
+// (that would require a phone-number library on the frontend just for
+// display), so this works safely for any E.164 value, not just India's.
+const maskPhoneNumber = (e164: string): string => {
+  const digits = e164.replace(/^\+/, '');
+  if (digits.length <= 4) return e164;
+  const visible = digits.slice(-4);
+  return `+${'*'.repeat(digits.length - 4)}${visible}`;
+};
+
+// UX-only plausibility check -- normalization/format validity is the
+// server's job (common/phone.ts's normalizePhoneToE164, via
+// libphonenumber-js), matching the same client-safe/server-authoritative
+// split already used for email's `type="email"` input.
+const isPhoneNumberPlausible = (value: string): boolean => /^\+?\d{7,15}$/.test(value.replace(/[^\d+]/g, ''));
 
 export default function Profile() {
   const [profile, setProfile] = useState<ProfileData | null>(null);
@@ -59,6 +82,16 @@ export default function Profile() {
   // is contextual to the pending-change box itself (matches avatarError's
   // own inline-not-global placement), not a page-level event.
   const [resendMessage, setResendMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const [phoneNumberInput, setPhoneNumberInput] = useState('');
+  const [phoneChangeMode, setPhoneChangeMode] = useState(false);
+  const [phoneRequestSaving, setPhoneRequestSaving] = useState(false);
+  const [phoneRequestSuccess, setPhoneRequestSuccess] = useState(false);
+  const [phoneOtpInput, setPhoneOtpInput] = useState('');
+  const [phoneVerifySaving, setPhoneVerifySaving] = useState(false);
+  const [phoneVerifySuccess, setPhoneVerifySuccess] = useState(false);
+  const [phoneResendSaving, setPhoneResendSaving] = useState(false);
+  const [phoneResendMessage, setPhoneResendMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarError, setAvatarError] = useState('');
@@ -241,6 +274,95 @@ export default function Profile() {
     }
   };
 
+  // Phase 4 phone verification. No password confirmation -- phone is
+  // non-credential/additive, matching users.service.ts's
+  // requestPhoneVerification (no password check there either, unlike
+  // email). `phone_verified` is read directly from the response, not
+  // assumed/hardcoded -- users.service.ts's requestPhoneVerification
+  // returns the row setPendingPhoneOtp actually wrote (always false
+  // there, including for an already-verified account requesting a
+  // DIFFERENT number), so this is the backend's own authoritative state,
+  // not a client-side guess. A page reload before the new number is
+  // verified is equally safe: GET /api/users/me reflects the same
+  // already-committed phone_verified = false.
+  const handleRequestPhoneVerification = async () => {
+    if (!isPhoneNumberPlausible(phoneNumberInput)) {
+      setError('Please enter a valid phone number');
+      return;
+    }
+
+    try {
+      setPhoneRequestSaving(true);
+      setError('');
+      setPhoneRequestSuccess(false);
+
+      const response = await api.requestPhoneVerification(phoneNumberInput);
+      const { phone_number: normalizedPhone, phone_verified } = response.data.data;
+
+      if (profile) {
+        setProfile({ ...profile, phone_number: normalizedPhone, phone_verified });
+      }
+      setPhoneChangeMode(false);
+      setPhoneNumberInput('');
+      setPhoneOtpInput('');
+      setPhoneRequestSuccess(true);
+      setTimeout(() => setPhoneRequestSuccess(false), 5000);
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to request phone verification');
+    } finally {
+      setPhoneRequestSaving(false);
+    }
+  };
+
+  const handleCancelPhoneChange = () => {
+    setPhoneChangeMode(false);
+    setPhoneNumberInput('');
+    setError('');
+  };
+
+  const handleVerifyPhone = async () => {
+    try {
+      setPhoneVerifySaving(true);
+      setError('');
+      setPhoneVerifySuccess(false);
+
+      const response = await api.verifyPhone(phoneOtpInput);
+
+      if (profile) {
+        setProfile({ ...profile, phone_verified: response.data.data.phone_verified });
+      }
+      setPhoneOtpInput('');
+      setPhoneVerifySuccess(true);
+      setTimeout(() => setPhoneVerifySuccess(false), 3000);
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to verify phone number');
+    } finally {
+      setPhoneVerifySaving(false);
+    }
+  };
+
+  // No "remove phone number" action -- the backend has no endpoint for
+  // it (only request/resend/verify exist), matching the same "don't
+  // invent UI for an action the server can't perform" rule email-change
+  // already established for its own missing cancel endpoint.
+  const handleResendPhoneVerification = async () => {
+    try {
+      setPhoneResendSaving(true);
+      setPhoneResendMessage(null);
+
+      const response = await api.resendPhoneVerification();
+      const phoneNumber = response.data.data.phone_number;
+      if (profile) {
+        setProfile({ ...profile, phone_number: phoneNumber });
+      }
+      setPhoneResendMessage({ type: 'success', text: `Verification code resent to ${maskPhoneNumber(phoneNumber)}.` });
+    } catch (err: any) {
+      setPhoneResendMessage({ type: 'error', text: err.response?.data?.error || 'Failed to resend verification code' });
+    } finally {
+      setPhoneResendSaving(false);
+    }
+  };
+
   const getAvatarInitials = (): string => {
     if (!profile?.full_name) return '?';
     return profile.full_name
@@ -396,14 +518,18 @@ export default function Profile() {
         )}
 
         {/* Success */}
-        {(saveSuccess || passwordSuccess || emailChangeSuccess) && (
+        {(saveSuccess || passwordSuccess || emailChangeSuccess || phoneRequestSuccess || phoneVerifySuccess) && (
           <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
             <p className="text-sm text-green-700">
-              {emailChangeSuccess
-                ? `Verification email sent to ${profile.pending_email}. Your current email stays active until you confirm the new one.`
-                : passwordSuccess
-                  ? 'Password changed successfully!'
-                  : 'Profile updated successfully!'}
+              {phoneVerifySuccess
+                ? 'Phone number verified successfully!'
+                : phoneRequestSuccess && profile.phone_number
+                  ? `Verification code sent to ${maskPhoneNumber(profile.phone_number)}.`
+                  : emailChangeSuccess
+                    ? `Verification email sent to ${profile.pending_email}. Your current email stays active until you confirm the new one.`
+                    : passwordSuccess
+                      ? 'Password changed successfully!'
+                      : 'Profile updated successfully!'}
             </p>
           </div>
         )}
@@ -689,6 +815,122 @@ export default function Profile() {
                   )}
                 </div>
               </div>
+            </div>
+
+            {/* Phone verification */}
+            <div className="space-y-3 border-t pt-6">
+              <h3 className="font-semibold text-gray-900">Phone</h3>
+              <p className="text-xs text-gray-500">Optional. Verifying a phone number does not change how you log in.</p>
+
+              {profile.phone_verified && !phoneChangeMode ? (
+                // State: verified.
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-gray-900 break-all">{maskPhoneNumber(profile.phone_number!)}</span>
+                    <span className="inline-flex items-center text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
+                      Verified
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setPhoneChangeMode(true);
+                      setPhoneNumberInput('');
+                      setError('');
+                    }}
+                    className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                  >
+                    Change number
+                  </button>
+                </div>
+              ) : profile.phone_number && !phoneChangeMode ? (
+                // State: OTP pending -- restored from GET /api/users/me on
+                // reload just as readily as right after a fresh request,
+                // since phone_number is set (and phone_verified is false)
+                // in the database the moment a verification is requested,
+                // not only once it succeeds.
+                <div className="space-y-2">
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                    <p className="text-sm text-amber-800">
+                      <span className="font-medium">Verification pending</span> for{' '}
+                      <span className="break-all">{maskPhoneNumber(profile.phone_number)}</span>
+                    </p>
+                    <p className="text-xs text-amber-700 mt-1">Enter the 6-digit code sent to this number.</p>
+                    <div className="mt-3 space-y-2">
+                      <label htmlFor="phone_otp" className="sr-only">
+                        Verification code
+                      </label>
+                      <input
+                        id="phone_otp"
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        maxLength={6}
+                        value={phoneOtpInput}
+                        onChange={(e) => setPhoneOtpInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        className="input-field max-w-[10rem]"
+                        placeholder="123456"
+                      />
+                      <div className="flex gap-3 flex-wrap">
+                        <button
+                          onClick={handleVerifyPhone}
+                          disabled={phoneVerifySaving || phoneOtpInput.length !== 6}
+                          className="btn-primary text-sm disabled:opacity-50"
+                        >
+                          {phoneVerifySaving ? 'Verifying...' : 'Verify'}
+                        </button>
+                        <button
+                          onClick={handleResendPhoneVerification}
+                          disabled={phoneResendSaving}
+                          className="btn-secondary text-sm disabled:opacity-50"
+                        >
+                          {phoneResendSaving ? 'Resending...' : 'Resend code'}
+                        </button>
+                      </div>
+                    </div>
+                    {phoneResendMessage && (
+                      <p className={`text-xs mt-2 ${phoneResendMessage.type === 'success' ? 'text-green-700' : 'text-red-700'}`}>
+                        {phoneResendMessage.text}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                // State: no phone yet, OR "Change number" was clicked.
+                <div className="space-y-3">
+                  {phoneChangeMode && (
+                    <p className="text-xs text-gray-500">Enter a new number to replace your verified one -- you'll need to verify it again.</p>
+                  )}
+                  <div>
+                    <label htmlFor="phone_number" className="block text-xs font-medium text-gray-600 mb-1">
+                      Phone number
+                    </label>
+                    <input
+                      id="phone_number"
+                      type="tel"
+                      inputMode="tel"
+                      autoComplete="tel"
+                      value={phoneNumberInput}
+                      onChange={(e) => setPhoneNumberInput(e.target.value)}
+                      className="input-field"
+                      placeholder="+91 98765 43210"
+                    />
+                  </div>
+                  <div className="flex gap-3 justify-end">
+                    {phoneChangeMode && (
+                      <button onClick={handleCancelPhoneChange} disabled={phoneRequestSaving} className="btn-secondary text-sm disabled:opacity-50">
+                        Cancel
+                      </button>
+                    )}
+                    <button
+                      onClick={handleRequestPhoneVerification}
+                      disabled={phoneRequestSaving || !phoneNumberInput.trim()}
+                      className="btn-primary text-sm disabled:opacity-50"
+                    >
+                      {phoneRequestSaving ? 'Sending...' : 'Send code'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Visibility */}

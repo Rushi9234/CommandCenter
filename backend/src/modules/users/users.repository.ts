@@ -120,10 +120,21 @@ export class UsersRepository {
   // UPDATE, which is what makes the previous OTP stop verifying --
   // there is no separate "invalidate" step, matching the email-change
   // token's identical single-slot-column precedent.
+  // phone_verified = false is set here alongside phone_number -- without
+  // it, an already-verified account requesting a DIFFERENT number would
+  // keep phone_verified true (referring to the OLD number) while
+  // phone_number already points at the new, not-yet-proven one, an
+  // internally inconsistent state GET /me would report verbatim on any
+  // read (e.g. after a page reload) between this request and the new
+  // number's own successful verify. Harmless for the two cases where the
+  // account wasn't verified to begin with (first-ever request, or a
+  // resend against an already-pending number): phone_verified is already
+  // false there, so this is a no-op overwrite, not a new behavior.
   async setPendingPhoneOtp(userId: string, phoneNumber: string, otpHash: string, expiresAt: Date) {
     const text = `
       UPDATE users
       SET phone_number = $2,
+          phone_verified = false,
           phone_otp_hash = $3,
           phone_otp_expires = $4,
           phone_otp_attempts = 0,

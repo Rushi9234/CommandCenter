@@ -232,7 +232,12 @@ export class UsersService {
 
     await sendOtpSms(phoneNumber, otp);
 
-    return { phone_number: phoneNumber };
+    // phone_verified comes from the row setPendingPhoneOtp actually just
+    // wrote (always false there -- see that method's comment), not a
+    // hardcoded literal, so the frontend can derive its displayed state
+    // directly from this response instead of assuming/optimistically
+    // setting it locally.
+    return { phone_number: phoneNumber, phone_verified: updated.phone_verified };
   }
 
   // Phase 4 phone verification, resend. Operates on the existing pending
@@ -243,7 +248,16 @@ export class UsersService {
   // other token pair in this codebase.
   async resendPhoneVerification(userId: string) {
     const state = await usersRepository.getPhoneVerificationState(userId);
-    if (!state || !state.phone_number) {
+    // phone_verified is included in this guard, not just phone_number's
+    // presence: an already-verified number is never "pending" by
+    // definition, and setPendingPhoneOtp unconditionally sets
+    // phone_verified = false (needed so a genuine number CHANGE starts
+    // unverified -- see requestPhoneVerification's own comment). Without
+    // this check, calling resend against an already-verified number
+    // (unreachable through the UI, which never shows "resend" once
+    // verified, but not blocked at the API level otherwise) would
+    // silently un-verify a number the caller never asked to change.
+    if (!state || !state.phone_number || state.phone_verified) {
       // Not an enumeration concern -- caller is authenticated as
       // themselves, matching resendEmailChangeVerification's identical
       // reasoning.

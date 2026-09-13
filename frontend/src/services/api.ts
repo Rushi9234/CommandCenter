@@ -321,6 +321,18 @@ export const resendEmailChangeVerification = () =>
 export const verifyEmailChange = (token: string) =>
   api.post('/auth/verify-email-change', { token });
 
+// Profile Phase 4 phone verification. All three are authenticated
+// (unlike verify-email-change, verify-phone is a same-session, in-app
+// code-entry flow -- there's no unauthenticated counterpart to add).
+export const requestPhoneVerification = (phoneNumber: string) =>
+  api.post('/users/me/request-phone-verification', { phone_number: phoneNumber });
+
+export const resendPhoneVerification = () =>
+  api.post('/users/me/resend-phone-verification');
+
+export const verifyPhone = (code: string) =>
+  api.post('/users/me/verify-phone', { code });
+
 export const uploadAvatar = (formData: FormData) => {
   const uploadApi = axios.create({
     baseURL: import.meta.env.PROD ? 'https://commandcenter-backend.vercel.app/api' : '/api',
