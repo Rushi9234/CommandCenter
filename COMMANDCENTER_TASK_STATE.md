@@ -2440,12 +2440,34 @@ The reload-mid-change edge case flagged in the frontend task above was investiga
 - `detectOpenHandles` (no `--forceExit`) on `phoneVerification.test.ts`: 36/36 PASS, Jest exited cleanly.
 - Full backend suite, one run: 598/600 PASS, 40/42 suites. The 2 failures (`resourceReferenceIntegrity.test.ts`, `rbac.test.ts`) are the same pre-existing, already-documented Neon-latency timeout class (`buildTeamWithRoles()`'s concurrent `registerAndLogin` calls exceeding the default 30s Jest timeout) previously seen rotating across `dailyWork.test.ts`/`teamMembership.test.ts` in earlier sessions — confirmed unrelated to this change (neither file touches phone/users/auth code), not fixed, per established precedent. 600 = 597 (prior baseline) + 3 (new regression tests).
 - Full frontend suite, one run: 529/529 PASS, 24/24 suites.
-- Not committed or pushed — explicit instruction for this task.
 
 **Explicitly NOT touched:** phone architecture/design (no redesign — this was a state-transition bug fix within the existing design), Chat, Phase 5, SMS provider behavior, login/recovery/2FA (unaffected, explicitly verified by a dedicated test), India DLT/MSG91 production setup.
 
+Committed as `52e4813` ("feat: complete profile phone verification") and pushed to `origin/master`. GitHub Actions confirmed GREEN (backend + frontend, all steps including Type check/Build/Test). Vercel production deployment confirmed SUCCESS for both `commandcenter` and `commandcenter-backend` at this exact commit (verified via GitHub's commit-status API).
+
+## Profile Phase 4 — FINAL STATUS: COMPLETE
+
+All of the following are true and verified, not assumed:
+
+- Architecture/security audit: COMPLETE (`PROFILE_PHASE4_EMAIL_PHONE_VERIFICATION_AUDIT.md`)
+- Database foundation: COMPLETE (all 9 columns, migration + `schema.sql`, no further columns needed)
+- `is_verified` exposed on `GET /api/users/me`: COMPLETE
+- Email-change backend: COMPLETE (`481a821`)
+- Email-change frontend/UI: COMPLETE (`2d2f407`)
+- Phone SMS provider/architecture audit: COMPLETE (`PROFILE_PHASE4_PHONE_SMS_PROVIDER_AUDIT.md`)
+- Phone verification backend: COMPLETE (`2622cc8`)
+- Phone verification frontend/UI: COMPLETE, including the state-consistency fix (`52e4813`)
+- Full verification: backend and frontend suites, TypeScript, production builds, `detectOpenHandles` all green across every slice
+- GitHub Actions: GREEN on `52e4813` (backend + frontend)
+- Vercel: Production deployment SUCCESS on `52e4813` (both `commandcenter` and `commandcenter-backend`)
+
+**Explicitly still open, by design, and not part of "Phase 4 complete":** the India DLT registration chain and MSG91 production account/credential setup (`PROFILE_PHASE4_PHONE_SMS_PROVIDER_AUDIT.md` §6) is an operational/business track, not code — production SMS delivery is not claimed to work until that is genuinely done. Phase 5 (2FA, active sessions/device management, password history) and Chat remain untouched and not started.
+
 ## NEXT PRIORITY (AUTHORITATIVE — supersedes all earlier "NEXT PRIORITY" sections in this file)
 
-**Review and commit the phone verification frontend/UI + state-consistency fix changes above together** (once explicitly directed — the frontend UI was never committed separately, so this is one combined commit). Once committed, pushed, and verified green: **Profile Phase 4 is genuinely ready for final closeout** — backend and frontend for both email-change and phone verification are shipped, deployed, and now free of the known state-consistency edge case. The India DLT registration/MSG91 production account setup (operational, audit §6) remains a separate, non-blocking track — production SMS delivery is not claimed to work until that's genuinely done.
+Profile Phase 4 is closed out. No further Phase 4 work is expected unless a genuine defect surfaces. Candidates for future, separately-scoped work (none started, none implied by this entry):
+- India DLT registration + MSG91 production credentials (operational track, `PROFILE_PHASE4_PHONE_SMS_PROVIDER_AUDIT.md` §6) — required before real SMS can be sent.
+- Phase 5 (2FA, active sessions/device management, password history/reuse prevention) — not started, not designed beyond the forward-compatibility notes already in the Phase 4 audits.
+- Chat — not started.
 
 Also still open, unrelated, lower priority: the Neon-latency timeout-margin flakiness class (confirmed pre-existing/environmental, rotates across whichever multi-user-setup test has the thinnest margin on a given run — `dailyWork.test.ts`, `teamMembership.test.ts`, `resourceReferenceIntegrity.test.ts`, `rbac.test.ts` have each shown it at different times; never reproduces against CI's own local Postgres).
