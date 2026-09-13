@@ -76,6 +76,27 @@ export const resendEmailChangeVerification = async (req: AuthRequest, res: Respo
   ok(res, result);
 };
 
+// Phase 4 phone verification. All three read exclusively from
+// req.user.userId (never a client-supplied id) and req.body's own,
+// DTO-validated fields -- no OTP, OTP hash, or provider detail is ever
+// echoed back in any response.
+export const requestPhoneVerification = async (req: AuthRequest, res: Response) => {
+  const { phone_number } = req.body;
+  const result = await usersService.requestPhoneVerification(req.user!.userId, phone_number);
+  ok(res, result);
+};
+
+export const resendPhoneVerification = async (req: AuthRequest, res: Response) => {
+  const result = await usersService.resendPhoneVerification(req.user!.userId);
+  ok(res, result);
+};
+
+export const verifyPhone = async (req: AuthRequest, res: Response) => {
+  const { code } = req.body;
+  const result = await usersService.verifyPhone(req.user!.userId, code);
+  ok(res, result);
+};
+
 export const uploadAvatar = async (req: AuthRequest, res: Response) => {
   if (!req.file) {
     throw new BadRequestError('No file uploaded');

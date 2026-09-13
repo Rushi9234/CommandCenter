@@ -73,4 +73,17 @@ export interface RateLimitProvider {
   // the change (req.user does not exist here at all). Applied to
   // POST /api/auth/verify-email-change, which requires no authentication.
   createEmailChangeVerifyLimiter(): RequestHandler;
+
+  // Phase 4 phone verification: all three phone endpoints are
+  // authenticated (unlike verify-email-change, phone verification is a
+  // same-session, in-app code-entry flow -- req.user always exists),
+  // so all three are keyed by user ID, mounted after authenticate
+  // (BUG-003's lesson, non-negotiable). 5/hour each, per
+  // PROFILE_PHASE4_PHONE_SMS_PROVIDER_AUDIT.md's recommendation -- the
+  // 5-incorrect-attempts-per-OTP ceiling is verify-phone's PRIMARY
+  // defense; this limiter is a secondary backstop against attempting
+  // many different OTPs in sequence.
+  createPhoneVerificationLimiter(): RequestHandler;
+  createPhoneVerificationResendLimiter(): RequestHandler;
+  createPhoneVerifyLimiter(): RequestHandler;
 }

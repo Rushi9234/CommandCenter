@@ -32,6 +32,21 @@ export const requestEmailChangeSchema = z.object({
   current_password: requiredString('Current password required'),
 });
 
+// Phase 4 phone verification. Only "non-empty string" is validated here --
+// actual format/E.164 validity is checked by common/phone.ts's
+// normalizePhoneToE164 in the service layer, the same split already used
+// for email (format-safe-to-reject-plainly here, business-logic checks in
+// the service).
+export const requestPhoneVerificationSchema = z.object({
+  phone_number: requiredString('Phone number required'),
+});
+
+export const verifyPhoneSchema = z.object({
+  code: requiredString('Verification code required'),
+});
+
 export type UpdateProfileRequest = z.infer<typeof updateProfileSchema>;
 export type ChangePasswordRequest = z.infer<typeof changePasswordSchema>;
 export type RequestEmailChangeRequest = z.infer<typeof requestEmailChangeSchema>;
+export type RequestPhoneVerificationRequest = z.infer<typeof requestPhoneVerificationSchema>;
+export type VerifyPhoneRequest = z.infer<typeof verifyPhoneSchema>;

@@ -6,7 +6,13 @@ import { validate } from '../../common/middleware/validate';
 import { getRateLimitProvider } from '../../common/rateLimit/rateLimitProviderFactory';
 import { BadRequestError } from '../../common/errors';
 import * as usersController from './users.controller';
-import { updateProfileSchema, changePasswordSchema, requestEmailChangeSchema } from './users.dto';
+import {
+  updateProfileSchema,
+  changePasswordSchema,
+  requestEmailChangeSchema,
+  requestPhoneVerificationSchema,
+  verifyPhoneSchema,
+} from './users.dto';
 
 const router = Router();
 
@@ -46,6 +52,9 @@ const avatarRateLimiter = getRateLimitProvider().createAvatarLimiter();
 const passwordChangeRateLimiter = getRateLimitProvider().createPasswordChangeLimiter();
 const emailChangeRateLimiter = getRateLimitProvider().createEmailChangeLimiter();
 const emailChangeResendRateLimiter = getRateLimitProvider().createEmailChangeResendLimiter();
+const phoneVerificationRateLimiter = getRateLimitProvider().createPhoneVerificationLimiter();
+const phoneVerificationResendRateLimiter = getRateLimitProvider().createPhoneVerificationResendLimiter();
+const phoneVerifyRateLimiter = getRateLimitProvider().createPhoneVerifyLimiter();
 
 // GET /api/users — list all users in the caller's teams
 router.get('/', authenticate, asyncHandler(usersController.getAllUsers));
@@ -74,6 +83,32 @@ router.post(
   authenticate,
   emailChangeResendRateLimiter,
   asyncHandler(usersController.resendEmailChangeVerification)
+);
+
+// POST /api/users/me/request-phone-verification — request phone verification (OTP sent via SmsProvider)
+router.post(
+  '/me/request-phone-verification',
+  authenticate,
+  phoneVerificationRateLimiter,
+  validate(requestPhoneVerificationSchema),
+  asyncHandler(usersController.requestPhoneVerification)
+);
+
+// POST /api/users/me/resend-phone-verification — resend the OTP for an existing pending phone verification
+router.post(
+  '/me/resend-phone-verification',
+  authenticate,
+  phoneVerificationResendRateLimiter,
+  asyncHandler(usersController.resendPhoneVerification)
+);
+
+// POST /api/users/me/verify-phone — verify the OTP for the authenticated user's pending phone number
+router.post(
+  '/me/verify-phone',
+  authenticate,
+  phoneVerifyRateLimiter,
+  validate(verifyPhoneSchema),
+  asyncHandler(usersController.verifyPhone)
 );
 
 // POST /api/users/me/avatar — upload/replace user's avatar

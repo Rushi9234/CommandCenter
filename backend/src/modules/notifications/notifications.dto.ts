@@ -21,6 +21,11 @@ export const NOTIFICATION_PREFERENCE_KEYS = [
   // 'password_change' covers a single security-sensitive event family
   // rather than a granular per-category toggle.
   'email_change',
+  // Phase 4 phone verification: in-app only, on successful verification --
+  // no external channel needed (the user is already looking at the
+  // screen that just succeeded), matching the original audit's §9
+  // recommendation exactly.
+  'phone_verification',
 ] as const;
 
 // Every key optional/partial -- a caller only sends the categories they

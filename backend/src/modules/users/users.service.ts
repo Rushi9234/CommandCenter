@@ -1,14 +1,43 @@
 import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 import { usersRepository } from './users.repository';
 import { authRepository } from '../auth/auth.repository';
 import { BadRequestError, UnauthorizedError } from '../../common/errors';
 import { avatarStorageService } from '../avatars/avatars.storage';
 import { generateOpaqueToken, hashToken } from '../auth/jwt';
 import { sendEmailChangeVerification } from '../../services/emailService';
+import { sendOtpSms } from '../../services/smsService';
 import { notificationsService } from '../notifications/notifications.service';
+import { normalizePhoneToE164 } from '../../common/phone';
 
 const BCRYPT_COST = 12;
 const EMAIL_CHANGE_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour -- matches PASSWORD_RESET_TTL_MS's precedent (auth.service.ts): a sensitive, security-adjacent action, not a routine 24-hour signup-verification window.
+
+// Phase 4 phone verification (PROFILE_PHASE4_PHONE_SMS_PROVIDER_AUDIT.md
+// §5/§8/§9): 10-minute expiry, 5 incorrect attempts per issued OTP, and a
+// 60-second resend cooldown DERIVED from phone_otp_expires (issued_at =
+// expires - OTP_TTL_MS) rather than a 6th database column -- the audit's
+// §9 explicit reasoning for why the existing 5 columns are sufficient.
+const PHONE_OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const PHONE_OTP_MAX_ATTEMPTS = 5;
+const PHONE_OTP_RESEND_COOLDOWN_MS = 60 * 1000; // 60 seconds
+// Generic message for every "OTP didn't verify" case that must NOT be
+// distinguishable from each other (wrong code, expired, already
+// consumed/superseded) -- mirrors verifyEmailChange's identical
+// generic-response rule for the same reason (see auth.service.ts).
+const PHONE_OTP_INVALID_MESSAGE = 'Invalid or expired verification code';
+// The one message the original audit's §7 note explicitly allows to
+// differ from the generic one above -- the caller is authenticated and
+// attempt-counting an OTP they themselves requested is not an
+// enumeration vector.
+const PHONE_OTP_TOO_MANY_ATTEMPTS_MESSAGE = 'Too many incorrect attempts. Please request a new verification code.';
+
+// crypto.randomInt(100000, 1000000) is upper-bound-EXCLUSIVE, so this
+// range is exactly the 6-digit space 100000-999999 inclusive -- no
+// leading-zero/padding concern, unlike Math.random()-based generation.
+// Returned as a string since it's compared against a hash of user input
+// (also a string), never used arithmetically.
+const generatePhoneOtp = (): string => crypto.randomInt(100000, 1000000).toString();
 
 // Phase 4 audit §2.7: "already registered to someone else" and "identical
 // to the current email" must be indistinguishable from each other in the
@@ -176,6 +205,129 @@ export class UsersService {
     await sendEmailChangeVerification(user.pending_email, rawToken, user.full_name);
 
     return { pending_email: user.pending_email };
+  }
+
+  // Phase 4 phone verification, step 1. No password confirmation --
+  // unlike email, phone is non-credential/additive (audit §5.1: no
+  // session invalidation, no re-auth requirement), matching the audit's
+  // explicit reasoning for why phone verification is held to a lower
+  // confirmation bar than email/password changes. normalizePhoneToE164
+  // throws BadRequestError for anything unparseable -- a plain client-
+  // input rejection, not an enumeration concern (phone is deliberately
+  // NOT unique, §9, so there is no "already in use" check to leak from
+  // in the first place).
+  async requestPhoneVerification(userId: string, rawPhoneNumber: string) {
+    const phoneNumber = normalizePhoneToE164(rawPhoneNumber);
+    const otp = generatePhoneOtp();
+
+    const updated = await usersRepository.setPendingPhoneOtp(
+      userId,
+      phoneNumber,
+      hashToken(otp),
+      new Date(Date.now() + PHONE_OTP_TTL_MS)
+    );
+    if (!updated) {
+      throw new UnauthorizedError('User not found');
+    }
+
+    await sendOtpSms(phoneNumber, otp);
+
+    return { phone_number: phoneNumber };
+  }
+
+  // Phase 4 phone verification, resend. Operates on the existing pending
+  // phone_number (no new target accepted here, matching
+  // resendEmailChangeVerification's identical shape) -- issuing a fresh
+  // OTP overwrites (and thereby invalidates) whatever OTP the previous
+  // request/resend issued, the same single-slot-column pattern as every
+  // other token pair in this codebase.
+  async resendPhoneVerification(userId: string) {
+    const state = await usersRepository.getPhoneVerificationState(userId);
+    if (!state || !state.phone_number) {
+      // Not an enumeration concern -- caller is authenticated as
+      // themselves, matching resendEmailChangeVerification's identical
+      // reasoning.
+      throw new BadRequestError('No pending phone verification to resend');
+    }
+
+    // 60-second cooldown, derived from phone_otp_expires rather than a
+    // dedicated "last sent" column (audit §9) -- only enforced when an
+    // OTP is still actually pending; a caller resending after their
+    // previous OTP already expired (10+ minutes ago) is never blocked by
+    // a cooldown that's long since elapsed.
+    if (state.phone_otp_expires) {
+      const issuedAt = new Date(state.phone_otp_expires).getTime() - PHONE_OTP_TTL_MS;
+      const elapsed = Date.now() - issuedAt;
+      if (elapsed < PHONE_OTP_RESEND_COOLDOWN_MS) {
+        throw new BadRequestError('Please wait before requesting another code');
+      }
+    }
+
+    const otp = generatePhoneOtp();
+    const updated = await usersRepository.setPendingPhoneOtp(
+      userId,
+      state.phone_number,
+      hashToken(otp),
+      new Date(Date.now() + PHONE_OTP_TTL_MS)
+    );
+    if (!updated) {
+      throw new UnauthorizedError('User not found');
+    }
+
+    await sendOtpSms(state.phone_number, otp);
+
+    return { phone_number: state.phone_number };
+  }
+
+  // Phase 4 phone verification, step 2. Expiry is checked BEFORE hash
+  // comparison and before any attempt-increment -- an expired/already-
+  // consumed OTP has nothing meaningful to count an attempt against, and
+  // treating it as "just wrong" would let a replayed/expired credential
+  // slowly count toward nothing. consumeEmailChangeToken-style atomic
+  // UPDATE (verifyPhoneOtp) is the actual authority on success -- the
+  // hash comparison here is only what decides "increment attempts" vs.
+  // "attempt the atomic verify," never the sole gate for marking the
+  // phone verified.
+  async verifyPhone(userId: string, rawCode: string) {
+    const state = await usersRepository.getPhoneVerificationState(userId);
+    const isExpired = !state?.phone_otp_expires || new Date(state.phone_otp_expires) < new Date();
+    if (!state || !state.phone_otp_hash || isExpired) {
+      throw new BadRequestError(PHONE_OTP_INVALID_MESSAGE);
+    }
+
+    const submittedHash = hashToken(rawCode);
+    if (submittedHash !== state.phone_otp_hash) {
+      const attempts = await usersRepository.incrementPhoneOtpAttempts(userId);
+      if (attempts !== null && attempts >= PHONE_OTP_MAX_ATTEMPTS) {
+        await usersRepository.clearPhoneOtp(userId);
+        throw new BadRequestError(PHONE_OTP_TOO_MANY_ATTEMPTS_MESSAGE);
+      }
+      throw new BadRequestError(PHONE_OTP_INVALID_MESSAGE);
+    }
+
+    const updated = await usersRepository.verifyPhoneOtp(userId, state.phone_otp_hash);
+    if (!updated) {
+      // Race: the OTP was superseded/expired/cleared between the read
+      // above and this write (e.g. a concurrent resend or a 5th failed
+      // attempt from another in-flight request) -- collapses to the same
+      // generic message, never a distinct "someone else already used
+      // this" response.
+      throw new BadRequestError(PHONE_OTP_INVALID_MESSAGE);
+    }
+
+    // In-app only, matching the original audit's §9 recommendation --
+    // no external channel needed, the user is already looking at the
+    // screen that just succeeded. Awaited for the same reason as every
+    // other notifyUser call site since the Milestone 38 deadlock fix.
+    await notificationsService.notifyUser({
+      recipientUserId: userId,
+      category: 'phone_verified',
+      preferenceGroup: 'phone_verification',
+      title: 'Phone Verified',
+      message: 'Your phone number has been verified.',
+    });
+
+    return { phone_verified: true };
   }
 }
 

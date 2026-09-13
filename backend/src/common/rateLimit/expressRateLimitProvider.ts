@@ -156,4 +156,46 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
       },
     });
   }
+
+  // Phase 4 phone verification: 5/hour per user, all keyed by
+  // authenticated user ID (never IP) -- every phone endpoint runs after
+  // authenticate, so req.user is always set by the time these run.
+  createPhoneVerificationLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 60 * 60 * 1000, // 1 hour
+      max: 5,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many phone verification attempts. Please try again in an hour.' });
+      },
+    });
+  }
+
+  createPhoneVerificationResendLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 60 * 60 * 1000, // 1 hour
+      max: 5,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many resend attempts. Please try again in an hour.' });
+      },
+    });
+  }
+
+  createPhoneVerifyLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 60 * 60 * 1000, // 1 hour
+      max: 5,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many verification attempts. Please try again in an hour.' });
+      },
+    });
+  }
 }

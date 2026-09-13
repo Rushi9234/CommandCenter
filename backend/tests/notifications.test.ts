@@ -349,10 +349,11 @@ describe('Notifications -- preferences', () => {
     const owner = await registerAndLogin('notif_owner_r');
     const res = await getPreferences(owner.token).expect(200);
     // password_change was added to NOTIFICATION_PREFERENCE_KEYS during the
-    // Phase 2 password-change security hardening work, and email_change
-    // during Phase 4's email-change backend -- this assertion must be
-    // updated alongside each addition to NOTIFICATION_PREFERENCE_KEYS,
-    // not left stale against a real, already-shipped feature.
+    // Phase 2 password-change security hardening work, email_change and
+    // phone_verification during Phase 4's email-change and phone-
+    // verification backends -- this assertion must be updated alongside
+    // each addition to NOTIFICATION_PREFERENCE_KEYS, not left stale
+    // against a real, already-shipped feature.
     expect(res.body.data).toEqual({
       team_join_request: true,
       goal_creation: true,
@@ -361,6 +362,7 @@ describe('Notifications -- preferences', () => {
       blocker: true,
       password_change: true,
       email_change: true,
+      phone_verification: true,
     });
   });
 
