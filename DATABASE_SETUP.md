@@ -39,7 +39,7 @@ npm start
 #### Windows
 1. **Download**: https://www.postgresql.org/download/windows/
 2. **Install**: Run the installer with these settings:
-   - Password: `password123` (remember this!)
+   - Password: (ENTER_YOUR_DB_PASSWORD)
    - Port: `5432`
    - Install pgAdmin 4 (optional GUI)
 3. **Create Database**:
@@ -48,7 +48,7 @@ npm start
    ```
 4. **Update .env**:
    ```
-   DATABASE_URL=postgresql://postgres:password123@localhost:5432/commandcenter
+   DATABASE_URL=(ENTER_YOUR_DATABASE_URL)
    ```
 
 #### macOS
@@ -70,7 +70,7 @@ sudo -u postgres createdb commandcenter
 
 ### Option 2: Install MongoDB Directly
 
-> **Not currently required.** MongoDB is not used by the running app today — this section is kept for when it's deliberately reintroduced (see the rebuild blueprint's roadmap). Skip this for now.
+> **Not currently required.** MongoDB is not used by the running app today — this section is kept for when it's deliberately reintroduced (see the rebuild blueprint's roadmap). Skip this for now[...] 
 
 #### Windows
 1. **Download**: https://www.mongodb.com/try/download/community
@@ -104,7 +104,7 @@ sudo systemctl start mongod
 2. **Create Database**: Get connection string
 3. **Update .env**:
    ```
-   DATABASE_URL=postgresql://[user]:[password]@[host]:[port]/[dbname]
+   DATABASE_URL=(ENTER_YOUR_DATABASE_URL)
    ```
 
 #### MongoDB Atlas
@@ -117,7 +117,7 @@ sudo systemctl start mongod
 ### backend/.env (Required)
 ```env
 # PostgreSQL (Primary Database)
-DATABASE_URL=postgresql://postgres:password123@localhost:5432/commandcenter
+DATABASE_URL=(ENTER_YOUR_DATABASE_URL)
 
 # MongoDB and Redis are not currently used by the app — omit them.
 
@@ -142,7 +142,7 @@ services:
     environment:
       POSTGRES_DB: commandcenter
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password123
+      POSTGRES_PASSWORD: (ENTER_YOUR_DB_PASSWORD)
     ports:
       - "5432:5432"
     volumes:
