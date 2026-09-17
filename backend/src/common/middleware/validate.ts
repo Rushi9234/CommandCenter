@@ -39,5 +39,5 @@ export const validateUuidParams = (...paramNames: string[]) => {
   for (const name of paramNames) {
     shape[name] = z.string().uuid(`Invalid ${name}`);
   }
-  return validate(z.object(shape), 'params');
+  return validate(z.object(shape).passthrough(), 'params');
 };

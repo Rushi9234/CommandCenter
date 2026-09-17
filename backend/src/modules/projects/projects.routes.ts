@@ -121,10 +121,84 @@ router.delete(
   '/tasks/:taskId',
   authenticate,
   validateUuidParams('taskId'),
-  requireAccess((req) => tasksRepository.canWriteTask(req.user!.userId, req.params.taskId), 'Access denied to this task'),
+  requireAccess((req) => tasksRepository.canDeleteTask(req.user!.userId, req.params.taskId), 'Access denied to delete this task'),
   asyncHandler(projectsController.deleteTask)
 );
 
 router.get('/tasks/my', authenticate, asyncHandler(projectsController.getMyTasks));
+
+router.post(
+  '/tasks/:taskId/submit',
+  authenticate,
+  validateUuidParams('taskId'),
+  asyncHandler(projectsController.submitTaskForReview)
+);
+
+router.post(
+  '/tasks/:taskId/approve',
+  authenticate,
+  validateUuidParams('taskId'),
+  asyncHandler(projectsController.approveTask)
+);
+
+router.post(
+  '/tasks/:taskId/request-changes',
+  authenticate,
+  validateUuidParams('taskId'),
+  asyncHandler(projectsController.requestTaskChanges)
+);
+
+router.post(
+  '/classrooms/:classId/batch-tasks',
+  authenticate,
+  validateUuidParams('classId'),
+  asyncHandler(projectsController.createBatchTeamTasks)
+);
+
+router.get(
+  '/classrooms/:classId/members/search',
+  authenticate,
+  validateUuidParams('classId'),
+  asyncHandler(projectsController.searchClassroomMembers)
+);
+
+// Collaboration routes
+router.post(
+  '/projects/:projectId/collaborate',
+  authenticate,
+  validateUuidParams('projectId'),
+  asyncHandler(projectsController.requestCollaboration)
+);
+
+router.post(
+  '/projects/:projectId/collaboration/:targetUserId/accept',
+  authenticate,
+  validateUuidParams('projectId'),
+  validateUuidParams('targetUserId'),
+  asyncHandler(projectsController.acceptCollaboration)
+);
+
+router.post(
+  '/projects/:projectId/collaboration/:targetUserId/reject',
+  authenticate,
+  validateUuidParams('projectId'),
+  validateUuidParams('targetUserId'),
+  asyncHandler(projectsController.rejectCollaboration)
+);
+
+router.post(
+  '/projects/:projectId/collaboration/:targetUserId/revoke',
+  authenticate,
+  validateUuidParams('projectId'),
+  validateUuidParams('targetUserId'),
+  asyncHandler(projectsController.revokeCollaboration)
+);
+
+router.get(
+  '/projects/:projectId/collaborators',
+  authenticate,
+  validateUuidParams('projectId'),
+  asyncHandler(projectsController.getProjectCollaborators)
+);
 
 export default router;

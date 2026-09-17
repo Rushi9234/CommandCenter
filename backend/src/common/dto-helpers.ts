@@ -17,3 +17,18 @@ export const requiredString = (message: string, minLength: number = 1, maxLength
   const stringSchema = maxLength !== undefined ? z.string().min(minLength, message).max(maxLength, message) : z.string().min(minLength, message);
   return z.preprocess((val) => (val === undefined || val === null ? '' : val), stringSchema);
 };
+
+export const optionalUuid = (message: string = 'Invalid UUID') => {
+  return z.preprocess(
+    (val) => (val === '' || val === null ? undefined : val),
+    z.string().uuid(message).optional()
+  );
+};
+
+export const optionalString = (maxLength?: number) => {
+  const schema = maxLength !== undefined ? z.string().max(maxLength).optional() : z.string().optional();
+  return z.preprocess(
+    (val) => (val === '' || val === null ? undefined : val),
+    schema
+  );
+};

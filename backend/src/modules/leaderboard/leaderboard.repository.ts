@@ -1,5 +1,17 @@
 import { query } from '../../db/client';
 
+// Leaderboard period filter: 'all' preserves the original, unfiltered
+// aggregate exactly (verified byte-for-byte equivalent to the pre-period
+// query below). 'today'/'week'/'month' scope the WORK inputs (log
+// quality/count, completed tasks) to a calendar-aligned window via
+// date_trunc. Streak (`stored_streak_count`/`live_streak`) is deliberately
+// NEVER windowed by period -- a streak is an inherently rolling,
+// all-time-consecutive-days construct; showing "This Month"'s streak as
+// reset-to-zero-at-the-1st would be actively misleading, not a genuine
+// per-period view. See leaderboard.service.ts for the scoring formula
+// that consumes these fields.
+export type LeaderboardPeriod = 'all' | 'today' | 'week' | 'month';
+
 // Milestone 10: one aggregate query replaces the old per-user fan-out
 // (getAllUsers + N x [getUserById, getUserLogs x2, getUserTasks,
 // calculateStreak, updateUser]). Every sub-metric here reproduces the
@@ -23,6 +35,7 @@ export interface LeaderboardAggregateRow {
   user_id: string;
   username: string;
   full_name: string;
+  avatar_key: string | null;
   stored_streak_count: number;
   log_count_30: number;
   quality_sum_30: number;
@@ -37,11 +50,34 @@ export interface LeaderboardAggregateRow {
   leaderboard_visible: string | null;
 }
 
+// $1 is the period text ('all' | 'today' | 'week' | 'month'). period_bounds
+// resolves it to a single start-of-window timestamp (NULL for 'all', which
+// makes every downstream "period_start IS NULL OR ..." filter a no-op --
+// so period='all' is byte-for-byte identical to the original, pre-period
+// query). period_logs applies that window to daily_logs ONCE; ranked_logs/
+// recent_30_stats/log_totals all read from it, so "30 most recent logs"
+// and "total logs" both become period-scoped together. task_stats' window
+// is applied separately (tasks.completed_at, not daily_logs.created_at).
+// gapped_dates/streaks deliberately read from the UNFILTERED daily_logs --
+// see the LeaderboardPeriod comment above for why streak is never windowed.
 const AGGREGATE_QUERY = `
-  WITH ranked_logs AS (
+  WITH period_bounds AS (
+    SELECT CASE $1::text
+      WHEN 'today' THEN date_trunc('day', CURRENT_TIMESTAMP)
+      WHEN 'week' THEN date_trunc('week', CURRENT_TIMESTAMP)
+      WHEN 'month' THEN date_trunc('month', CURRENT_TIMESTAMP)
+      ELSE NULL
+    END AS period_start
+  ),
+  period_logs AS (
+    SELECT d.*
+    FROM daily_logs d, period_bounds b
+    WHERE b.period_start IS NULL OR d.created_at >= b.period_start
+  ),
+  ranked_logs AS (
     SELECT user_id, word_count,
            ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC) AS rn
-    FROM daily_logs
+    FROM period_logs
   ),
   recent_30_stats AS (
     SELECT user_id,
@@ -53,13 +89,17 @@ const AGGREGATE_QUERY = `
   ),
   log_totals AS (
     SELECT user_id, COUNT(*) AS total_logs
-    FROM daily_logs
+    FROM period_logs
     GROUP BY user_id
   ),
   task_stats AS (
     SELECT u.user_id,
-           COUNT(DISTINCT t.task_id) FILTER (WHERE t.status = 'done') AS completed_tasks
+           COUNT(DISTINCT t.task_id) FILTER (
+             WHERE t.status = 'done'
+               AND (b.period_start IS NULL OR t.completed_at >= b.period_start)
+           ) AS completed_tasks
     FROM users u
+    CROSS JOIN period_bounds b
     LEFT JOIN tasks t ON (
       t.created_by = u.user_id
       OR t.project_id IN (
@@ -85,6 +125,7 @@ const AGGREGATE_QUERY = `
     u.user_id,
     u.username,
     u.full_name,
+    u.avatar_key,
     u.streak_count AS stored_streak_count,
     COALESCE(l30.log_count_30, 0)::int AS log_count_30,
     COALESCE(l30.quality_sum_30, 0)::int AS quality_sum_30,
@@ -100,8 +141,8 @@ const AGGREGATE_QUERY = `
 `;
 
 export class LeaderboardRepository {
-  async getAggregateStats(): Promise<LeaderboardAggregateRow[]> {
-    return query<LeaderboardAggregateRow>(AGGREGATE_QUERY);
+  async getAggregateStats(period: LeaderboardPeriod = 'all'): Promise<LeaderboardAggregateRow[]> {
+    return query<LeaderboardAggregateRow>(AGGREGATE_QUERY, [period]);
   }
 
   // Replaces N sequential single-row UPDATEs with one statement. Matches

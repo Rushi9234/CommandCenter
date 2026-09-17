@@ -171,8 +171,12 @@ export class TeamsRepository {
   }
 
   async getUserTeams(userId: string) {
+    // tm.role is the caller's own membership role on each team, exposed as
+    // my_role -- lets the frontend (Goals' review/approve UI) know whether
+    // the caller is a leader (owner/admin) of a given team without a
+    // second request per team.
     const text = `
-      SELECT t.* FROM teams t
+      SELECT t.*, tm.role AS my_role FROM teams t
       INNER JOIN team_members tm ON t.team_id = tm.team_id
       WHERE tm.user_id = $1
       ORDER BY t.created_at DESC
@@ -219,6 +223,12 @@ export class TeamsRepository {
          RETURNING role`,
         [teamId, targetUserId, role, requesterRole]
       );
+      if (result.rows.length > 0) {
+        await client.query(
+          `UPDATE join_requests SET status = 'approved' WHERE team_id = $1 AND user_id = $2 AND status = 'pending'`,
+          [teamId, targetUserId]
+        );
+      }
       return result.rows.length > 0 ? result.rows[0] : null;
     });
   }
@@ -244,7 +254,8 @@ export class TeamsRepository {
         u.user_id,
         u.full_name,
         u.username,
-        u.email
+        u.email,
+        u.avatar_key
       FROM team_members tm
       INNER JOIN users u ON tm.user_id = u.user_id
       WHERE tm.team_id = $1
@@ -432,6 +443,11 @@ export class TeamsRepository {
         }
       }
 
+      await client.query(
+        `UPDATE join_requests SET status = 'approved' WHERE team_id = $1 AND user_id = $2 AND status = 'pending'`,
+        [invite.team_id, userId]
+      );
+
       return invite;
     });
   }
@@ -546,6 +562,7 @@ export class TeamsRepository {
       WHERE team_id = $1 AND user_id = $2
         AND role != 'owner'
         AND (role != 'admin' OR $3 = 'owner')
+        AND ($4 != 'admin' OR $3 = 'owner')
       RETURNING role
     `;
     return queryOne<any>(text, [teamId, targetUserId, requesterRole, newRole]);
@@ -585,9 +602,13 @@ export class TeamsRepository {
 
   async getTeamJoinRequests(teamId: string) {
     const text = `
-      SELECT * FROM join_requests
-      WHERE team_id = $1
-      ORDER BY created_at DESC
+      SELECT jr.* FROM join_requests jr
+      WHERE jr.team_id = $1 AND jr.status = 'pending'
+        AND NOT EXISTS (
+          SELECT 1 FROM team_members tm
+          WHERE tm.team_id = jr.team_id AND tm.user_id = jr.user_id
+        )
+      ORDER BY jr.created_at DESC
     `;
     return query<any>(text, [teamId]);
   }

@@ -3,6 +3,8 @@ import { motion } from 'framer-motion';
 import { useAuth } from '../hooks/useAuth';
 import { useApiRequest } from '../hooks/useApiRequest';
 import * as api from '../services/api';
+import Avatar from '../components/common/Avatar';
+import StatusBadge from '../components/common/StatusBadge';
 
 export default function Grid() {
   const { user } = useAuth();
@@ -32,15 +34,11 @@ export default function Grid() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const getInitials = (name: string) => {
-    return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
-  };
-
   const getRankBadge = (rank: number) => {
-    if (rank === 1) return { emoji: '🥇', class: 'bg-gradient-to-br from-yellow-400 to-yellow-600', text: 'text-yellow-900' };
-    if (rank === 2) return { emoji: '🥈', class: 'bg-gradient-to-br from-gray-300 to-gray-500', text: 'text-gray-900' };
-    if (rank === 3) return { emoji: '🥉', class: 'bg-gradient-to-br from-orange-400 to-orange-600', text: 'text-orange-900' };
-    return { emoji: `#${rank}`, class: 'bg-gray-100', text: 'text-gray-700' };
+    if (rank === 1) return { emoji: '🥇', class: 'bg-gradient-to-br from-amber-300 to-amber-500 shadow-md', text: 'text-amber-950' };
+    if (rank === 2) return { emoji: '🥈', class: 'bg-gradient-to-br from-slate-200 to-slate-400 shadow-sm', text: 'text-slate-900' };
+    if (rank === 3) return { emoji: '🥉', class: 'bg-gradient-to-br from-amber-600 to-amber-800 shadow-sm', text: 'text-white' };
+    return { emoji: `#${rank}`, class: 'bg-gray-100 border border-gray-200', text: 'text-gray-700' };
   };
 
   const myRank = leaderboard.findIndex(u => u.user_id === user?.user_id) + 1;
@@ -74,7 +72,7 @@ export default function Grid() {
           <>
             {/* Top 3 */}
             {leaderboard.length >= 3 && (
-              <div className="grid grid-cols-3 gap-4 mb-8">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
                 {[1, 0, 2].map((idx) => {
                   const player = leaderboard[idx];
                   const rank = idx + 1;
@@ -85,24 +83,26 @@ export default function Grid() {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: idx * 0.1 }}
-                      className={`pro-card p-6 text-center ${rank === 1 ? 'transform scale-105' : ''}`}
+                      className={`pro-card p-6 text-center bg-white rounded-xl border border-gray-200 shadow-sm ${
+                        rank === 1 ? 'transform sm:-translate-y-2 border-amber-300 ring-2 ring-amber-400/20' : ''
+                      }`}
                     >
-                      <div className={`w-16 h-16 mx-auto rounded-full ${badge.class} flex items-center justify-center text-2xl font-bold ${badge.text} mb-3`}>
+                      <div className={`w-14 h-14 mx-auto rounded-full ${badge.class} flex items-center justify-center text-xl font-bold ${badge.text} mb-3`}>
                         {badge.emoji}
                       </div>
-                      <div className="avatar w-20 h-20 mx-auto mb-3 text-lg">
-                        {getInitials(player.full_name)}
+                      <div className="flex justify-center mb-3">
+                        <Avatar name={player.full_name} src={player.avatar_url} size="xl" />
                       </div>
-                      <h3 className="font-bold text-gray-900">{player.full_name}</h3>
-                      <p className="text-sm text-gray-600">@{player.username}</p>
-                      <div className="mt-4 flex items-center justify-center gap-4">
+                      <h3 className="font-bold text-gray-900 truncate">{player.full_name}</h3>
+                      <p className="text-xs text-gray-500">@{player.username}</p>
+                      <div className="mt-4 flex items-center justify-center gap-4 pt-3 border-t border-gray-100">
                         <div className="text-center">
-                          <div className="text-2xl font-bold text-blue-600">{player.impact_score}</div>
-                          <div className="text-xs text-gray-600">Score</div>
+                          <div className="text-xl font-bold text-blue-600">{player.impact_score}</div>
+                          <div className="text-xs text-gray-500 font-medium">Score</div>
                         </div>
                         <div className="text-center">
-                          <div className="text-2xl font-bold text-orange-600">{player.streak_count}</div>
-                          <div className="text-xs text-gray-600">🔥 Streak</div>
+                          <div className="text-xl font-bold text-orange-600">{player.streak_count}</div>
+                          <div className="text-xs text-gray-500 font-medium">🔥 Streak</div>
                         </div>
                       </div>
                     </motion.div>
@@ -112,52 +112,50 @@ export default function Grid() {
             )}
 
             {/* Rest of Rankings */}
-            <div className="pro-card p-6">
+            <div className="pro-card p-6 bg-white rounded-xl border border-gray-200">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">All Rankings</h2>
               <div className="space-y-2">
                 {leaderboard.map((player, index) => {
                   const rank = index + 1;
                   const badge = getRankBadge(rank);
                   const isCurrentUser = player.user_id === user?.user_id;
-                  
+
                   return (
                     <motion.div
                       key={player.user_id}
                       initial={{ opacity: 0, x: -20 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: index * 0.03 }}
-                      className={`flex items-center justify-between p-4 rounded-lg transition-all ${
-                        isCurrentUser ? 'bg-blue-50 border-2 border-blue-500' : 'pro-card-hover'
+                      className={`flex items-center justify-between p-4 rounded-xl transition-all ${
+                        isCurrentUser ? 'bg-blue-50/60 border-2 border-blue-500 shadow-xs' : 'pro-card-hover border border-gray-100'
                       }`}
                     >
-                      <div className="flex items-center gap-4 flex-1">
-                        <div className={`w-10 h-10 rounded-full ${badge.class} flex items-center justify-center font-bold text-sm ${badge.text}`}>
+                      <div className="flex items-center gap-3.5 flex-1 min-w-0">
+                        <div className={`w-9 h-9 rounded-full shrink-0 ${badge.class} flex items-center justify-center font-bold text-xs ${badge.text}`}>
                           {badge.emoji}
                         </div>
-                        <div className="avatar w-10 h-10 text-sm">
-                          {getInitials(player.full_name)}
-                        </div>
-                        <div className="flex-1">
-                          <div className="font-medium text-gray-900 flex items-center gap-2">
-                            {player.full_name}
-                            {isCurrentUser && <span className="badge badge-blue text-xs">You</span>}
+                        <Avatar name={player.full_name} src={player.avatar_url} size="md" />
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-gray-900 flex items-center gap-2 truncate">
+                            <span className="truncate">{player.full_name}</span>
+                            {isCurrentUser && <StatusBadge status="You" />}
                           </div>
-                          <div className="text-sm text-gray-600">@{player.username}</div>
+                          <div className="text-xs text-gray-500">@{player.username}</div>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-6">
+                      <div className="flex items-center gap-4 sm:gap-6 shrink-0">
                         <div className="text-center">
-                          <div className="text-xl font-bold text-blue-600">{player.impact_score}</div>
-                          <div className="text-xs text-gray-600">Score</div>
+                          <div className="text-lg sm:text-xl font-bold text-blue-600">{player.impact_score}</div>
+                          <div className="text-[11px] text-gray-500">Score</div>
                         </div>
                         <div className="text-center">
-                          <div className="text-xl font-bold text-orange-600">{player.streak_count}</div>
-                          <div className="text-xs text-gray-600">🔥 Streak</div>
+                          <div className="text-lg sm:text-xl font-bold text-orange-600">{player.streak_count}</div>
+                          <div className="text-[11px] text-gray-500">🔥 Streak</div>
                         </div>
-                        <div className="text-center">
-                          <div className="text-xl font-bold text-green-600">{player.recent_activity}</div>
-                          <div className="text-xs text-gray-600">Logs (7d)</div>
+                        <div className="text-center hidden sm:block">
+                          <div className="text-lg sm:text-xl font-bold text-green-600">{player.recent_activity}</div>
+                          <div className="text-[11px] text-gray-500">Logs (7d)</div>
                         </div>
                       </div>
                     </motion.div>

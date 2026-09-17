@@ -38,28 +38,43 @@ export class ProjectsRepository {
   }
 
   async getProject(projectId: string) {
-    const text = 'SELECT * FROM projects WHERE project_id = $1';
+    const text = `
+      SELECT p.*, u.full_name as owner_name, u.username as owner_username
+      FROM projects p
+      LEFT JOIN users u ON p.created_by = u.user_id
+      WHERE p.project_id = $1
+    `;
     return queryOne<any>(text, [projectId]);
   }
 
   async getUserProjects(userId: string) {
     const text = `
-      SELECT * FROM projects
-      WHERE created_by = $1 OR team_id IN (
-        SELECT team_id FROM team_members WHERE user_id = $1
+      SELECT p.*, u.full_name as owner_name, u.username as owner_username
+      FROM projects p
+      LEFT JOIN users u ON p.created_by = u.user_id
+      WHERE p.created_by = $1 OR (
+        p.team_id IS NOT NULL AND p.team_id IN (
+          SELECT team_id FROM team_members WHERE user_id = $1
+        )
+      ) OR EXISTS (
+        SELECT 1 FROM project_collaborators
+        WHERE project_id = p.project_id AND user_id = $1 AND status = 'accepted'
       )
-      ORDER BY created_at DESC
+      ORDER BY p.created_at DESC
     `;
     return query(text, [userId]);
   }
 
-  async getAllPublicProjects() {
+  async getAllPublicProjects(userId?: string) {
     const text = `
-      SELECT * FROM projects
-      WHERE is_public = true
-      ORDER BY created_at DESC
+      SELECT p.*, u.full_name as owner_name, u.username as owner_username, pc.status as collaboration_status
+      FROM projects p
+      LEFT JOIN users u ON p.created_by = u.user_id
+      LEFT JOIN project_collaborators pc ON pc.project_id = p.project_id AND pc.user_id = $1
+      WHERE p.is_public = true
+      ORDER BY p.created_at DESC
     `;
-    return query<any>(text);
+    return query<any>(text, [userId || null]);
   }
 
   async updateProject(projectId: string, updates: Record<string, any>) {
@@ -85,9 +100,11 @@ export class ProjectsRepository {
 
   async getTeamProjects(teamId: string) {
     const text = `
-      SELECT * FROM projects
-      WHERE team_id = $1
-      ORDER BY created_at DESC
+      SELECT p.*, u.full_name as owner_name, u.username as owner_username
+      FROM projects p
+      LEFT JOIN users u ON p.created_by = u.user_id
+      WHERE p.team_id = $1
+      ORDER BY p.created_at DESC
     `;
     return query(text, [teamId]);
   }
@@ -97,8 +114,13 @@ export class ProjectsRepository {
       SELECT p.project_id FROM projects p
       WHERE p.project_id = $1 AND (
         p.created_by = $2 OR
-        p.team_id IN (
+        p.is_public = true OR
+        (p.team_id IS NOT NULL AND p.team_id IN (
           SELECT team_id FROM team_members WHERE user_id = $2
+        )) OR
+        EXISTS (
+          SELECT 1 FROM project_collaborators
+          WHERE project_id = p.project_id AND user_id = $2 AND status = 'accepted'
         )
       )
     `;
@@ -106,18 +128,17 @@ export class ProjectsRepository {
     return result !== null;
   }
 
-  // Milestone 5 review: canAccessProject alone let a 'viewer' -- a role the
-  // model documents as read-only -- update a project, because it only
-  // checked "is any kind of team member", not which role. This is the same
-  // check with `role != 'viewer'` added to the team-membership branch;
-  // creator ownership still bypasses role entirely, same as before.
   async canWriteProject(userId: string, projectId: string): Promise<boolean> {
     const text = `
       SELECT p.project_id FROM projects p
       WHERE p.project_id = $1 AND (
         p.created_by = $2 OR
-        p.team_id IN (
+        (p.team_id IS NOT NULL AND p.team_id IN (
           SELECT team_id FROM team_members WHERE user_id = $2 AND role != 'viewer'
+        )) OR
+        EXISTS (
+          SELECT 1 FROM project_collaborators
+          WHERE project_id = p.project_id AND user_id = $2 AND status = 'accepted'
         )
       )
     `;
@@ -125,16 +146,58 @@ export class ProjectsRepository {
     return result !== null;
   }
 
-  // Milestone 5: delete keeps its own, narrower rule -- creator only, not
-  // "creator or any team member" like canAccessProject. Unchanged from the
-  // original behavior; pulled into the repository so requireAccess can call
-  // it the same way it calls every other access check, instead of
-  // projects.service.ts fetching the row and comparing created_by inline.
   async isProjectCreator(userId: string, projectId: string): Promise<boolean> {
     const result = await queryOne('SELECT project_id FROM projects WHERE project_id = $1 AND created_by = $2', [
       projectId,
       userId,
     ]);
+    return result !== null;
+  }
+
+  async createCollaborationRequest(projectId: string, userId: string) {
+    const text = `
+      INSERT INTO project_collaborators (project_id, user_id, status)
+      VALUES ($1, $2, 'pending')
+      ON CONFLICT (project_id, user_id) DO UPDATE SET
+        status = 'pending',
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING *
+    `;
+    return queryOne<any>(text, [projectId, userId]);
+  }
+
+  async getCollaborationRequest(projectId: string, userId: string) {
+    const text = 'SELECT * FROM project_collaborators WHERE project_id = $1 AND user_id = $2';
+    return queryOne<any>(text, [projectId, userId]);
+  }
+
+  async getProjectCollaborators(projectId: string) {
+    const text = `
+      SELECT pc.*, u.full_name, u.username, u.email, u.avatar_key
+      FROM project_collaborators pc
+      JOIN users u ON pc.user_id = u.user_id
+      WHERE pc.project_id = $1
+      ORDER BY pc.requested_at DESC
+    `;
+    return query<any>(text, [projectId]);
+  }
+
+  async updateCollaborationStatus(projectId: string, userId: string, status: string) {
+    const text = `
+      UPDATE project_collaborators
+      SET status = $3, updated_at = CURRENT_TIMESTAMP
+      WHERE project_id = $1 AND user_id = $2
+      RETURNING *
+    `;
+    return queryOne<any>(text, [projectId, userId, status]);
+  }
+
+  async isAcceptedCollaborator(userId: string, projectId: string): Promise<boolean> {
+    const text = `
+      SELECT 1 FROM project_collaborators
+      WHERE project_id = $1 AND user_id = $2 AND status = 'accepted'
+    `;
+    const result = await queryOne(text, [projectId, userId]);
     return result !== null;
   }
 }

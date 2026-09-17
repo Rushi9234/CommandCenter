@@ -19,6 +19,7 @@ export const getEmailProvider = (): EmailProvider => {
 
   console.log('EMAIL DEBUG:', {
   provider: env.emailProvider,
+  hasResendKey: !!process.env.RESEND_API_KEY,
   hasHost: !!process.env.SMTP_HOST,
   hasPort: !!process.env.SMTP_PORT,
   hasUser: !!process.env.SMTP_USER,

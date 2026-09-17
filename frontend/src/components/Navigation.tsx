@@ -1,95 +1,111 @@
-import { Link, useLocation } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { useState, useRef, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import NotificationBell from './NotificationBell';
+import Avatar from './common/Avatar';
 
-export default function Navigation() {
-  const location = useLocation();
+interface NavigationProps {
+  onToggleMobileSidebar?: () => void;
+  isMobileSidebarOpen?: boolean;
+}
+
+export default function Navigation({ onToggleMobileSidebar, isMobileSidebarOpen }: NavigationProps = {}) {
   const { user, logout } = useAuth();
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
 
-  const navItems = [
-    { path: '/pulse', label: 'Daily Logs' },
-    { path: '/projects', label: 'Projects' },
-    { path: '/teams', label: 'Teams' },
-    { path: '/goals', label: 'Goals' },
-    { path: '/leaderboard', label: 'Leaderboard' },
-    { path: '/help', label: 'Help Center' },
-    { path: '/analytics', label: 'Analytics' },
-  ];
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setAccountMenuOpen(false);
+      }
+    };
 
-  const getInitials = (name: string) => {
-    return name
-      .split(' ')
-      .map(n => n[0])
-      .join('')
-      .toUpperCase()
-      .slice(0, 2);
-  };
+    if (accountMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [accountMenuOpen]);
 
   return (
-    <nav className="bg-white border-b border-gray-200 sticky top-0 z-50 shadow-sm">
-      <div className="max-w-7xl mx-auto px-6">
-        <div className="flex items-center justify-between h-16">
-          {/* Logo */}
-          <Link to="/pulse" className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-md">
-              <span className="text-white font-bold text-sm">CC</span>
-            </div>
-            <span className="text-xl font-bold text-gray-900">CommandCenter</span>
-          </Link>
+    <header className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-xs flex-shrink-0 h-16">
+      <div className="px-4 sm:px-6 h-full flex items-center justify-between gap-4">
+        {/* Left: Mobile Hamburger Toggle + Mobile Branding */}
+        <div className="flex items-center gap-3">
+          {onToggleMobileSidebar && (
+            <button
+              onClick={onToggleMobileSidebar}
+              className="p-2 -ml-1 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg lg:hidden transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500"
+              aria-label="Toggle navigation menu"
+              aria-expanded={isMobileSidebarOpen}
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {isMobileSidebarOpen ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                )}
+              </svg>
+            </button>
+          )}
 
-          {/* Navigation Items */}
-          <div className="flex items-center gap-1">
-            {navItems.map((item) => {
-              const isActive = location.pathname === item.path;
-              return (
-                <Link
-                  key={item.path}
-                  to={item.path}
-                  className="relative"
-                >
-                  <motion.div
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    className={`px-4 py-2 rounded-lg transition-colors ${
-                      isActive
-                        ? 'bg-blue-50 text-blue-700 font-medium'
-                        : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                    }`}
-                  >
-                    <span className="text-sm font-medium">{item.label}</span>
-                  </motion.div>
-                  {isActive && (
-                    <motion.div
-                      layoutId="activeTab"
-                      className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600"
-                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                    />
-                  )}
-                </Link>
-              );
-            })}
+          {/* Mobile Branding (hidden on desktop where Sidebar displays primary branding) */}
+          <Link to="/pulse" className="flex items-center gap-2 lg:hidden">
+            <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-lg flex items-center justify-center shadow-xs">
+              <span className="text-white font-bold text-xs">CC</span>
+            </div>
+            <span className="text-sm font-bold text-gray-900 tracking-tight">CommandCenter</span>
+          </Link>
+        </div>
+
+        {/* Center: Space for header content / breadcrumbs */}
+        <div className="flex-1 hidden md:flex items-center" />
+
+        {/* Right: Notification Bell + User Menu */}
+        <div className="flex items-center gap-3 sm:gap-4">
+          <div data-tour-target="notifications">
+            <NotificationBell />
           </div>
 
-          {/* User Menu */}
-          <div className="flex items-center gap-4">
-            <div className="text-right hidden sm:block">
-              <div className="text-sm font-medium text-gray-900">{user?.full_name}</div>
-              <div className="text-xs text-gray-500 capitalize">{user?.role}</div>
-            </div>
-            
-            <div className="avatar w-10 h-10 text-sm">
-              {getInitials(user?.full_name || 'User')}
-            </div>
-
+          <div ref={menuRef} className="relative">
             <button
-              onClick={logout}
-              className="btn-ghost text-sm"
+              onClick={() => setAccountMenuOpen(!accountMenuOpen)}
+              className="flex items-center gap-2 hover:bg-gray-100 rounded-lg p-1.5 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500"
+              aria-label="Account menu"
+              aria-expanded={accountMenuOpen}
+              data-tour-target="profile"
             >
-              Sign out
+              <div className="text-right hidden sm:block">
+                <div className="text-sm font-medium text-gray-900 leading-snug">{user?.full_name}</div>
+                <div className="text-xs text-gray-500 capitalize leading-none">{user?.role}</div>
+              </div>
+
+              <Avatar name={user?.full_name || 'User'} src={user?.avatar_url} size="sm" />
             </button>
+
+            {accountMenuOpen && (
+              <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
+                <Link
+                  to="/profile"
+                  onClick={() => setAccountMenuOpen(false)}
+                  className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  My Profile
+                </Link>
+                <button
+                  onClick={() => {
+                    setAccountMenuOpen(false);
+                    logout();
+                  }}
+                  className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
-    </nav>
+    </header>
   );
 }

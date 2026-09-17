@@ -1,13 +1,23 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import * as api from '../services/api';
+import Avatar from '../components/common/Avatar';
+import StatusBadge from '../components/common/StatusBadge';
+import SearchField from '../components/common/SearchField';
+import CompactTeamSelector from '../components/common/CompactTeamSelector';
+import WorkActivityTimeline from '../components/WorkActivityTimeline';
+import GoalDetailView from '../components/GoalDetailView';
 
 export default function Goals() {
   const [goals, setGoals] = useState<any[]>([]);
   const [hierarchy, setHierarchy] = useState<any[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [selectedTimelineGoal, setSelectedTimelineGoal] = useState<any>(null);
+  const [selectedDetailGoalId, setSelectedDetailGoalId] = useState<string | null>(null);
   const [selectedTeam, setSelectedTeam] = useState<string>('');
   const [teams, setTeams] = useState<any[]>([]);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [activeTypeFilter, setActiveTypeFilter] = useState<string>('all');
   const [newGoal, setNewGoal] = useState({
     title: '',
     description: '',
@@ -27,7 +37,7 @@ export default function Goals() {
       const params = selectedTeam ? `?teamId=${selectedTeam}` : '';
       const res = await api.getGoals(params);
       setGoals(res.data.data);
-      
+
       const hierarchyRes = await api.getGoalHierarchy(params);
       setHierarchy(hierarchyRes.data.data);
     } catch (error) {
@@ -65,14 +75,17 @@ export default function Goals() {
     }
   };
 
+  const filterGoalTree = (goal: any): boolean => {
+    const matchesSearch = !searchQuery ||
+      goal.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      goal.description?.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesType = activeTypeFilter === 'all' || goal.goal_type === activeTypeFilter;
+    const hasMatchingChild = goal.children && goal.children.some((child: any) => filterGoalTree(child));
+    return (matchesSearch && matchesType) || hasMatchingChild;
+  };
+
   const renderGoalTree = (goal: any, level: number = 0) => {
-    const statusColors: any = {
-      planning: 'bg-gray-100 text-gray-700',
-      active: 'bg-blue-100 text-blue-700',
-      completed: 'bg-green-100 text-green-700',
-      at_risk: 'bg-yellow-100 text-yellow-700',
-      blocked: 'bg-red-100 text-red-700',
-    };
+    if (!filterGoalTree(goal)) return null;
 
     const typeIcons: any = {
       company: '🏢',
@@ -86,44 +99,88 @@ export default function Goals() {
         key={goal.goal_id}
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
-        className={`mb-3 ${level > 0 ? 'ml-8 border-l-2 border-gray-200 pl-4' : ''}`}
+        className={`mb-3 ${level > 0 ? 'ml-6 sm:ml-8 border-l-2 border-blue-100 pl-3 sm:pl-4' : ''}`}
       >
-        <div className="pro-card p-4 hover:shadow-md transition-shadow">
-          <div className="flex items-start justify-between">
-            <div className="flex-1">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-2xl">{typeIcons[goal.goal_type]}</span>
-                <h3 className="text-lg font-semibold text-gray-900">{goal.title}</h3>
-                <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColors[goal.status]}`}>
-                  {goal.status}
-                </span>
+        <div className="pro-card p-4 hover:shadow-md transition-shadow bg-white rounded-xl border border-gray-200">
+          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
+                <span className="text-xl shrink-0">{typeIcons[goal.goal_type] || '🎯'}</span>
+                <h3 className="text-base font-semibold text-gray-900 truncate">{goal.title}</h3>
+                <StatusBadge status={goal.status} />
+                {goal.creation_status === 'pending_approval' && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 font-semibold">
+                    ⏳ Proposed (Pending Approval)
+                  </span>
+                )}
+                {goal.creation_status === 'rejected' && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-rose-100 text-rose-900 border border-rose-300 font-semibold">
+                    ❌ Proposal Rejected
+                  </span>
+                )}
+                {goal.status === 'pending_review' && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-900 border border-blue-300 font-semibold">
+                    ◐ Pending Review
+                  </span>
+                )}
               </div>
-              <p className="text-sm text-gray-600 mb-3">{goal.description}</p>
-              
-              <div className="flex items-center gap-4 text-sm">
+              {goal.description && (
+                <p className="text-sm text-gray-600 mb-3 line-clamp-2">{goal.description}</p>
+              )}
+
+              <div className="flex items-center gap-4 text-xs sm:text-sm flex-wrap mt-2">
                 <div className="flex items-center gap-2">
-                  <div className="w-32 h-2 bg-gray-200 rounded-full overflow-hidden">
+                  <div className="w-28 sm:w-36 h-2 bg-gray-100 rounded-full overflow-hidden border border-gray-200">
                     <div
-                      className="h-full bg-gradient-to-r from-blue-500 to-purple-500"
+                      className="h-full bg-gradient-to-r from-blue-500 to-indigo-600 transition-all duration-300"
                       style={{ width: `${goal.progress || 0}%` }}
                     />
                   </div>
-                  <span className="text-gray-600 font-medium">{goal.progress || 0}%</span>
+                  <span className="text-gray-700 font-semibold">{goal.progress || 0}%</span>
                 </div>
-                
+
                 {goal.target_date && (
-                  <span className="text-gray-500">
+                  <span className="text-gray-500 flex items-center gap-1">
                     📅 {new Date(goal.target_date).toLocaleDateString()}
                   </span>
+                )}
+
+                {goal.owner && (
+                  <div className="flex items-center gap-1.5 ml-auto sm:ml-0">
+                    <Avatar name={goal.owner.full_name || goal.owner.name} src={goal.owner.avatar_url} size="sm" />
+                    <span className="text-xs text-gray-600 font-medium">{goal.owner.full_name || goal.owner.name}</span>
+                  </div>
                 )}
               </div>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-start">
+              <button
+                type="button"
+                onClick={() => setSelectedDetailGoalId(goal.goal_id)}
+                data-testid={`goal-detail-btn-${goal.goal_id}`}
+                title="View Goal Details & Evidence"
+                aria-label={`View details and evidence for ${goal.title}`}
+                className="text-xs text-indigo-700 hover:text-indigo-900 font-medium px-2.5 py-1 rounded-lg border border-indigo-200 hover:border-indigo-400 bg-indigo-50 hover:bg-indigo-100 transition-colors flex items-center gap-1 shadow-2xs"
+              >
+                <span>🛡️</span>
+                <span>Details & Evidence</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedTimelineGoal(goal)}
+                data-testid={`goal-timeline-btn-${goal.goal_id}`}
+                title="View Timeline"
+                aria-label={`View timeline for ${goal.title}`}
+                className="text-xs text-gray-600 hover:text-indigo-600 font-medium px-2 py-1 rounded border border-gray-200 hover:border-indigo-300 bg-gray-50 hover:bg-indigo-50 transition-colors flex items-center gap-1"
+              >
+                <span>📜</span>
+                <span>Timeline</span>
+              </button>
               <select
                 value={goal.status}
                 onChange={(e) => updateGoalStatus(goal.goal_id, e.target.value)}
-                className="input-field text-sm py-1"
+                className="input-field text-xs sm:text-sm py-1 px-2 border-gray-300 rounded-lg bg-gray-50 hover:bg-white transition-colors"
               >
                 <option value="planning">Planning</option>
                 <option value="active">Active</option>
@@ -136,7 +193,7 @@ export default function Goals() {
         </div>
 
         {goal.children && goal.children.length > 0 && (
-          <div className="mt-2">
+          <div className="mt-2 space-y-2">
             {goal.children.map((child: any) => renderGoalTree(child, level + 1))}
           </div>
         )}
@@ -156,33 +213,44 @@ export default function Goals() {
         </button>
       </div>
 
-      <div className="mb-6 flex gap-4">
-        <select
-          value={selectedTeam}
-          onChange={(e) => setSelectedTeam(e.target.value)}
-          className="input-field"
-        >
-          <option value="">Personal Goals</option>
-          {teams.map((team) => (
-            <option key={team.team_id} value={team.team_id}>
-              {team.team_name}
-            </option>
-          ))}
-        </select>
+      <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+        <div className="flex flex-wrap items-center gap-3 flex-1">
+          <CompactTeamSelector
+            teams={[{ team_id: '', team_name: '👤 Personal Goals' }, ...teams]}
+            selectedTeamId={selectedTeam}
+            onSelectTeam={(t) => setSelectedTeam(t.team_id)}
+            placeholder="Filter teams..."
+          />
 
-        <div className="flex gap-2">
-          <button className="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
-            🏢 Company
-          </button>
-          <button className="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
-            🏛️ Department
-          </button>
-          <button className="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
-            📁 Project
-          </button>
-          <button className="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
-            🎯 Milestone
-          </button>
+          <SearchField
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder="Search goals..."
+            className="w-full md:w-64"
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
+          {[
+            { id: 'all', label: 'All Types', icon: '🎯' },
+            { id: 'company', label: 'Company', icon: '🏢' },
+            { id: 'department', label: 'Department', icon: '🏛️' },
+            { id: 'project', label: 'Project', icon: '📁' },
+            { id: 'milestone', label: 'Milestone', icon: '🎯' },
+          ].map((type) => (
+            <button
+              key={type.id}
+              onClick={() => setActiveTypeFilter(type.id)}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-all flex items-center gap-1 ${
+                activeTypeFilter === type.id
+                  ? 'bg-blue-50 text-blue-700 border-blue-300 shadow-xs'
+                  : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              <span>{type.icon}</span>
+              <span>{type.label}</span>
+            </button>
+          ))}
         </div>
       </div>
 
@@ -298,6 +366,26 @@ export default function Goals() {
             </form>
           </motion.div>
         </div>
+      )}
+
+      {/* Goal Work Activity Timeline Modal */}
+      {selectedTimelineGoal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <WorkActivityTimeline
+            artifactType="goal"
+            artifactId={selectedTimelineGoal.goal_id}
+            title={selectedTimelineGoal.title}
+            onClose={() => setSelectedTimelineGoal(null)}
+          />
+        </div>
+      )}
+
+      {/* Dedicated Goal Detail & Evidence Modal */}
+      {selectedDetailGoalId && (
+        <GoalDetailView
+          goalId={selectedDetailGoalId}
+          onClose={() => setSelectedDetailGoalId(null)}
+        />
       )}
     </div>
   );

@@ -37,6 +37,8 @@ export const createTaskSchema = z.object({
   reviewer: z.string().optional(),
   dependencies: z.array(z.string()).max(MAX_TASK_REFERENCE_ARRAY_LENGTH).optional(),
   priority: z.string().optional(),
+  goalId: z.string().uuid().nullable().optional(),
+  goal_id: z.string().uuid().nullable().optional(),
 });
 
 // Milestone 35: was z.record(z.any()) -- any body key reached
@@ -77,7 +79,9 @@ export const updateTaskSchema = z
     contributors: z.array(z.string().uuid()).max(MAX_TASK_REFERENCE_ARRAY_LENGTH),
     reviewer: z.string().uuid().nullable(),
     dependencies: z.array(z.string().uuid()).max(MAX_TASK_REFERENCE_ARRAY_LENGTH),
-    status: z.enum(['todo', 'in_progress', 'review', 'done']),
+    status: z.enum(['todo', 'assigned', 'in_progress', 'review', 'done', 'submitted_for_review', 'changes_requested']),
     priority: z.enum(['low', 'medium', 'high']),
+    goal_id: z.string().uuid().nullable(),
+    goalId: z.string().uuid().nullable(),
   })
   .partial();

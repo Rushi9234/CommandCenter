@@ -74,4 +74,162 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
       },
     });
   }
+
+  // Password-change rate limiting: 3 attempts per hour, keyed by user ID.
+  // This is a sensitive account-modifying operation, and we want to prevent
+  // brute-force attacks while still allowing legitimate users to retry.
+  // Keyed by authenticated user ID (not IP) since this runs post-authentication.
+  createPasswordChangeLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 60 * 60 * 1000, // 1 hour
+      max: 3,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many password change attempts. Please try again in an hour.' });
+      },
+    });
+  }
+
+  // Avatar upload rate limiting: 10 uploads per day, keyed by user ID.
+  // Users own their avatars and might legitimately want to update them,
+  // but 10 per day prevents spam/abuse while staying generous.
+  createAvatarLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 24 * 60 * 60 * 1000, // 24 hours
+      max: 10,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many avatar uploads. Please try again tomorrow.' });
+      },
+    });
+  }
+
+  // Phase 4 email-change request rate limiting: 3 attempts per hour, keyed
+  // by user ID -- same threshold as createPasswordChangeLimiter (both are
+  // sensitive account-mutation actions with a legitimate-retry ceiling).
+  createEmailChangeLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 60 * 60 * 1000, // 1 hour
+      max: 3,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many email change attempts. Please try again in an hour.' });
+      },
+    });
+  }
+
+  // Phase 4 email-change resend: slightly more generous than the request
+  // limiter above -- resending targets the same already-pending address,
+  // a lower-risk action than initiating a new change.
+  createEmailChangeResendLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 60 * 60 * 1000, // 1 hour
+      max: 5,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many resend attempts. Please try again in an hour.' });
+      },
+    });
+  }
+
+  // Phase 4 email-change verification: IP-only, matching
+  // createRefreshLimiter's exact shape and generosity -- the caller may
+  // not be authenticated as (or even logged in as) the account in
+  // question when this runs.
+  createEmailChangeVerifyLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 15 * 60 * 1000, // 15 minutes
+      max: 30,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req) => ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many attempts. Please try again later.' });
+      },
+    });
+  }
+
+  // Phase 4 phone verification: 5/hour per user, all keyed by
+  // authenticated user ID (never IP) -- every phone endpoint runs after
+  // authenticate, so req.user is always set by the time these run.
+  createPhoneVerificationLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 60 * 60 * 1000, // 1 hour
+      max: 5,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many phone verification attempts. Please try again in an hour.' });
+      },
+    });
+  }
+
+  createPhoneVerificationResendLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 60 * 60 * 1000, // 1 hour
+      max: 5,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many resend attempts. Please try again in an hour.' });
+      },
+    });
+  }
+
+  createPhoneVerifyLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 60 * 60 * 1000, // 1 hour
+      max: 5,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many verification attempts. Please try again in an hour.' });
+      },
+    });
+  }
+
+  // Chat V1 Task 2: 60 conversation get-or-create calls per hour, keyed by
+  // user ID. Generous -- both endpoints it guards are idempotent and a
+  // normal session might call them many times (once per DM/team chat
+  // opened) -- while still capping an unbounded scripted loop.
+  createChatConversationLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 60 * 60 * 1000, // 1 hour
+      max: 60,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many requests. Please try again later.' });
+      },
+    });
+  }
+
+  // Chat V1 Task 3: 30 messages per minute per user -- generous enough
+  // for real, rapid back-and-forth conversation (a burst of several short
+  // messages in a row is normal chat behavior), tight enough to blunt a
+  // scripted flood/spam loop against a single conversation.
+  createChatMessageSendLimiter(): RequestHandler {
+    return rateLimit({
+      windowMs: 60 * 1000, // 1 minute
+      max: 30,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many messages. Please slow down.' });
+      },
+    });
+  }
 }

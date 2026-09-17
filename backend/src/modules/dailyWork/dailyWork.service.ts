@@ -2,6 +2,7 @@ import { dailyWorkRepository } from './dailyWork.repository';
 import { generateWorkSummary } from '../ai/ai.service';
 import { privacyService, AI_DISABLED_MESSAGE } from '../privacy/privacy.service';
 import { BadRequestError, ConflictError } from '../../common/errors';
+import { workStateHistoryService } from '../workStateHistory/workStateHistory.service';
 
 // Milestone 49: bounds the AI summarization prompt's total size and caps
 // realistic abuse (a scripted loop posting entries all day) -- the same
@@ -71,7 +72,16 @@ export class DailyWorkService {
     }
 
     try {
-      return await dailyWorkRepository.createSubmission(userId, teamId, aiSummary || null, confirmedSummary);
+      const submission = await dailyWorkRepository.createSubmission(userId, teamId, aiSummary || null, confirmedSummary);
+      await workStateHistoryService.recordTransition({
+        team_id: teamId,
+        artifact_type: 'daily_work',
+        artifact_id: submission.submission_id,
+        event_type: 'confirmed',
+        actor_id: userId,
+        new_state: { work_date: submission.work_date },
+      });
+      return submission;
     } catch (error: any) {
       if (error.code === '23505') {
         throw new ConflictError("Today's work has already been submitted for this team");

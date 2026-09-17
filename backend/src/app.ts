@@ -40,16 +40,45 @@ export const dbMode = { usePostgres: false };
 // Milestone 7: baseline security headers (X-Content-Type-Options,
 // X-Frame-Options, a default CSP, etc.) on every response. Added before
 // anything else runs so no route can end up missing them.
-app.use(helmet());
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
 
 // credentials: true + an explicit origin (not '*') is required for the
 // browser to send/receive the auth cookies added in Milestone 4. The
 // current frontend doesn't use cookies yet (it sends the legacy bearer
 // token instead), so this has no effect on it -- it only matters once
 // something actually relies on the cookie-based flow.
-app.use(cors({ origin: env.frontendUrl, credentials: true }));
+const allowedOrigins = [
+  'https://commandcenter-sand.vercel.app',
+  env.frontendUrl,
+];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
+  })
+);
+import path from 'path';
+
 app.use(express.json());
 app.use(cookieParser());
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 // Milestone 17: the actual limiter configuration (threshold, window, key,
 // 429 response, and which library/store backs it) lives entirely inside
@@ -77,6 +106,15 @@ app.use('/api/auth/verify-email', authRateLimiter);
 app.use('/api/auth/resend-verification', authRateLimiter);
 app.use('/api/auth/reset-password', authRateLimiter);
 app.use('/api/auth/refresh', getRateLimitProvider().createRefreshLimiter());
+
+// Note: password-change and avatar rate limiting are both applied inside
+// users.routes.ts, AFTER the `authenticate` middleware runs on that router.
+// Mounting either one here (ahead of the router, and therefore ahead of
+// authentication) would reproduce the exact defect this comment used to
+// describe for the password-change limiter alone: req.user is never
+// populated this early in the chain, so a per-user key generator would
+// silently degrade to a shared per-IP bucket for every request regardless
+// of which authenticated user actually sent it.
 
 app.use('/api', routes);
 

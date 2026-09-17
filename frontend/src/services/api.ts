@@ -26,7 +26,7 @@ api.interceptors.response.use(
       localStorage.removeItem('token');
       window.location.href = '/login';
     }
-    
+
     // Log error for debugging
     console.error('API Error:', {
       url: error.config?.url,
@@ -35,7 +35,7 @@ api.interceptors.response.use(
       data: error.response?.data,
       message: error.message
     });
-    
+
     return Promise.reject(error);
   }
 );
@@ -53,8 +53,6 @@ export const verifyEmail = (token: string) =>
 export const resendVerification = (email: string) =>
   api.post('/auth/resend-verification', { email });
 
-// Milestone 55: both already existed backend-side; only the frontend
-// wrappers were missing (no page called them).
 export const forgotPassword = (email: string) =>
   api.post('/auth/forgot-password', { email });
 
@@ -90,35 +88,31 @@ export const getAllTeams = () =>
 export const getSubTeams = (teamId: string) =>
   api.get(`/teams/${teamId}/sub-teams`);
 
-// Milestone 50: safe, minimal team info by exact ID -- backend (M48) has
-// no membership/discoverability gate on this by design (see
-// docs/security/SECURITY_FINDINGS.md §20 for why that's not a new
-// exposure), so this is the "preview before you request to join" half of
-// the Team ID join flow requestJoinTeam already supported unpreviewed.
 export const getTeamPreview = (teamId: string) =>
   api.get(`/teams/${teamId}/preview`);
 
-// Milestone 50: M49's daily-work submission history for a team -- used
-// only for the neutral "submitted today / not yet" indicator on a
-// classroom/hackathon overview, never a productivity score.
 export const getTeamWorkSubmissions = (teamId: string, date?: string) =>
   api.get(`/teams/${teamId}/work-submissions`, { params: date ? { date } : undefined });
 
-// Milestone 51: owner/admin-of-the-parent-team-only (backend-enforced via
-// the same requireTeamRole every other owner/admin route uses) --
-// returns only aggregate counts/booleans about child teams, never their
-// member lists, blocker/task content, or daily-work text. Attempt this
-// only when the frontend already knows the caller is owner/admin of the
-// selected team (see Teams.tsx) -- a 403 here is a real, backend-enforced
-// rejection either way, this is just avoiding a pointless failed request.
 export const getContextDashboard = (teamId: string) =>
   api.get(`/teams/${teamId}/context-dashboard`);
 
-// Milestone 52: the create/summarize/submit half of M49's daily work
-// model -- getTeamWorkSubmissions (above) already covers the read side.
-// Every call is team-scoped by design (the backend requires teamId on
-// each); Pulse.tsx gates all four behind an explicitly user-selected team,
-// never a default.
+export const getWorklog = (teamId: string, limit?: number) =>
+  api.get(`/teams/${teamId}/worklog`, { params: { limit } });
+
+export const getAttention = (teamId: string) =>
+  api.get(`/teams/${teamId}/attention`);
+
+export const getMyAttention = () =>
+  api.get('/attention/me');
+
+export const getTeamAttentionDetails = (teamId: string) =>
+  api.get(`/attention/teams/${teamId}`);
+
+export const getClassroomAttentionDetails = (teamId: string) =>
+  api.get(`/attention/classrooms/${teamId}`);
+
+
 export const createWorkEntry = (teamId: string, entryText: string) =>
   api.post('/work-entries', { teamId, entryText });
 
@@ -131,10 +125,6 @@ export const summarizeWork = (teamId: string) =>
 export const submitWork = (teamId: string, confirmedSummary: string, aiSummary?: string) =>
   api.post('/work-entries/submit', { teamId, confirmedSummary, aiSummary });
 
-// Milestone 53: personal history only -- backend scopes the query to the
-// authenticated caller's own user_id, so this can never return another
-// member's submissions. Bounded at 30 by default (no pagination/date-range
-// browsing -- explicitly deferred).
 export const getWorkHistory = (teamId: string, limit?: number) =>
   api.get('/work-entries/history', { params: { teamId, limit } });
 
@@ -165,9 +155,6 @@ export const requestJoinTeam = (teamId: string) =>
 export const getJoinRequests = (teamId: string) =>
   api.get(`/teams/${teamId}/join-requests`);
 
-// Milestone 50: the requester's own pending/rejected join requests --
-// powers the "Waiting for team leader approval" empty state, which had
-// no data source before this.
 export const getMyJoinRequests = () =>
   api.get('/join-requests/my');
 
@@ -205,6 +192,9 @@ export const createProject = (data: any) =>
 export const getMyProjects = () =>
   api.get('/projects/my');
 
+export const getPublicProjects = () =>
+  api.get('/projects/public');
+
 export const getTeamProjects = (teamId: string) =>
   api.get(`/teams/${teamId}/projects`);
 
@@ -231,6 +221,21 @@ export const deleteTask = (taskId: string) =>
 
 export const getMyTasks = () =>
   api.get('/tasks/my');
+
+export const submitTaskForReview = (taskId: string, notes?: string) =>
+  api.post(`/tasks/${taskId}/submit`, { notes });
+
+export const approveTask = (taskId: string) =>
+  api.post(`/tasks/${taskId}/approve`);
+
+export const requestTaskChanges = (taskId: string, reason: string) =>
+  api.post(`/tasks/${taskId}/request-changes`, { reason });
+
+export const createBatchTeamTasks = (classId: string, data: any) =>
+  api.post(`/classrooms/${classId}/batch-tasks`, data);
+
+export const searchClassroomMembers = (classId: string, queryStr?: string) =>
+  api.get(`/classrooms/${classId}/members/search`, { params: { q: queryStr } });
 
 // Leaderboard
 export const getLeaderboard = (period?: string) =>
@@ -274,10 +279,147 @@ export const getGoalHierarchy = (params?: string) =>
 export const getGoalProgress = (goalId: string) =>
   api.get(`/goals/${goalId}/progress`);
 
+export const getGoalEvidence = (goalId: string) =>
+  api.get(`/goals/${goalId}/evidence`);
+
 export const updateGoal = (goalId: string, data: any) =>
   api.put(`/goals/${goalId}`, data);
 
 export const deleteGoal = (goalId: string) =>
   api.delete(`/goals/${goalId}`);
+
+export const submitGoalForReview = (goalId: string, requestedStatus?: string) =>
+  api.post(`/goals/${goalId}/submit-review`, requestedStatus ? { requestedStatus } : {});
+
+export const approveGoal = (goalId: string) =>
+  api.post(`/goals/${goalId}/approve`);
+
+export const returnGoal = (goalId: string, status?: string) =>
+  api.post(`/goals/${goalId}/return`, status ? { status } : {});
+
+export const approveGoalCreation = (goalId: string) =>
+  api.post(`/goals/${goalId}/approve-creation`);
+
+export const rejectGoalCreation = (goalId: string) =>
+  api.post(`/goals/${goalId}/reject-creation`);
+
+// Profile
+export const getMyProfile = () =>
+  api.get('/users/me');
+
+export const updateMyProfile = (data: Record<string, any>) =>
+  api.put('/users/me/profile', data);
+
+export const changePassword = (currentPassword: string, newPassword: string) =>
+  api.post('/users/me/change-password', { current_password: currentPassword, new_password: newPassword });
+
+export const requestEmailChange = (newEmail: string, currentPassword: string) =>
+  api.post('/users/me/request-email-change', { new_email: newEmail, current_password: currentPassword });
+
+export const resendEmailChangeVerification = () =>
+  api.post('/users/me/resend-email-change-verification');
+
+export const verifyEmailChange = (token: string) =>
+  api.post('/auth/verify-email-change', { token });
+
+export const requestPhoneVerification = (phoneNumber: string) =>
+  api.post('/users/me/request-phone-verification', { phone_number: phoneNumber });
+
+export const resendPhoneVerification = () =>
+  api.post('/users/me/resend-phone-verification');
+
+export const verifyPhone = (code: string) =>
+  api.post('/users/me/verify-phone', { code });
+
+export const uploadAvatar = (formData: FormData) => {
+  const uploadApi = axios.create({
+    baseURL: import.meta.env.PROD ? 'https://commandcenter-backend.vercel.app/api' : '/api',
+    timeout: 30000,
+  });
+
+  uploadApi.interceptors.request.use((config) => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  });
+
+  return uploadApi.post('/users/me/avatar', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+};
+
+export const setPresetAvatar = (preset_id: string) =>
+  api.post('/users/me/avatar/preset', { preset_id });
+
+export const deleteAvatar = () =>
+  api.delete('/users/me/avatar');
+
+// Notifications
+export const getMyNotifications = (limit = 20, offset = 0) =>
+  api.get(`/notifications?limit=${limit}&offset=${offset}`);
+
+export const markNotificationRead = (notificationId: string) =>
+  api.put(`/notifications/${notificationId}/read`);
+
+export const markAllNotificationsRead = () =>
+  api.put('/notifications/read-all');
+
+export const getNotificationPreferences = () =>
+  api.get('/notifications/preferences');
+
+export const updateNotificationPreferences = (updates: Record<string, boolean>) =>
+  api.put('/notifications/preferences', updates);
+
+// Chat V1
+export const getChatConversations = () =>
+  api.get('/chat/conversations');
+
+export const createDirectConversation = (otherUserId: string) =>
+  api.post('/chat/conversations/direct', { other_user_id: otherUserId });
+
+export const createTeamConversation = (teamId: string) =>
+  api.post(`/chat/conversations/team/${teamId}`);
+
+export const getChatMessages = (conversationId: string, cursor?: string, limit?: number) =>
+  api.get(`/chat/conversations/${conversationId}/messages`, { params: { cursor, limit } });
+
+export const sendChatMessage = (conversationId: string, body: string) =>
+  api.post(`/chat/conversations/${conversationId}/messages`, { body });
+
+export const markConversationRead = (conversationId: string) =>
+  api.post(`/chat/conversations/${conversationId}/read`);
+
+// Analytics Hub
+export const getAnalyticsScopes = () =>
+  api.get('/analytics/scopes');
+
+export const getClassAnalytics = (classId: string) =>
+  api.get(`/analytics/classes/${classId}`);
+
+export const getTeamAnalytics = (teamId: string) =>
+  api.get(`/analytics/teams/${teamId}`);
+
+export const getMemberAnalytics = (memberId: string, teamId?: string) =>
+  api.get(`/analytics/members/${memberId}`, { params: teamId ? { teamId } : undefined });
+
+// Project Collaboration
+export const requestProjectCollaboration = (projectId: string) =>
+  api.post(`/projects/${projectId}/collaborate`);
+
+export const acceptProjectCollaboration = (projectId: string, targetUserId: string) =>
+  api.post(`/projects/${projectId}/collaboration/${targetUserId}/accept`);
+
+export const rejectProjectCollaboration = (projectId: string, targetUserId: string) =>
+  api.post(`/projects/${projectId}/collaboration/${targetUserId}/reject`);
+
+export const revokeProjectCollaboration = (projectId: string, targetUserId: string) =>
+  api.post(`/projects/${projectId}/collaboration/${targetUserId}/revoke`);
+
+export const getProjectCollaborators = (projectId: string) =>
+  api.get(`/projects/${projectId}/collaborators`);
 
 export default api;

@@ -2,6 +2,10 @@ import { teamsRepository } from './teams.repository';
 import { usersRepository } from '../users/users.repository';
 import { sendTeamInviteEmail } from '../../services/emailService';
 import { ForbiddenError, NotFoundError, BadRequestError, ConflictError } from '../../common/errors';
+import { createRealtimeEvent, realtimeProvider } from '../../realtime/inMemoryRealtimeProvider';
+import { notificationsService } from '../notifications/notifications.service';
+import { avatarStorageService } from '../avatars/avatars.storage';
+import { chatRepository } from '../chat/chat.repository';
 
 // Milestone 47: max_team_size gained real enforcement this milestone --
 // see teams.repository.ts's TEAM_CAPACITY_GATE comment for why the
@@ -27,16 +31,68 @@ export class TeamsService {
     return teamsRepository.getUserTeams(userId);
   }
 
-  getAllTeams() {
-    return teamsRepository.getAllTeams();
+  async getAllTeams() {
+    const teams = await teamsRepository.getAllTeams();
+    if (teams.length === 0) {
+      return teams;
+    }
+
+    const ownerIds = Array.from(new Set(teams.map((t: any) => t.created_by)));
+    const teamIds = teams.map((t: any) => t.team_id);
+
+    const [owners, memberCounts] = await Promise.all([
+      usersRepository.getUsersByIds(ownerIds),
+      teamsRepository.getMemberCounts(teamIds),
+    ]);
+    const ownerById = new Map(owners.map((u: any) => [u.user_id, u]));
+
+    return teams.map((team: any) => {
+      const owner = ownerById.get(team.created_by);
+      return {
+        ...team,
+        owner: owner
+          ? {
+              user_id: owner.user_id,
+              full_name: owner.full_name,
+              username: owner.username,
+              avatar_key: owner.avatar_key || null,
+              avatar_url: avatarStorageService.getAvatarUrl(owner.avatar_key),
+            }
+          : null,
+        member_count: memberCounts[team.team_id] || 0,
+      };
+    });
   }
 
-  getTeamMembers(teamId: string) {
+  async getTeamMembers(teamId: string) {
     // Milestone 5: this used to run with no permission check at all (the
     // original code's own comment said "skip permission check - add
     // later"). Membership is now enforced by requireTeamMembership in
     // teams.routes.ts before this ever runs.
-    return teamsRepository.getTeamMembers(teamId);
+    const members = await teamsRepository.getTeamMembers(teamId);
+    return members.map((m: any) => {
+      const avatarKey = m.avatar_key || null;
+      const avatarUrl = avatarStorageService.getAvatarUrl(avatarKey);
+      return {
+        ...m,
+        avatar_key: avatarKey,
+        avatar_url: avatarUrl,
+        user: m.user
+          ? {
+              ...m.user,
+              avatar_key: m.user.avatar_key || avatarKey,
+              avatar_url: avatarStorageService.getAvatarUrl(m.user.avatar_key || avatarKey),
+            }
+          : {
+              user_id: m.user_id,
+              full_name: m.full_name,
+              username: m.username,
+              email: m.email,
+              avatar_key: avatarKey,
+              avatar_url: avatarUrl,
+            },
+      };
+    });
   }
 
   // Milestone 27: addMemberSchema now rejects role: 'owner' at validation,
@@ -61,9 +117,33 @@ export class TeamsService {
   // team filling up between this check and the block above) is not a
   // concern here -- isTeamAtCapacity is just for producing the right
   // error message, not for deciding whether to insert.
+  private async notifyTeamChatJoinEvent(teamId: string, userId: string) {
+    try {
+      const [team, user] = await Promise.all([
+        teamsRepository.getTeam(teamId),
+        usersRepository.getUserById(userId),
+      ]);
+      if (team && user) {
+        const teamConvo = await chatRepository.findOrCreateTeamConversation(teamId, userId);
+        if (teamConvo?.conversation_id) {
+          await chatRepository.sendMessage(
+            teamConvo.conversation_id,
+            userId,
+            `${user.full_name} joined ${team.team_name}`
+          );
+        }
+      }
+    } catch (err) {
+      if (process.env.NODE_ENV !== 'test') {
+        console.error('Failed to publish team chat join event:', err);
+      }
+    }
+  }
+
   async addMember(teamId: string, targetUserId: string, role: string | undefined, requesterRole: string) {
     const result = await teamsRepository.addTeamMemberIfAuthorized(teamId, targetUserId, role || 'member', requesterRole);
     if (result) {
+      await this.notifyTeamChatJoinEvent(teamId, targetUserId);
       return;
     }
 
@@ -122,9 +202,29 @@ export class TeamsService {
   }
 
   // Milestone 36: same TOCTOU fix as removeMember/addMember above.
-  async updateMemberRole(teamId: string, targetUserId: string, role: string, requesterRole: string) {
+  async updateMemberRole(teamId: string, targetUserId: string, role: string, requesterRole: string, actorUserId?: string) {
+    if (role === 'admin' && requesterRole !== 'owner') {
+      throw new ForbiddenError('Only the team owner can promote a member to admin');
+    }
     const result = await teamsRepository.updateMemberRoleIfAuthorized(teamId, targetUserId, role, requesterRole);
     if (result) {
+      if (actorUserId && actorUserId !== targetUserId) {
+        const [team, actorUser] = await Promise.all([
+          teamsRepository.getTeam(teamId),
+          usersRepository.getUserById(actorUserId),
+        ]);
+        const actorName = actorUser?.full_name || 'An admin';
+        const teamName = team?.team_name || 'the team';
+        await notificationsService.notifyUser({
+          recipientUserId: targetUserId,
+          category: 'team.role_changed',
+          preferenceGroup: 'team_join_request',
+          title: 'Team Role Updated',
+          message: `Your role in ${teamName} was changed to ${role} by ${actorName}.`,
+          teamId,
+        });
+      }
+      realtimeProvider.publish(createRealtimeEvent('team.member_updated', { teamId }));
       return;
     }
 
@@ -132,11 +232,12 @@ export class TeamsService {
     if (targetRole === 'owner') {
       throw new ForbiddenError("The team owner's role cannot be changed");
     }
-    if (targetRole === 'admin') {
+    if (targetRole === 'admin' && requesterRole !== 'owner') {
       throw new ForbiddenError("Only the team owner can change an admin's role");
     }
-    // Neither -- target simply isn't a member (matches pre-Milestone-36
-    // behavior: a no-op update on a nonexistent row succeeds silently).
+    if (role === 'admin' && requesterRole !== 'owner') {
+      throw new ForbiddenError('Only the team owner can promote a member to admin');
+    }
   }
 
   // Milestone 5: the base "is the caller owner/admin" gate moved to
@@ -225,13 +326,10 @@ export class TeamsService {
     await this.assertInviteBelongsToCaller(inviteId, userId);
     const accepted = await teamsRepository.acceptInvite(inviteId, userId);
     if (!accepted) {
-      // Milestone 39: the invite was pending when assertInviteBelongsToCaller
-      // checked (moments ago), but the atomic conditional-UPDATE in
-      // acceptInvite found it no longer pending -- already used, or
-      // revoked by an in-between removeMember/leaveTeam. Either way,
-      // membership was never inserted; this is a real error, not a
-      // silent no-op.
       throw new BadRequestError('This invitation is no longer valid');
+    }
+    if (accepted.team_id) {
+      await this.notifyTeamChatJoinEvent(accepted.team_id, userId);
     }
   }
 
@@ -277,7 +375,15 @@ export class TeamsService {
       const owner = ownerById.get(team.created_by);
       return {
         ...team,
-        owner: owner ? { full_name: owner.full_name, username: owner.username } : null,
+        owner: owner
+          ? {
+              user_id: owner.user_id,
+              full_name: owner.full_name,
+              username: owner.username,
+              avatar_key: owner.avatar_key || null,
+              avatar_url: avatarStorageService.getAvatarUrl(owner.avatar_key),
+            }
+          : null,
         member_count: memberCounts[team.team_id] || 0,
       };
     });
@@ -336,6 +442,23 @@ export class TeamsService {
     if (!joinRequest) {
       throw new ConflictError('A join request is already pending for this team');
     }
+    realtimeProvider.publish(createRealtimeEvent('join_request.created', { teamId }));
+
+    const [team, requester] = await Promise.all([teamsRepository.getTeam(teamId), usersRepository.getUserById(userId)]);
+    if (team && requester) {
+      await notificationsService.notifyTeamMembersByRole(
+        teamId,
+        ['owner', 'admin'],
+        {
+          category: 'team.join_request.created',
+          preferenceGroup: 'team_join_request',
+          title: 'New join request',
+          message: `${requester.full_name} requested to join ${team.team_name}`,
+        },
+        userId
+      );
+    }
+
     return joinRequest;
   }
 
@@ -356,7 +479,14 @@ export class TeamsService {
       return {
         ...request,
         user: user
-          ? { user_id: user.user_id, username: user.username, full_name: user.full_name, email: user.email }
+          ? {
+              user_id: user.user_id,
+              username: user.username,
+              full_name: user.full_name,
+              email: user.email,
+              avatar_key: user.avatar_key || null,
+              avatar_url: avatarStorageService.getAvatarUrl(user.avatar_key),
+            }
           : null,
       };
     });
@@ -396,12 +526,48 @@ export class TeamsService {
     if (!approved) {
       throw new BadRequestError('This join request has already been processed');
     }
+    realtimeProvider.publish(createRealtimeEvent('join_request.approved', {
+      teamId: approved.team_id,
+      recipientUserId: approved.user_id,
+    }));
+
+    if (approved.team_id && approved.user_id) {
+      await this.notifyTeamChatJoinEvent(approved.team_id, approved.user_id);
+    }
+
+    const team = await teamsRepository.getTeam(approved.team_id);
+    if (team) {
+      await notificationsService.notifyUser({
+        recipientUserId: approved.user_id,
+        category: 'team.join_request.approved',
+        preferenceGroup: 'team_join_request',
+        title: 'Join request approved',
+        message: `Your request to join ${team.team_name} was approved`,
+        teamId: approved.team_id,
+      });
+    }
   }
 
   async rejectJoinRequest(requestId: string) {
     const rejected = await teamsRepository.rejectJoinRequest(requestId);
     if (!rejected) {
       throw new BadRequestError('This join request has already been processed');
+    }
+    realtimeProvider.publish(createRealtimeEvent('join_request.rejected', {
+      teamId: rejected.team_id,
+      recipientUserId: rejected.user_id,
+    }));
+
+    const team = await teamsRepository.getTeam(rejected.team_id);
+    if (team) {
+      await notificationsService.notifyUser({
+        recipientUserId: rejected.user_id,
+        category: 'team.join_request.rejected',
+        preferenceGroup: 'team_join_request',
+        title: 'Join request declined',
+        message: `Your request to join ${team.team_name} was declined`,
+        teamId: rejected.team_id,
+      });
     }
   }
 

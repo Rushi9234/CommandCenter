@@ -10,6 +10,7 @@ const TASK_UPDATABLE_COLUMNS = [
   'status',
   'priority',
   'completed_at',
+  'goal_id',
 ];
 
 // Moved verbatim from the old databaseService.ts (task methods). Tasks live
@@ -28,13 +29,14 @@ export class TasksRepository {
     dependencies?: any;
     priority?: string;
     created_by: string;
+    goal_id?: string | null;
   }) {
     const text = `
       INSERT INTO tasks (
         project_id, title, description, owner, contributors, reviewer,
-        dependencies, priority, created_by
+        dependencies, priority, created_by, goal_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
     `;
 
@@ -48,6 +50,7 @@ export class TasksRepository {
       JSON.stringify(taskData.dependencies || []),
       taskData.priority || 'medium',
       taskData.created_by,
+      taskData.goal_id || null,
     ];
 
     return queryOne<any>(text, params);
@@ -166,7 +169,14 @@ export class TasksRepository {
       INNER JOIN projects p ON tk.project_id = p.project_id
       WHERE tk.task_id = $1 AND (
         p.created_by = $2 OR
-        p.team_id IN (SELECT team_id FROM team_members WHERE user_id = $2)
+        p.is_public = true OR
+        (p.team_id IS NOT NULL AND p.team_id IN (SELECT team_id FROM team_members WHERE user_id = $2)) OR
+        EXISTS (
+          SELECT 1 FROM project_collaborators
+          WHERE project_id = p.project_id AND user_id = $2 AND status = 'accepted'
+        ) OR
+        tk.owner = $2 OR
+        tk.created_by = $2
       )
     `;
     const result = await queryOne(text, [taskId, userId]);
@@ -175,18 +185,61 @@ export class TasksRepository {
 
   // Milestone 5 review: same viewer-exclusion fix as
   // projects.repository.ts's canWriteProject -- canAccessTask alone let a
-  // read-only viewer update or delete a task.
+  // read-only viewer update or delete a task. Also allows accepted project collaborators,
+  // assigned task owner, and task creator to update permitted task state.
   async canWriteTask(userId: string, taskId: string): Promise<boolean> {
     const text = `
       SELECT tk.task_id FROM tasks tk
       INNER JOIN projects p ON tk.project_id = p.project_id
       WHERE tk.task_id = $1 AND (
         p.created_by = $2 OR
-        p.team_id IN (SELECT team_id FROM team_members WHERE user_id = $2 AND role != 'viewer')
+        (p.team_id IS NOT NULL AND p.team_id IN (SELECT team_id FROM team_members WHERE user_id = $2 AND role != 'viewer')) OR
+        EXISTS (
+          SELECT 1 FROM project_collaborators
+          WHERE project_id = p.project_id AND user_id = $2 AND status = 'accepted'
+        ) OR
+        tk.owner = $2 OR
+        tk.created_by = $2
       )
     `;
     const result = await queryOne(text, [taskId, userId]);
     return result !== null;
+  }
+
+  async canDeleteTask(userId: string, taskId: string): Promise<boolean> {
+    const text = `
+      SELECT tk.task_id FROM tasks tk
+      INNER JOIN projects p ON tk.project_id = p.project_id
+      WHERE tk.task_id = $1 AND (
+        p.created_by = $2 OR
+        (p.team_id IS NOT NULL AND p.team_id IN (SELECT team_id FROM team_members WHERE user_id = $2 AND role != 'viewer'))
+      )
+    `;
+    const result = await queryOne(text, [taskId, userId]);
+    return result !== null;
+  }
+
+  async getTasksByGoalId(goalId: string) {
+    const text = `
+      SELECT t.*, u.full_name AS owner_name, ru.full_name AS reviewer_name
+      FROM tasks t
+      LEFT JOIN users u ON t.owner = u.user_id
+      LEFT JOIN users ru ON t.reviewer = ru.user_id
+      WHERE t.goal_id = $1
+      ORDER BY t.created_at DESC
+    `;
+    return query<any>(text, [goalId]);
+  }
+
+  async validateGoalInSameTeam(goalId: string, projectId: string): Promise<boolean> {
+    const text = `
+      SELECT g.goal_id
+      FROM goals g
+      INNER JOIN projects p ON p.project_id = $2
+      WHERE g.goal_id = $1 AND (g.team_id IS NOT DISTINCT FROM p.team_id)
+    `;
+    const res = await queryOne(text, [goalId, projectId]);
+    return res !== null;
   }
 }
 

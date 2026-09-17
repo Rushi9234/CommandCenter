@@ -62,6 +62,32 @@ export const errorHandler = (err: any, req: Request, res: Response, _next: NextF
     return res.status(err.status).json({ error: err.message });
   }
 
+  // Handle malformed JSON bodies from express.json() / body-parser cleanly as 400 Bad Request
+  if (err instanceof SyntaxError && (err as any).status === 400 && 'body' in err) {
+    logger.error('Request error', {
+      event: 'request.error',
+      requestId: req.requestId,
+      method: req.method,
+      path: req.path,
+      errorType: 'BodyParseSyntaxError',
+      statusCode: 400,
+    });
+    return res.status(400).json({ error: 'Invalid JSON request body' });
+  }
+
+  // Handle CORS rejection as 403 Forbidden instead of 500
+  if (err?.message === 'Not allowed by CORS') {
+    logger.error('Request error', {
+      event: 'request.error',
+      requestId: req.requestId,
+      method: req.method,
+      path: req.path,
+      errorType: 'CorsForbiddenError',
+      statusCode: 403,
+    });
+    return res.status(403).json({ error: 'Not allowed by CORS' });
+  }
+
   // Milestone 40: an untranslated raw Postgres error still gets logged with
   // its real code/message (debugging value, server-side only) but the
   // CLIENT only ever sees the safe, generic AppError this code maps to --

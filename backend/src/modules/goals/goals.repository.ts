@@ -1,6 +1,23 @@
 import { query, queryOne, buildSetClause } from '../../db/client';
 
-const GOAL_UPDATABLE_COLUMNS = ['title', 'description', 'goal_type', 'status', 'progress', 'parent_goal_id', 'target_date', 'completed_at'];
+// goal_type deliberately excluded: updateGoalSchema no longer accepts it
+// (see that file's comment -- there is no type-editing UI, so the schema
+// stopped pretending the capability exists). Leaving it in this allowlist
+// would be dead/misleading now that zod's validate() middleware strips any
+// goal_type key from the body before this is ever consulted.
+const GOAL_UPDATABLE_COLUMNS = [
+  'title', 'description', 'status', 'progress', 'parent_goal_id', 'target_date', 'completed_at',
+  // Review-workflow columns -- never taken directly from a request body
+  // (excluded from updateGoalSchema, same treatment as completed_at).
+  // Only goals.service.ts's submitForReview/approveCompletion/returnGoal
+  // pass these, after their own dedicated authorization checks.
+  'submitted_for_review_by', 'submitted_for_review_at', 'approved_by', 'approved_at', 'requested_status',
+  // Creation-governance columns -- same treatment: never taken directly
+  // from a request body (excluded from both createGoalSchema and
+  // updateGoalSchema). Only goals.service.ts's createGoal/approveCreation/
+  // rejectCreation pass these.
+  'creation_status', 'creation_reviewed_by', 'creation_reviewed_at',
+];
 
 // Moved verbatim from the old databaseService.ts (goal methods).
 export class GoalsRepository {
@@ -14,13 +31,14 @@ export class GoalsRepository {
     team_id?: string;
     parent_goal_id?: string;
     target_date?: Date;
+    creation_status?: string;
   }) {
     const text = `
       INSERT INTO goals (
         title, description, goal_type, status, progress,
-        created_by, team_id, parent_goal_id, target_date
+        created_by, team_id, parent_goal_id, target_date, creation_status
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
     `;
 
@@ -34,6 +52,7 @@ export class GoalsRepository {
       goalData.team_id || null,
       goalData.parent_goal_id || null,
       goalData.target_date || null,
+      goalData.creation_status || null,
     ];
 
     return queryOne<any>(text, params);
@@ -44,24 +63,51 @@ export class GoalsRepository {
     return queryOne<any>(text, [goalId]);
   }
 
+  // submitted_by_name/approved_by_name: display names for the review
+  // workflow's "submitted by X" / "approved by Y" UI -- both NULL for a
+  // goal that has never gone through review. created_by_name: same
+  // pattern, for the creator/timestamp visibility fix -- created_by is
+  // NOT NULL on goals, but this stays a LEFT JOIN for consistency with
+  // the other two rather than assuming referential integrity can never
+  // glitch. my_team_role: the caller's own role on the goal's team (NULL
+  // for a personal/teamless goal), lets the frontend show leader-only
+  // review controls without a second request per goal.
   async getUserGoals(userId: string) {
     const text = `
-      SELECT * FROM goals
-      WHERE created_by = $1 OR team_id IN (
+      SELECT g.*, tm.role AS my_team_role,
+        cu.full_name AS created_by_name,
+        su.full_name AS submitted_by_name, au.full_name AS approved_by_name,
+        cru.full_name AS creation_reviewed_by_name
+      FROM goals g
+      LEFT JOIN team_members tm ON tm.team_id = g.team_id AND tm.user_id = $1
+      LEFT JOIN users cu ON cu.user_id = g.created_by
+      LEFT JOIN users su ON su.user_id = g.submitted_for_review_by
+      LEFT JOIN users au ON au.user_id = g.approved_by
+      LEFT JOIN users cru ON cru.user_id = g.creation_reviewed_by
+      WHERE g.created_by = $1 OR g.team_id IN (
         SELECT team_id FROM team_members WHERE user_id = $1
       )
-      ORDER BY created_at DESC
+      ORDER BY g.created_at DESC
     `;
     return query<any>(text, [userId]);
   }
 
-  async getTeamGoals(teamId: string) {
+  async getTeamGoals(teamId: string, userId?: string) {
     const text = `
-      SELECT * FROM goals
-      WHERE team_id = $1
-      ORDER BY created_at DESC
+      SELECT g.*, tm.role AS my_team_role,
+        cu.full_name AS created_by_name,
+        su.full_name AS submitted_by_name, au.full_name AS approved_by_name,
+        cru.full_name AS creation_reviewed_by_name
+      FROM goals g
+      LEFT JOIN team_members tm ON tm.team_id = g.team_id AND tm.user_id = $2
+      LEFT JOIN users cu ON cu.user_id = g.created_by
+      LEFT JOIN users su ON su.user_id = g.submitted_for_review_by
+      LEFT JOIN users au ON au.user_id = g.approved_by
+      LEFT JOIN users cru ON cru.user_id = g.creation_reviewed_by
+      WHERE g.team_id = $1
+      ORDER BY g.created_at DESC
     `;
-    return query<any>(text, [teamId]);
+    return query<any>(text, [teamId, userId || null]);
   }
 
   async updateGoal(goalId: string, updates: Record<string, any>) {
@@ -125,6 +171,66 @@ export class GoalsRepository {
   // from the root's own team_id) keeps every step of the walk within the
   // same team; IS NOT DISTINCT FROM treats two NULLs (personal, teamless
   // goals) as matching, unlike a plain `=`.
+  async getGoalLinkedTasks(goalId: string) {
+    const text = `
+      SELECT t.*, u.full_name AS owner_name, ru.full_name AS reviewer_name, p.project_name
+      FROM tasks t
+      INNER JOIN projects p ON t.project_id = p.project_id
+      LEFT JOIN users u ON t.owner = u.user_id
+      LEFT JOIN users ru ON t.reviewer = ru.user_id
+      WHERE t.goal_id = $1
+      ORDER BY t.created_at DESC
+    `;
+    return query<any>(text, [goalId]);
+  }
+
+  async calculateHybridGoalProgress(goalId: string) {
+    // 1. Task-Linked Mode: Check if active linked tasks exist
+    const taskText = `
+      SELECT
+        COUNT(*) AS total_tasks,
+        COUNT(CASE WHEN status = 'done' THEN 1 END) AS completed_tasks,
+        COUNT(CASE WHEN status IN ('review', 'submitted_for_review') THEN 1 END) AS review_tasks,
+        COUNT(CASE WHEN status = 'in_progress' THEN 1 END) AS in_progress_tasks,
+        COUNT(CASE WHEN status = 'assigned' THEN 1 END) AS assigned_tasks
+      FROM tasks
+      WHERE goal_id = $1
+    `;
+    const taskRes = await queryOne<any>(taskText, [goalId]);
+
+    const totalTasks = parseInt(taskRes?.total_tasks || '0');
+    const completedTasks = parseInt(taskRes?.completed_tasks || '0');
+    const reviewTasks = parseInt(taskRes?.review_tasks || '0');
+
+    if (totalTasks > 0) {
+      return {
+        progress: Math.round((completedTasks / totalTasks) * 100),
+        completed: completedTasks,
+        total: totalTasks,
+        pending_review: reviewTasks,
+        mode: 'tasks',
+      };
+    }
+
+    // 2. Sub-Goal Mode: Fallback to sub-goal recursion if sub-goals exist
+    const subGoalCheck = await queryOne<any>('SELECT COUNT(*) AS count FROM goals WHERE parent_goal_id = $1', [goalId]);
+    const hasSubGoals = parseInt(subGoalCheck?.count || '0') > 0;
+
+    if (hasSubGoals) {
+      const subGoalProgress = await this.calculateGoalProgress(goalId);
+      return { ...subGoalProgress, mode: 'sub_goals' };
+    }
+
+    // 3. Manual Mode: Fallback to stored goals.progress
+    const currentGoal = await this.getGoal(goalId);
+    return {
+      progress: currentGoal?.progress ?? 0,
+      completed: currentGoal?.status === 'completed' ? 1 : 0,
+      total: 1,
+      mode: 'manual',
+    };
+  }
+
   async calculateGoalProgress(goalId: string) {
     const text = `
       WITH RECURSIVE goal_tree AS (
@@ -212,6 +318,35 @@ export class GoalsRepository {
       )
     `;
     const result = await queryOne(text, [goalId, userId]);
+    return result !== null;
+  }
+
+  // Review-workflow gate: "leader" == owner or admin of the goal's OWN
+  // team (never the creator, unlike canWriteGoal above -- final
+  // completion sign-off is a team-authority check, not an authorship
+  // check). Matches the same owner/admin split Teams.tsx already treats
+  // as the leadership tier (coordinator dashboard access). A goal with no
+  // team_id (personal goal) has no leader and always returns false here --
+  // the review workflow does not apply to personal goals.
+  async isTeamLeader(userId: string, goalId: string): Promise<boolean> {
+    const text = `
+      SELECT g.goal_id FROM goals g
+      INNER JOIN team_members tm ON tm.team_id = g.team_id
+      WHERE g.goal_id = $1 AND tm.user_id = $2 AND tm.role IN ('owner', 'admin')
+    `;
+    const result = await queryOne(text, [goalId, userId]);
+    return result !== null;
+  }
+
+  // Creation-governance: same leadership tier as isTeamLeader (owner/admin)
+  // but checked against a teamId directly, since this runs at CREATE time --
+  // the goal doesn't exist yet, so there is no goal_id to join through.
+  async isTeamLeaderOfTeam(userId: string, teamId: string): Promise<boolean> {
+    const text = `
+      SELECT 1 FROM team_members
+      WHERE team_id = $1 AND user_id = $2 AND role IN ('owner', 'admin')
+    `;
+    const result = await queryOne(text, [teamId, userId]);
     return result !== null;
   }
 }

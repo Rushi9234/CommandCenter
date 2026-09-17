@@ -8,4 +8,5 @@ import { requiredString } from '../../common/dto-helpers';
 export const chatSchema = z.object({
   message: requiredString('Message is required', 1, 5000),
   context: z.string().max(5000).optional(),
+  teamId: z.string().uuid().optional(),
 });

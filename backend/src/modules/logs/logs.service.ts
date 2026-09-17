@@ -1,3 +1,10 @@
+interface StandupAIResult {
+  summary: string;
+  highlights: string[];
+  blockers: string[];
+  team_mood: string;
+}
+
 import { logsRepository } from './logs.repository';
 import { teamsRepository } from '../teams/teams.repository';
 import { usersRepository } from '../users/users.repository';
@@ -17,14 +24,6 @@ export class LogsService {
     const logDate = new Date();
     const cryptoSignature = generateLogSignature(userId, entryText, logDate);
 
-    const existingLogs = await logsRepository.getUserLogs(userId);
-    const today = logDate.toISOString().split('T')[0];
-    const todayLog = existingLogs.find((log: any) => log.log_date === today);
-
-    if (todayLog) {
-      throw new BadRequestError('Log already submitted for today');
-    }
-
     // Milestone 32: this is the "background/log-triggered" AI call the M31
     // audit specifically flagged -- it used to run unconditionally on
     // every log, regardless of the author's ai_enabled setting.
@@ -42,33 +41,19 @@ export class LogsService {
           quality_score: 0,
         };
 
-    let log;
-    try {
-      log = await logsRepository.createLog({
-        user_id: userId,
-        entry_text: entryText,
-        log_date: logDate.toISOString().split('T')[0],
-        log_time: logDate.toTimeString().split(' ')[0],
-        crypto_signature: cryptoSignature,
-        entry_summary: analysis.summary,
-        sentiment_score: analysis.sentiment_score,
-        bullet_points: analysis.bullet_points,
-      });
-    } catch (error: any) {
-      // Milestone 24: the check above is a TOCTOU race -- two concurrent
-      // requests can both pass it before either commits (there's a slow
-      // AI call in between). The daily_logs_user_id_log_date_unique
-      // constraint (migrations/..._add-daily-logs-unique-constraint.sql)
-      // is what actually prevents the duplicate; this translates the
-      // race-losing INSERT's raw Postgres error (23505 = unique
-      // violation) into the same error the pre-check above already
-      // throws, so both paths produce an identical response. Any other
-      // error is rethrown unchanged.
-      if (error.code === '23505') {
-        throw new BadRequestError('Log already submitted for today');
-      }
-      throw error;
-    }
+    // Multiple personal log entries are intentionally allowed on the same day.
+    // Daily logs are individual work records; the log_id identifies each entry,
+    // while log_date remains available for history, streaks, and reporting.
+    const log = await logsRepository.createLog({
+      user_id: userId,
+      entry_text: entryText,
+      log_date: logDate.toISOString().split('T')[0],
+      log_time: logDate.toTimeString().split(' ')[0],
+      crypto_signature: cryptoSignature,
+      entry_summary: analysis.summary,
+      sentiment_score: analysis.sentiment_score,
+      bullet_points: analysis.bullet_points,
+    });
 
     return { log, analysis };
   }
@@ -160,8 +145,8 @@ export class LogsService {
     // per-subject-consent design this milestone deliberately doesn't take
     // on -- see the M32 report's "residual risk" note.
     const aiEnabled = await privacyService.isAiEnabledForUser(userId);
-    const standup = aiEnabled
-      ? await generateStandup(logs, members)
+    const standup: StandupAIResult = aiEnabled
+      ? await generateStandup(logs, members) as StandupAIResult
       : { summary: AI_DISABLED_MESSAGE, highlights: [], blockers: [], team_mood: 'neutral' };
 
     return { ...standup, logs, generated_at: new Date().toISOString() };

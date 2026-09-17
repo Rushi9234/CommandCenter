@@ -150,3 +150,18 @@ export const resetPassword = async (req: Request, res: Response) => {
     res.status(error.status || 400).json({ error: error.status ? error.message : 'Failed to reset password' });
   }
 };
+
+// Phase 4: deliberately unauthenticated (see auth.service.ts's
+// verifyEmailChange) -- no session is issued on success, unlike
+// verifyEmail above; the client is expected to prompt the user to log in
+// again with their new email, since every refresh token was just revoked.
+export const verifyEmailChange = async (req: Request, res: Response) => {
+  try {
+    const result = await authService.verifyEmailChange(req.body.token);
+    res.json({ success: true, message: 'Email changed successfully. Please log in again.', data: result });
+  } catch (error: any) {
+    // Same gated pattern as verifyEmail/resetPassword above -- only a
+    // known (status-carrying) error's own message is safe to show.
+    res.status(error.status || 400).json({ error: error.status ? error.message : 'Verification failed' });
+  }
+};

@@ -2,8 +2,14 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../hooks/useAuth';
 import * as api from '../services/api';
+import Avatar from '../components/common/Avatar';
+import StatusBadge from '../components/common/StatusBadge';
+import AttentionActionCenter from '../components/AttentionActionCenter';
+import CompactTeamSelector from '../components/common/CompactTeamSelector';
+import WorkPulseFeed from '../components/WorkPulseFeed';
 
 export default function Pulse() {
+
   const { user } = useAuth();
   const [entryText, setEntryText] = useState('');
   const [logs, setLogs] = useState<any[]>([]);
@@ -237,7 +243,7 @@ export default function Pulse() {
       await api.createLog(entryText);
       setSuccess(true);
       setEntryText('');
-      
+
       setTimeout(() => setSuccess(false), 3000);
       loadLogs();
     } catch (error: any) {
@@ -263,9 +269,9 @@ export default function Pulse() {
       setAiChatHistory([...newHistory, aiMessage]);
     } catch (error: any) {
       console.error('AI chat error:', error);
-      const errorMessage = { 
-        role: 'assistant', 
-        content: `Sorry, I encountered an error: ${error.response?.data?.error || error.message || 'Please try again.'}` 
+      const errorMessage = {
+        role: 'assistant',
+        content: `Sorry, I encountered an error: ${error.response?.data?.error || error.message || 'Please try again.'}`
       };
       setAiChatHistory([...newHistory, errorMessage]);
     } finally {
@@ -287,42 +293,79 @@ export default function Pulse() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* LEVEL 1 — INDIVIDUAL HIERARCHICAL CONTEXT BAR */}
+      <div className="bg-slate-900 text-slate-100 border-b border-slate-800 px-6 py-2.5 text-xs" data-testid="individual-hierarchy-bar">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-slate-400">Context:</span>
+            <span className="bg-blue-900/60 border border-blue-700/60 text-blue-200 px-2.5 py-0.5 rounded-md font-bold flex items-center gap-1">
+              👤 Individual (My Work)
+            </span>
+            {myTeams.length > 0 && (
+              <>
+                <span className="text-slate-500 font-mono">›</span>
+                <CompactTeamSelector
+                  teams={myTeams}
+                  selectedTeamId={selectedTeam || null}
+                  onSelectTeam={(t) => setSelectedTeam(t.team_id)}
+                  compact={true}
+                  placeholder="Filter my teams..."
+                />
+              </>
+            )}
+          </div>
+          <div className="text-[11px] text-slate-400 flex items-center gap-1">
+            <span>🛡️ Personal logs are private to you.</span>
+          </div>
+        </div>
+      </div>
+
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-6 py-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">Daily Pulse</h1>
-              <p className="text-gray-600 mt-2">Track your work progress throughout the day</p>
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+            <div className="flex items-center gap-4">
+              <Avatar name={user?.full_name} src={(user as any)?.avatar_url} size="xl" />
+              <div>
+                <h1 className="text-3xl font-bold text-gray-900">Work Activity</h1>
+                <p className="text-gray-600 mt-1">See meaningful work changes as they happen</p>
+              </div>
             </div>
-            
-            <div className="flex items-center gap-8">
+
+            <div className="flex items-center gap-6 sm:gap-8 self-stretch justify-around md:self-auto">
               <div className="text-center">
-                <div className="text-4xl font-bold bg-gradient-to-r from-orange-500 to-red-500 bg-clip-text text-transparent">
+                <div className="text-3xl sm:text-4xl font-bold bg-gradient-to-r from-orange-500 to-red-500 bg-clip-text text-transparent">
                   {user?.streak_count || 0}
                 </div>
-                <div className="text-sm text-gray-600 mt-1">Day Streak</div>
+                <div className="text-xs sm:text-sm text-gray-600 mt-1 font-medium">Day Streak</div>
               </div>
               <div className="text-center">
-                <div className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
+                <div className="text-3xl sm:text-4xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
                   {user?.impact_score || 0}
                 </div>
-                <div className="text-sm text-gray-600 mt-1">Impact Score</div>
+                <div className="text-xs sm:text-sm text-gray-600 mt-1 font-medium">Impact Score</div>
               </div>
               <div className="text-center">
-                <div className="text-4xl font-bold text-green-600">
+                <div className="text-3xl sm:text-4xl font-bold text-green-600">
                   {todayLogs.length}
                 </div>
-                <div className="text-sm text-gray-600 mt-1">Today's Logs</div>
+                <div className="text-xs sm:text-sm text-gray-600 mt-1 font-medium">Today's Logs</div>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 py-8">
+      <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
+        {/* TASK #1: Individual Attention / Action Center */}
+        <AttentionActionCenter scope="INDIVIDUAL" />
+
+        {/* TARGET #3: Living Work Pulse */}
+        <WorkPulseFeed scope={selectedTeam ? 'TEAM' : 'INDIVIDUAL'} teamId={selectedTeam || undefined} />
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
             {/* New Log Entry */}
+
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -358,8 +401,8 @@ export default function Pulse() {
                 >
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="font-semibold text-purple-900">Chat with AI Assistant</h3>
-                    <button 
-                      onClick={() => setShowAIChat(false)} 
+                    <button
+                      onClick={() => setShowAIChat(false)}
                       className="text-purple-600 text-sm hover:text-purple-800"
                     >
                       Close
@@ -368,8 +411,8 @@ export default function Pulse() {
                   <div className="space-y-2 mb-3 max-h-48 overflow-y-auto">
                     {aiChatHistory.map((msg, i) => (
                       <div key={i} className={`p-2 rounded text-sm ${
-                        msg.role === 'user' 
-                          ? 'bg-blue-100 text-blue-900 ml-8' 
+                        msg.role === 'user'
+                          ? 'bg-blue-100 text-blue-900 ml-8'
                           : 'bg-purple-100 text-purple-900 mr-8'
                       }`}>
                         {msg.content}
@@ -392,9 +435,9 @@ export default function Pulse() {
                       className="input-field flex-1 text-sm"
                       disabled={aiChatLoading}
                     />
-                    <button 
-                      onClick={handleAIChat} 
-                      disabled={aiChatLoading} 
+                    <button
+                      onClick={handleAIChat}
+                      disabled={aiChatLoading}
                       className="btn-primary text-sm"
                     >
                       {aiChatLoading ? '...' : 'Send'}
@@ -644,13 +687,11 @@ export default function Pulse() {
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-gray-500">{log.word_count} words</span>
                           {log.sentiment_score !== null && (
-                            <span className={`badge ${getSentimentBadge(log.sentiment_score).class} text-xs`}>
-                              {getSentimentBadge(log.sentiment_score).text}
-                            </span>
+                            <StatusBadge status={getSentimentBadge(log.sentiment_score).text} />
                           )}
                         </div>
                       </div>
-                      
+
                       {log.bullet_points && log.bullet_points.length > 0 ? (
                         <div className="space-y-1">
                           {log.bullet_points.map((point: string, i: number) => (
@@ -663,7 +704,7 @@ export default function Pulse() {
                       ) : (
                         <p className="text-sm text-gray-700 line-clamp-3">{log.entry_text}</p>
                       )}
-                      
+
                       <button
                         onClick={() => setSelectedLog(log)}
                         className="text-xs text-blue-600 hover:text-blue-700 mt-2"
@@ -742,7 +783,7 @@ export default function Pulse() {
                   Close
                 </button>
               </div>
-              
+
               {selectedLog.bullet_points && selectedLog.bullet_points.length > 0 && (
                 <div className="mb-4 p-4 bg-blue-50 rounded-lg">
                   <h3 className="font-semibold text-blue-900 mb-2">Key Points</h3>
@@ -756,11 +797,11 @@ export default function Pulse() {
                   </div>
                 </div>
               )}
-              
+
               <div className="prose max-w-none">
                 <p className="text-gray-700 whitespace-pre-wrap leading-relaxed">{selectedLog.entry_text}</p>
               </div>
-              
+
               {selectedLog.entry_summary && (
                 <div className="mt-4 p-4 bg-gray-50 rounded-lg">
                   <h3 className="font-semibold text-gray-900 mb-2">AI Summary</h3>

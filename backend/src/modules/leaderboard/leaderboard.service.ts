@@ -1,12 +1,13 @@
-import { leaderboardRepository } from './leaderboard.repository';
+import { leaderboardRepository, LeaderboardPeriod } from './leaderboard.repository';
+import { avatarStorageService } from '../avatars/avatars.storage';
 
 // Milestone 10: the scoring formula itself is unchanged from the old
 // per-user implementation -- only how its inputs are fetched changed (one
 // aggregate query instead of a per-user fan-out; see leaderboard.repository.ts
 // for exactly which query replaced which old per-user call).
 export class LeaderboardService {
-  async getLeaderboard() {
-    const rows = await leaderboardRepository.getAggregateStats();
+  async getLeaderboard(period: LeaderboardPeriod = 'all') {
+    const rows = await leaderboardRepository.getAggregateStats(period);
 
     const scored = rows.map((row) => {
       const completedTasks = row.completed_tasks;
@@ -56,7 +57,16 @@ export class LeaderboardService {
     // instead. Deliberately NOT filtered by leaderboard_visible -- opting
     // out of being SHOWN on the leaderboard is a display preference, not
     // an opt-out of having your own score tracked at all.
-    await leaderboardRepository.bulkUpdateImpactScores(scored.map((s) => ({ userId: s.user_id, score: s.impact_score })));
+    // Only the canonical 'all' view may persist impact_score -- that value
+    // is read elsewhere as a user's durable, all-time score (auth
+    // session payload, ExecutiveBrief). A period-scoped ('today'/'week'/
+    // 'month') request computes a much smaller, intentionally different
+    // number for THIS view only; persisting it would corrupt the
+    // all-time score for everyone else who reads it until someone next
+    // happens to load the 'all' view.
+    if (period === 'all') {
+      await leaderboardRepository.bulkUpdateImpactScores(scored.map((s) => ({ userId: s.user_id, score: s.impact_score })));
+    }
 
     // Milestone 32: leaderboard_visible === 'false' opts a user out of
     // appearing here. Filtered only on the returned list (not the query
@@ -69,6 +79,8 @@ export class LeaderboardService {
         user_id: s.user_id,
         username: s.username,
         full_name: s.full_name,
+        avatar_key: (s as any).avatar_key || null,
+        avatar_url: avatarStorageService.getAvatarUrl((s as any).avatar_key),
         impact_score: s.impact_score,
         streak_count: s.streak_count,
         recent_activity: s.recent_activity,

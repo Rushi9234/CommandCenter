@@ -67,6 +67,37 @@ export const requireTeamMembership = (resolveTeamId: (req: AuthRequest) => Promi
   };
 };
 
+// Team or Parent-Classroom Owner Access Middleware -- allows team members OR owners/admins of parent classroom
+export const requireTeamOrParentAccess = (resolveTeamId: (req: AuthRequest) => Promise<string | null>) => {
+  return async (req: TeamRoleRequest, res: Response, next: NextFunction) => {
+    try {
+      const teamId = await resolveTeamId(req);
+      if (!teamId) {
+        return res.status(404).json({ error: 'Team not found' });
+      }
+
+      const role = await teamsRepository.getMemberRole(req.user!.userId, teamId);
+      if (role) {
+        req.teamRole = role;
+        return next();
+      }
+
+      const team = await teamsRepository.getTeam(teamId);
+      if (team && team.parent_team_id) {
+        const parentRole = await teamsRepository.getMemberRole(req.user!.userId, team.parent_team_id);
+        if (parentRole && ['owner', 'admin'].includes(parentRole)) {
+          req.teamRole = 'parent_owner';
+          return next();
+        }
+      }
+
+      return res.status(403).json({ error: 'Not authorized to access this team' });
+    } catch (error) {
+      next(error);
+    }
+  };
+};
+
 // For create endpoints where team scoping is optional (a project or goal
 // can be personal or team-owned): if the caller didn't specify a team,
 // there's nothing to check -- let the request through. If they did, they

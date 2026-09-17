@@ -35,7 +35,7 @@ export const removeMember = async (req: AuthRequest, res: Response) => {
 };
 
 export const updateMemberRole = async (req: AuthRequest, res: Response) => {
-  await teamsService.updateMemberRole(req.params.teamId, req.params.userId, req.body.role, req.teamRole!);
+  await teamsService.updateMemberRole(req.params.teamId, req.params.userId, req.body.role, req.teamRole!, req.user!.userId);
   ok(res, undefined, 'Member role updated successfully');
 };
 
