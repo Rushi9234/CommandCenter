@@ -39,6 +39,7 @@ export const login = async (req: Request, res: Response) => {
       data: { user: session.user, token: session.token },
     });
   } catch (error: any) {
+    console.error('[AUTH_LOGIN_ERROR]', error);
     res.status(error.status || 500).json({ error: error.status ? error.message : 'Login failed' });
   }
 };
