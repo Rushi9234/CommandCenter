@@ -613,72 +613,11 @@ export default function Pulse() {
             {/* ADD NEW LOG ENTRY SECTION */}
             <div id="new-log-section" className="bg-white border border-slate-200/80 rounded-2xl p-6 shadow-xs space-y-4">
               <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold text-slate-900 tracking-tight">Add New Log</h2>
-                <div className="flex gap-2">
-                  <button onClick={() => setShowAIChat(!showAIChat)} className="px-3 py-1.5 text-xs font-semibold bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-lg transition-all">
-                    {showAIChat ? 'Hide AI Chat' : 'AI Chat'}
-                  </button>
-                  {!showSuggestions && suggestions && (
-                    <button onClick={() => setShowSuggestions(true)} className="px-3 py-1.5 text-xs font-semibold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg transition-all">
-                      Get Suggestions
-                    </button>
-                  )}
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900 tracking-tight">Add New Log</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">Capture what you worked on while your AI Assistant stays available alongside you.</p>
                 </div>
               </div>
-
-              {/* AI Chat Panel */}
-              {showAIChat && (
-                <motion.div ref={aiChatPanelRef} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="p-4 bg-purple-50/70 border border-purple-200 rounded-xl space-y-3 scroll-mt-24">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-bold text-purple-900 text-sm">Chat with AI Assistant</h3>
-                    <button onClick={() => setShowAIChat(false)} className="text-purple-600 text-xs font-semibold hover:text-purple-800">
-                      Close
-                    </button>
-                  </div>
-                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                    {aiChatHistory.map((msg, i) => (
-                      <div key={i} className={`p-2.5 rounded-xl text-xs ${msg.role === 'user' ? 'bg-blue-100 text-blue-900 ml-6' : 'bg-purple-100 text-purple-900 mr-6'}`}>
-                        {msg.content}
-                      </div>
-                    ))}
-                    {aiChatLoading && <div className="p-2.5 bg-purple-100 text-purple-900 mr-6 rounded-xl text-xs italic">Thinking...</div>}
-                  </div>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={aiChatMessage}
-                      onChange={(e) => setAiChatMessage(e.target.value)}
-                      onKeyPress={(e) => e.key === 'Enter' && handleAIChat()}
-                      placeholder="Ask AI for help..."
-                      className="input-field flex-1 text-xs"
-                      disabled={aiChatLoading}
-                    />
-                    <button onClick={handleAIChat} disabled={aiChatLoading} className="btn-primary text-xs px-3">
-                      {aiChatLoading ? '...' : 'Send'}
-                    </button>
-                  </div>
-                </motion.div>
-              )}
-
-              {/* Suggestions Panel */}
-              {showSuggestions && suggestions && (
-                <motion.div ref={suggestionsPanelRef} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="p-4 bg-blue-50/70 border border-blue-200 rounded-xl space-y-2 scroll-mt-24">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-bold text-blue-900 text-sm">AI Suggestions</h3>
-                    <button onClick={() => setShowSuggestions(false)} className="text-blue-600 text-xs font-semibold">
-                      Hide
-                    </button>
-                  </div>
-                  <div className="space-y-1">
-                    {suggestions.suggestions?.map((s: string, i: number) => (
-                      <div key={i} className="text-xs text-blue-800 flex items-start gap-1.5">
-                        <span className="text-blue-500">•</span>
-                        <span>{s}</span>
-                      </div>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
 
               <textarea
                 value={entryText}
@@ -872,6 +811,123 @@ export default function Pulse() {
                 </div>
               )}
 
+              {/* AI ASSISTANT — PERSISTENT WORK COMPANION */}
+              <motion.div
+                ref={aiChatPanelRef}
+                id="ai-assistant-panel"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-gradient-to-br from-purple-50 via-white to-blue-50 border border-purple-200/80 rounded-2xl p-5 shadow-sm space-y-4 scroll-mt-24"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-600 flex items-center justify-center shrink-0">
+                      <span className="text-lg">✦</span>
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h2 className="font-bold text-slate-900 text-base">AI Assistant</h2>
+                        <span className="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">Beta</span>
+                      </div>
+                      <p className="text-xs text-slate-500 mt-0.5">Your intelligent work companion</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => navigate('/help-center')}
+                    className="text-xs font-bold text-purple-700 hover:text-purple-900"
+                    title="Open Help Center"
+                  >
+                    Help
+                  </button>
+                </div>
+
+                <div className="p-3.5 bg-white/80 border border-purple-100 rounded-xl">
+                  <div className="flex gap-3">
+                    <div className="w-8 h-8 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-sm shrink-0">🤖</div>
+                    <div className="text-xs text-slate-700 leading-relaxed">
+                      <p className="font-semibold text-slate-900 mb-1">Hi! 👋</p>
+                      <p>I can help with your work, answer questions, suggest next steps, draft updates, and explain CommandCenter features.</p>
+                    </div>
+                  </div>
+                </div>
+
+                {aiChatHistory.length > 0 && (
+                  <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+                    {aiChatHistory.map((msg, i) => (
+                      <div key={i} className={`p-2.5 rounded-xl text-xs ${msg.role === 'user' ? 'bg-blue-100 text-blue-900 ml-6' : 'bg-purple-100 text-purple-900 mr-6'}`}>
+                        {msg.content}
+                      </div>
+                    ))}
+                    {aiChatLoading && <div className="p-2.5 bg-purple-100 text-purple-900 mr-6 rounded-xl text-xs italic">Thinking...</div>}
+                  </div>
+                )}
+
+                {suggestions?.suggestions?.length > 0 && showSuggestions && (
+                  <div className="flex flex-wrap gap-2">
+                    {suggestions.suggestions.slice(0, 4).map((s: string, i: number) => (
+                      <button
+                        key={i}
+                        onClick={() => {
+                          setAiChatMessage(s);
+                          setShowAIChat(true);
+                        }}
+                        className="px-2.5 py-1.5 text-[11px] font-semibold text-blue-700 bg-white border border-blue-200 rounded-full hover:bg-blue-50 transition-colors"
+                      >
+                        {s.length > 38 ? s.slice(0, 38) + '…' : s}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => { setShowSuggestions(true); loadSuggestions(); }}
+                    className="px-2.5 py-1.5 text-[11px] font-semibold text-emerald-700 bg-white border border-emerald-200 rounded-full hover:bg-emerald-50"
+                  >
+                    💡 Suggest next steps
+                  </button>
+                  <button
+                    onClick={() => setAiChatMessage('Draft a status update from my recent work.')}
+                    className="px-2.5 py-1.5 text-[11px] font-semibold text-blue-700 bg-white border border-blue-200 rounded-full hover:bg-blue-50"
+                  >
+                    📝 Draft a status update
+                  </button>
+                  <button
+                    onClick={() => setAiChatMessage('Summarize my recent tasks.')}
+                    className="px-2.5 py-1.5 text-[11px] font-semibold text-blue-700 bg-white border border-blue-200 rounded-full hover:bg-blue-50"
+                  >
+                    🔎 Summarize my tasks
+                  </button>
+                  <button
+                    onClick={() => navigate('/help-center')}
+                    className="px-2.5 py-1.5 text-[11px] font-semibold text-purple-700 bg-white border border-purple-200 rounded-full hover:bg-purple-50"
+                  >
+                    ❓ Help Center
+                  </button>
+                </div>
+
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={aiChatMessage}
+                    onChange={(e) => setAiChatMessage(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleAIChat()}
+                    placeholder="Ask me anything about your work..."
+                    className="input-field flex-1 text-xs bg-white"
+                    disabled={aiChatLoading}
+                  />
+                  <button
+                    onClick={handleAIChat}
+                    disabled={aiChatLoading || !aiChatMessage.trim()}
+                    className="w-10 shrink-0 rounded-xl bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center disabled:opacity-50"
+                    aria-label="Send message"
+                  >
+                    {aiChatLoading ? '…' : '➤'}
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-400 text-center">AI can make mistakes. Verify important information.</p>
+              </motion.div>
+
               {/* Add Another Log Trigger */}
               <div className="pt-2">
                 <button
@@ -928,13 +984,3 @@ export default function Pulse() {
                     ))}
                   </div>
                 </div>
-              )}
-
-              <p className="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">{selectedLog.entry_text}</p>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
