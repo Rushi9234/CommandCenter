@@ -463,6 +463,7 @@ export default function Projects() {
   const myRoleInProjectTeam = selectedProject?.team_id
     ? teams.find((t) => t.team_id === selectedProject.team_id)?.my_role
     : null;
+  const isProjectTeamLeader = !!selectedProject?.team_id && !!myRoleInProjectTeam && ['owner', 'admin', 'manager'].includes(myRoleInProjectTeam);
   const canWriteProject = isProjectCreator || isAcceptedCollaborator || (!!myRoleInProjectTeam && myRoleInProjectTeam !== 'viewer');
   const canDeleteProject = isProjectCreator;
   const canDeleteTask = isProjectCreator || (!!selectedProject?.team_id && !!myRoleInProjectTeam && myRoleInProjectTeam !== 'viewer');
@@ -1259,7 +1260,7 @@ export default function Projects() {
                                   </div>
                                 )}
 
-                                {task.status === 'review' && (isProjectCreator || task.reviewer === user?.user_id) && (
+                                {task.status === 'review' && (isProjectCreator || isProjectTeamLeader || task.reviewer === user?.user_id) && (
                                   <div className="flex gap-1.5 mt-2.5 pt-2 border-t border-gray-100">
                                     <button
                                       type="button"

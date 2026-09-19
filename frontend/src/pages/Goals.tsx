@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import * as api from '../services/api';
 import Avatar from '../components/common/Avatar';
@@ -9,6 +10,7 @@ import WorkActivityTimeline from '../components/WorkActivityTimeline';
 import GoalDetailView from '../components/GoalDetailView';
 
 export default function Goals() {
+  const [searchParams] = useSearchParams();
   const [goals, setGoals] = useState<any[]>([]);
   const [hierarchy, setHierarchy] = useState<any[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -26,6 +28,18 @@ export default function Goals() {
     targetDate: '',
     teamId: '',
   });
+
+  useEffect(() => {
+    const goalIdParam = searchParams.get('goalId');
+    const teamIdParam = searchParams.get('teamId');
+
+    if (teamIdParam && teamIdParam !== selectedTeam) {
+      setSelectedTeam(teamIdParam);
+    }
+    if (goalIdParam) {
+      setSelectedDetailGoalId(goalIdParam);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     loadGoals();

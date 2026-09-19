@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import * as api from '../services/api';
 import { useAuth } from '../hooks/useAuth';
@@ -25,6 +25,8 @@ interface ConfirmState {
 export default function Teams() {
   const { user } = useAuth();
   const params = useParams<{ teamId?: string; memberId?: string; classId?: string }>();
+  const [searchParams] = useSearchParams();
+  const teamIdParam = params.teamId || searchParams.get('teamId') || undefined;
   const navigate = useNavigate();
   const [teams, setTeams] = useState<any[]>([]);
   const [allTeams, setAllTeams] = useState<any[]>([]);

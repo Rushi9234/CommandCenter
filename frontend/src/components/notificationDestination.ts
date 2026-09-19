@@ -27,42 +27,53 @@ export function getNotificationDestination(notification: {
   task_id?: string | null;
   blocker_id?: string | null;
   conversation_id?: string | null;
+  metadata?: any;
+  [key: string]: any;
 }): NotificationDestination | null {
   const category = notification.category || '';
 
+  const conversationId = notification.conversation_id || notification.conversationId || notification.metadata?.conversationId || notification.metadata?.conversation_id || null;
+  const teamId = notification.team_id || notification.teamId || notification.metadata?.teamId || notification.metadata?.team_id || null;
+  const projectId = notification.project_id || notification.projectId || notification.metadata?.projectId || notification.metadata?.project_id || null;
+  const goalId = notification.goal_id || notification.goalId || notification.metadata?.goalId || notification.metadata?.goal_id || null;
+  const taskId = notification.task_id || notification.taskId || notification.metadata?.taskId || notification.metadata?.task_id || null;
+  const blockerId = notification.blocker_id || notification.blockerId || notification.metadata?.blockerId || notification.metadata?.blocker_id || null;
+
   if (category.startsWith('chat.')) {
-    if (!notification.conversation_id) return null;
-    return { path: '/chat', params: { conversation: notification.conversation_id } };
+    if (!conversationId) return null;
+    return { path: '/chat', params: { conversation: conversationId } };
   }
 
   if (category.startsWith('team.')) {
-    if (!notification.team_id) return null;
-    return { path: '/teams', params: { teamId: notification.team_id } };
+    if (!teamId) return null;
+    return { path: '/teams', params: { teamId } };
   }
 
   if (category.startsWith('goal.')) {
-    if (!notification.goal_id) return null;
-    const params: Record<string, string> = { goalId: notification.goal_id };
-    if (notification.team_id) params.teamId = notification.team_id;
+    if (!goalId) return null;
+    const params: Record<string, string> = { goalId };
+    if (teamId) params.teamId = teamId;
     return { path: '/goals', params };
   }
 
   if (category.startsWith('task.')) {
-    if (!notification.project_id) return null;
-    const params: Record<string, string> = { projectId: notification.project_id };
-    if (notification.task_id) params.taskId = notification.task_id;
+    if (!projectId) return null;
+    const params: Record<string, string> = { projectId };
+    if (taskId) params.taskId = taskId;
     return { path: '/projects', params };
   }
 
   if (category.startsWith('project.')) {
-    if (!notification.project_id) return null;
-    return { path: '/projects', params: { projectId: notification.project_id } };
+    if (!projectId) return null;
+    const params: Record<string, string> = { projectId };
+    if (taskId) params.taskId = taskId;
+    return { path: '/projects', params };
   }
 
   if (category.startsWith('blocker.')) {
-    if (!notification.team_id) return null;
-    const params: Record<string, string> = { teamId: notification.team_id };
-    if (notification.blocker_id) params.blockerId = notification.blocker_id;
+    if (!teamId) return null;
+    const params: Record<string, string> = { teamId };
+    if (blockerId) params.blockerId = blockerId;
     return { path: '/help', params };
   }
 
