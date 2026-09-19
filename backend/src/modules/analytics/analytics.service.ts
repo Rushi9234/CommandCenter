@@ -344,11 +344,11 @@ export class AnalyticsService {
     if (!authorized && teamId) {
       // Check caller's role in the specified team context
       const callerTeamRole = await teamsRepository.getMemberRole(userId, teamId);
-      if (callerTeamRole === 'owner' || callerTeamRole === 'admin' || callerTeamRole === 'manager') {
+      const team = await teamsRepository.getTeam(teamId);
+      if (callerTeamRole === 'owner' || callerTeamRole === 'admin' || callerTeamRole === 'manager' || team?.created_by === userId) {
         authorized = true;
       } else {
         // Check if caller is owner/admin of parent class
-        const team = await teamsRepository.getTeam(teamId);
         if (team?.parent_team_id) {
           const parentRole = await teamsRepository.getMemberRole(userId, team.parent_team_id);
           const parentTeam = await teamsRepository.getTeam(team.parent_team_id);
@@ -362,7 +362,7 @@ export class AnalyticsService {
       const userTeams = await teamsRepository.getUserTeams(memberId);
       for (const t of userTeams) {
         const callerRole = await teamsRepository.getMemberRole(userId, t.team_id);
-        if (callerRole === 'owner' || callerRole === 'admin' || callerRole === 'manager') {
+        if (callerRole === 'owner' || callerRole === 'admin' || callerRole === 'manager' || t.created_by === userId) {
           authorized = true;
           teamId = t.team_id;
           break;

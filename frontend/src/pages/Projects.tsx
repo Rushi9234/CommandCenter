@@ -270,27 +270,37 @@ export default function Projects() {
   // getMyProjects() resolves).
   useEffect(() => {
     const projectId = searchParams.get('projectId');
-    if (!projectId || projectId === lastProcessedProjectDeepLink.current || projects.length === 0) return;
-    lastProcessedProjectDeepLink.current = projectId;
+    const taskId = searchParams.get('taskId');
+    if (!projectId) {
+      lastProcessedProjectDeepLink.current = null;
+      return;
+    }
+    const deepLinkKey = `${projectId}:${taskId || ''}`;
+    if (lastProcessedProjectDeepLink.current === deepLinkKey) return;
+    if (projectsLoading && !projectsLoadedOnce) return;
+
     const target = projects.find((p: any) => p.project_id === projectId);
     if (target) {
+      lastProcessedProjectDeepLink.current = deepLinkKey;
       setProjectDeepLinkError('');
       setSelectedProjectId(target.project_id);
-      const taskId = searchParams.get('taskId');
       if (taskId) {
         setTaskDeepLinkError('');
         setHighlightedTaskId(taskId);
+        loadTasks(target.project_id);
       }
-    } else {
+      setSearchParams({}, { replace: true });
+    } else if (projectsLoadedOnce) {
+      lastProcessedProjectDeepLink.current = deepLinkKey;
       setProjectDeepLinkError("You no longer have access to that project, or it doesn't exist.");
       setSelectedProjectId((current) => {
         if (current && projects.some((p: any) => p.project_id === current)) return current;
         return projects[0]?.project_id ?? null;
       });
+      setSearchParams({}, { replace: true });
     }
-    setSearchParams({}, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, projects]);
+  }, [searchParams, projects, projectsLoadedOnce, projectsLoading]);
 
   // Deep-linked task: scroll to / confirm it once this project's tasks
   // have actually finished loading. Keyed on the task ID itself (not a
@@ -299,16 +309,18 @@ export default function Projects() {
   // already-scrolled task doesn't re-scroll the board.
   useEffect(() => {
     if (!highlightedTaskId || highlightedTaskId === lastScrolledTaskId.current || !tasksLoadedOnce) return;
-    lastScrolledTaskId.current = highlightedTaskId;
     const found = tasks.some((t) => t.task_id === highlightedTaskId);
     if (!found) {
+      if (tasksLoading) return;
       setTaskDeepLinkError("That task is no longer available, or you don't have access to it.");
       return;
     }
+    lastScrolledTaskId.current = highlightedTaskId;
+    setTaskDeepLinkError('');
     const el = document.getElementById(`task-${highlightedTaskId}`);
     el?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [highlightedTaskId, tasksLoadedOnce, tasks]);
+  }, [highlightedTaskId, tasksLoadedOnce, tasksLoading, tasks]);
 
   useEffect(() => {
     // Member list is TEAM-scoped, not project-scoped -- keyed on team_id
@@ -466,7 +478,38 @@ export default function Projects() {
   const isProjectTeamLeader = !!selectedProject?.team_id && !!myRoleInProjectTeam && ['owner', 'admin', 'manager'].includes(myRoleInProjectTeam);
   const canWriteProject = isProjectCreator || isAcceptedCollaborator || (!!myRoleInProjectTeam && myRoleInProjectTeam !== 'viewer');
   const canDeleteProject = isProjectCreator;
-  const canDeleteTask = isProjectCreator || (!!selectedProject?.team_id && !!myRoleInProjectTeam && myRoleInProjectTeam !== 'viewer');
+
+  const canEditTask = (task: any) => {
+    if (!user) return false;
+    const isTaskOwner = task.owner === user.user_id;
+    const isTaskCreator = task.created_by === user.user_id;
+    const isTaskContributor = Array.isArray(task.contributors) && task.contributors.includes(user.user_id);
+    return isProjectCreator || isProjectTeamLeader || isTaskOwner || isTaskCreator || isTaskContributor || isAcceptedCollaborator;
+  };
+
+  const canDeleteTaskForUser = (task: any) => {
+    if (!user) return false;
+    const isTaskCreator = task.created_by === user.user_id;
+    return isProjectCreator || isProjectTeamLeader || isTaskCreator;
+  };
+
+  const canChangeTaskStatus = (task: any) => {
+    if (!user) return false;
+    const isTaskOwner = task.owner === user.user_id;
+    const isTaskCreator = task.created_by === user.user_id;
+    const isTaskContributor = Array.isArray(task.contributors) && task.contributors.includes(user.user_id);
+    const isReviewer = task.reviewer === user.user_id;
+    return isProjectCreator || isProjectTeamLeader || isTaskOwner || isTaskCreator || isTaskContributor || isReviewer;
+  };
+
+  const canSubmitTaskForReview = (task: any) => {
+    if (!user) return false;
+    if (task.status !== 'todo' && task.status !== 'in_progress') return false;
+    const isTaskOwner = task.owner === user.user_id;
+    const isTaskContributor = Array.isArray(task.contributors) && task.contributors.includes(user.user_id);
+    const isUnassignedCreator = task.created_by === user.user_id && !task.owner;
+    return isTaskOwner || isTaskContributor || isUnassignedCreator;
+  };
 
   // Assignable users for the CURRENTLY SELECTED project -- the single
   // source of truth every assignment control (owner/reviewer/
@@ -749,6 +792,17 @@ export default function Projects() {
   const selectedProjectTeam = selectedProject?.team_id
     ? teams.find((t) => t.team_id === selectedProject.team_id)
     : null;
+
+  const isProjectOwner = selectedProject?.created_by === user?.user_id;
+  const isClassOwner = selectedProjectTeam?.parent_team_id
+    ? teams.find((t) => t.team_id === selectedProjectTeam.parent_team_id)?.created_by === user?.user_id
+    : false;
+  const userMemberRole = selectedProjectTeam
+    ? members.find((m) => m.user_id === user?.user_id)?.role
+    : null;
+  const isTeamLeaderOrAdmin = userMemberRole === 'owner' || userMemberRole === 'admin' || userMemberRole === 'manager' || selectedProjectTeam?.created_by === user?.user_id;
+  const canAssignTasks = isProjectOwner || isTeamLeaderOrAdmin || isClassOwner;
+  const pendingTasks = tasks.filter((t) => t.status === 'pending');
 
   const toggleArrayValue = (arr: string[], value: string) =>
     arr.includes(value) ? arr.filter((v) => v !== value) : [...arr, value];
@@ -1223,6 +1277,71 @@ export default function Projects() {
                         Failed to refresh tasks. Showing the last known results.
                       </div>
                     )}
+                    {pendingTasks.length > 0 && (
+                      <div className="mb-6 p-4 bg-amber-50/70 border border-amber-200 rounded-xl space-y-3">
+                        <div className="flex items-center justify-between">
+                          <h3 className="font-semibold text-amber-900 flex items-center gap-2">
+                            <span>⏳ Pending Task Proposals</span>
+                            <span className="badge badge-yellow text-xs">{pendingTasks.length}</span>
+                          </h3>
+                          <span className="text-xs text-amber-700 font-medium">
+                            {canAssignTasks ? 'Requires Project Owner Approval' : 'Waiting for Project Owner approval'}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                          {pendingTasks.map((task) => (
+                            <motion.div
+                              key={task.task_id}
+                              id={`task-${task.task_id}`}
+                              layout
+                              className={`p-3 bg-white/90 border rounded-lg shadow-sm ${
+                                highlightedTaskId === task.task_id ? 'ring-2 ring-amber-500 border-amber-400' : 'border-amber-200'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="font-medium text-sm text-gray-900">{task.title}</div>
+                                <span className={`badge badge-${getPriorityColor(task.priority)} text-xs shrink-0`}>
+                                  {task.priority}
+                                </span>
+                              </div>
+                              {task.description && (
+                                <p className="text-xs text-gray-600 mt-1 line-clamp-2">{task.description}</p>
+                              )}
+                              <div className="mt-2 text-xs text-amber-800 font-medium">
+                                ⏳ Waiting for Project Owner approval
+                              </div>
+                              {(canAssignTasks || task.created_by === user?.user_id) && (
+                                <div className="flex items-center gap-2 mt-3 pt-2 border-t border-amber-100">
+                                  {canAssignTasks && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleApproveTask(task.task_id)}
+                                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded transition-colors"
+                                    >
+                                      ✅ Approve
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => openEditTaskModal(task)}
+                                    className="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs rounded transition-colors"
+                                  >
+                                    ✏️ Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteTask(task.task_id)}
+                                    className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-700 text-xs rounded transition-colors"
+                                  >
+                                    Reject
+                                  </button>
+                                </div>
+                              )}
+                            </motion.div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     <div className="grid grid-cols-4 gap-4">
                       {(['todo', 'in_progress', 'review', 'done'] as const).map((status) => (
                         <div key={status} className="pro-card p-4">
@@ -1279,7 +1398,7 @@ export default function Projects() {
                                   </div>
                                 )}
 
-                                {(task.status === 'todo' || task.status === 'in_progress') && canWriteProject && (
+                                {canSubmitTaskForReview(task) && (
                                   <button
                                     type="button"
                                     onClick={() => handleSubmitTaskForReview(task.task_id)}
@@ -1305,30 +1424,36 @@ export default function Projects() {
                                       {task.priority}
                                     </span>
                                   </div>
-                                  {canWriteProject && (
+                                  {(canChangeTaskStatus(task) || canEditTask(task) || canDeleteTaskForUser(task)) && (
                                     <div className="flex items-center gap-1">
-                                      <select
-                                        value={task.status}
-                                        onChange={(e) => handleUpdateTaskStatus(task.task_id, e.target.value)}
-                                        disabled={updatingTaskId === task.task_id || deletingTaskId === task.task_id}
-                                        aria-label={`Status for ${task.title}`}
-                                        className="text-xs border border-gray-300 rounded px-2 py-1 disabled:opacity-50"
-                                      >
-                                        <option value="todo">To Do</option>
-                                        <option value="in_progress">In Progress</option>
-                                        <option value="review">Review</option>
-                                        <option value="done">Done</option>
-                                      </select>
-                                      <button
-                                        type="button"
-                                        onClick={() => openEditTaskModal(task)}
-                                        disabled={deletingTaskId === task.task_id}
-                                        aria-label={`Edit ${task.title}`}
-                                        className="text-gray-600 hover:text-gray-900 text-xs disabled:opacity-50"
-                                      >
-                                        ✏️
-                                      </button>
-                                      {canDeleteTask && (
+                                      {canChangeTaskStatus(task) && (
+                                        <select
+                                          value={task.status}
+                                          onChange={(e) => handleUpdateTaskStatus(task.task_id, e.target.value)}
+                                          disabled={updatingTaskId === task.task_id || deletingTaskId === task.task_id}
+                                          aria-label={`Status for ${task.title}`}
+                                          className="text-xs border border-gray-300 rounded px-2 py-1 disabled:opacity-50"
+                                        >
+                                          <option value="todo">To Do</option>
+                                          <option value="in_progress">In Progress</option>
+                                          <option value="review">Review</option>
+                                          {(isProjectCreator || isProjectTeamLeader || task.reviewer === user?.user_id) && (
+                                            <option value="done">Done</option>
+                                          )}
+                                        </select>
+                                      )}
+                                      {canEditTask(task) && (
+                                        <button
+                                          type="button"
+                                          onClick={() => openEditTaskModal(task)}
+                                          disabled={deletingTaskId === task.task_id}
+                                          aria-label={`Edit ${task.title}`}
+                                          className="text-gray-600 hover:text-gray-900 text-xs disabled:opacity-50"
+                                        >
+                                          ✏️
+                                        </button>
+                                      )}
+                                      {canDeleteTaskForUser(task) && (
                                         <button
                                           type="button"
                                           onClick={() => handleDeleteTask(task.task_id)}
@@ -1721,7 +1846,19 @@ export default function Projects() {
               exit={{ opacity: 0, scale: 0.9 }}
               className="pro-card p-6 w-full max-w-md max-h-[90vh] overflow-auto"
             >
-              <h2 className="text-xl font-bold text-gray-900 mb-4">Add New Task</h2>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold text-gray-900">Add New Task</h2>
+                <button
+                  type="button"
+                  onClick={() => setShowTaskModal(false)}
+                  className="p-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                  aria-label="Close modal"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
               <form onSubmit={handleCreateTask} className="space-y-4">
                 <div>
                   <label htmlFor="task-title" className="block text-sm font-medium text-gray-700 mb-2">Task Title *</label>
@@ -1758,7 +1895,13 @@ export default function Projects() {
                   </select>
                 </div>
 
-                {renderAssignmentFields(newTask, (updater) => setNewTask(updater), 'task-create')}
+                {canAssignTasks ? (
+                  renderAssignmentFields(newTask, (updater) => setNewTask(updater), 'task-create')
+                ) : (
+                  <p className="text-xs text-amber-800 bg-amber-50 p-2.5 rounded-lg border border-amber-200">
+                    ℹ️ As a project collaborator, your task proposal will be sent to the Project Owner for approval.
+                  </p>
+                )}
 
                 <div className="flex gap-3">
                   <button type="submit" disabled={creatingTask} className="btn-primary flex-1 disabled:opacity-50">
@@ -1837,7 +1980,7 @@ export default function Projects() {
                   </div>
                 </div>
 
-                {renderAssignmentFields(editTaskDraft, (updater) => setEditTaskDraft((d) => (d ? updater(d) : d)), 'task-edit', editingTask.task_id)}
+                {canAssignTasks && renderAssignmentFields(editTaskDraft, (updater) => setEditTaskDraft((d) => (d ? updater(d) : d)), 'task-edit', editingTask.task_id)}
 
                 <div className="flex gap-3">
                   <button type="submit" disabled={savingTaskEdit} className="btn-primary flex-1 disabled:opacity-50">

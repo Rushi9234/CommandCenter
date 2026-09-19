@@ -27,8 +27,17 @@ export class TeamsService {
     });
   }
 
-  getMyTeams(userId: string) {
-    return teamsRepository.getUserTeams(userId);
+  async getMyTeams(userId: string) {
+    const teams = await teamsRepository.getUserTeams(userId);
+    if (teams.length === 0) {
+      return teams;
+    }
+    const teamIds = teams.map((t: any) => t.team_id);
+    const memberCounts = await teamsRepository.getMemberCounts(teamIds);
+    return teams.map((team: any) => ({
+      ...team,
+      member_count: memberCounts[team.team_id] || 0,
+    }));
   }
 
   async getAllTeams() {

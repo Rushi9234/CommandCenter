@@ -1,7 +1,15 @@
 import axios from 'axios';
 
+const getApiBaseUrl = () => {
+  if (import.meta.env.VITE_API_URL) {
+    const base = import.meta.env.VITE_API_URL.replace(/\/$/, '');
+    return base.endsWith('/api') ? base : `${base}/api`;
+  }
+  return import.meta.env.PROD ? 'https://commandcenter-backend.vercel.app/api' : '/api';
+};
+
 const api = axios.create({
-  baseURL: import.meta.env.PROD ? 'https://commandcenter-backend.vercel.app/api' : '/api',
+  baseURL: getApiBaseUrl(),
   headers: {
     'Content-Type': 'application/json',
   },
@@ -333,7 +341,7 @@ export const verifyPhone = (code: string) =>
 
 export const uploadAvatar = (formData: FormData) => {
   const uploadApi = axios.create({
-    baseURL: import.meta.env.PROD ? 'https://commandcenter-backend.vercel.app/api' : '/api',
+    baseURL: getApiBaseUrl(),
     timeout: 30000,
   });
 

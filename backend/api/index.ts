@@ -19,7 +19,10 @@ let initialized: Promise<void> | null = null;
 
 const handler = async (req: any, res: any) => {
   if (!initialized) {
-    initialized = connectDatabase();
+    initialized = connectDatabase().catch((error) => {
+      initialized = null;
+      throw error;
+    });
   }
 
   try {

@@ -94,6 +94,9 @@ function formatHumanDescription(
     case 'status_changed': {
       const prev = formatStatusLabel(previousState?.status);
       const next = formatStatusLabel(newState?.status);
+      if (newState?.changes_requested_reason) {
+        return `Changes requested by ${actor}: "${newState.changes_requested_reason}"`;
+      }
       if (prev && next && prev !== next) {
         return `Status changed from ${prev} to ${next}`;
       }

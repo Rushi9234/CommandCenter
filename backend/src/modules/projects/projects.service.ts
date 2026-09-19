@@ -159,6 +159,45 @@ export class ProjectsService {
   async createTask(projectId: string, body: any, userId: string) {
     await this.validateTaskReferences(projectId, body);
 
+    const project = await projectsRepository.getProject(projectId);
+    if (!project) {
+      throw new NotFoundError('Project not found');
+    }
+
+    // Check user's task assignment authority
+    const isProjectCreator = project.created_by === userId;
+    let canAssign = isProjectCreator;
+    if (!canAssign && project.team_id) {
+      const team = await teamsRepository.getTeam(project.team_id);
+      const role = await teamsRepository.getMemberRole(userId, project.team_id);
+      if (role === 'owner' || role === 'admin' || role === 'manager' || team?.created_by === userId) {
+        canAssign = true;
+      } else if (team?.parent_team_id) {
+        const parentRole = await teamsRepository.getMemberRole(userId, team.parent_team_id);
+        const parentTeam = await teamsRepository.getTeam(team.parent_team_id);
+        if (parentRole === 'owner' || parentRole === 'admin' || parentTeam?.created_by === userId) {
+          canAssign = true;
+        }
+      }
+    }
+
+    // Server-side enforcement: non-authorized assigners MUST NOT assign other owners, reviewers, or contributors
+    if (!canAssign) {
+      const hasOtherOwner = body.owner && body.owner !== userId;
+      const hasReviewer = !!body.reviewer;
+      const hasContributors = Array.isArray(body.contributors) && body.contributors.length > 0;
+      if (hasOtherOwner || hasReviewer || hasContributors) {
+        throw new ForbiddenError('You are not authorized to assign task owners, reviewers, or contributors');
+      }
+    }
+
+    if (canAssign && body.owner && project.team_id) {
+      const ownerRole = await teamsRepository.getMemberRole(body.owner, project.team_id);
+      if (!ownerRole) {
+        throw new ForbiddenError('Assigned user must be a current member of the target team');
+      }
+    }
+
     const goalId = body.goalId || body.goal_id || null;
     if (goalId) {
       const isValidGoal = await tasksRepository.validateGoalInSameTeam(goalId, projectId);
@@ -171,22 +210,72 @@ export class ProjectsService {
       project_id: projectId,
       title: body.title,
       description: body.description || '',
-      owner: body.owner,
-      contributors: body.contributors || [],
-      reviewer: body.reviewer,
+      owner: canAssign ? body.owner : null,
+      contributors: canAssign ? (body.contributors || []) : [],
+      reviewer: canAssign ? body.reviewer : null,
       dependencies: body.dependencies || [],
       priority: body.priority || 'medium',
       created_by: userId,
       goal_id: goalId,
     });
 
+    const isCollaboratorProposal = !canAssign;
+
+    if (isCollaboratorProposal) {
+      const updatedTask = await tasksRepository.updateTask(task.task_id, { status: 'pending' });
+      const activeTask = updatedTask || task;
+
+      // Notify project owner of task proposal
+      const collaborator = await usersRepository.getUserById(userId);
+      const collaboratorName = collaborator?.full_name || collaborator?.username || 'A collaborator';
+
+      await notificationsService.notifyUser({
+        recipientUserId: project.created_by,
+        category: 'task.creation_proposed',
+        preferenceGroup: 'task_assignment',
+        title: 'New Task Proposal',
+        message: `${collaboratorName} wants to add a new task to "${project.project_name}"`,
+        taskId: activeTask.task_id,
+        projectId: activeTask.project_id,
+        teamId: project.team_id || undefined,
+      });
+
+      if (project?.team_id) {
+        await workStateHistoryService.recordTransition({
+          team_id: project.team_id,
+          artifact_type: 'task',
+          artifact_id: activeTask.task_id,
+          event_type: 'proposed',
+          actor_id: userId,
+          new_state: { title: activeTask.title, status: 'pending', priority: activeTask.priority, goal_id: activeTask.goal_id },
+        });
+        realtimeProvider.publish(createRealtimeEvent('task.created', { teamId: project.team_id }));
+      }
+
+      return activeTask;
+    }
+
     await this.notifyTaskAssignmentChanges(task, { owner: null, reviewer: null, contributors: [] }, userId);
 
-    // Publish realtime event for task creation. The event carries only the
-    // project_id so subscribers can refetch the authoritative task list;
-    // the full task data (including assignments) is fetched server-side.
-    const project = await projectsRepository.getProject(projectId);
     if (project?.team_id) {
+      if (!task.owner) {
+        const actor = await usersRepository.getUserById(userId);
+        const actorName = actor?.full_name || actor?.username || 'A team leader';
+        await notificationsService.notifyTeamMembersByRole(
+          project.team_id,
+          ['owner', 'admin', 'manager', 'member', 'viewer'],
+          {
+            category: 'task.team_assigned',
+            preferenceGroup: 'task_assignment',
+            title: 'New Team Work Assigned',
+            message: `${actorName} assigned new work: "${task.title}"`,
+            taskId: task.task_id,
+            projectId: project.project_id,
+          },
+          userId
+        );
+      }
+
       await workStateHistoryService.recordTransition({
         team_id: project.team_id,
         artifact_type: 'task',
@@ -299,6 +388,27 @@ export class ProjectsService {
     }));
   }
 
+  private async getAssignmentAuthority(projectId: string, userId: string): Promise<boolean> {
+    const project = await projectsRepository.getProject(projectId);
+    if (!project) return false;
+    if (project.created_by === userId) return true;
+    if (project.team_id) {
+      const team = await teamsRepository.getTeam(project.team_id);
+      const role = await teamsRepository.getMemberRole(userId, project.team_id);
+      if (role === 'owner' || role === 'admin' || role === 'manager' || team?.created_by === userId) {
+        return true;
+      }
+      if (team?.parent_team_id) {
+        const parentRole = await teamsRepository.getMemberRole(userId, team.parent_team_id);
+        const parentTeam = await teamsRepository.getTeam(team.parent_team_id);
+        if (parentRole === 'owner' || parentRole === 'admin' || parentTeam?.created_by === userId) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   // Milestone 5: base gate (requireAccess + tasksRepository.canAccessTask)
   // moved to projects.routes.ts. Previously had no check of any kind.
   // Milestone 35: completed_at is not client-writable (excluded from
@@ -313,6 +423,37 @@ export class ProjectsService {
     const task = await tasksRepository.getTask(taskId);
     if (!task) {
       throw new NotFoundError('Task not found');
+    }
+
+    const project = await projectsRepository.getProject(task.project_id);
+
+    if (userId) {
+      const touchesOwner = updates.owner !== undefined && updates.owner !== task.owner;
+      const touchesReviewer = updates.reviewer !== undefined && updates.reviewer !== task.reviewer;
+      const touchesContributors =
+        updates.contributors !== undefined &&
+        JSON.stringify(updates.contributors) !== JSON.stringify(task.contributors || []);
+
+      if (touchesOwner || touchesReviewer || touchesContributors) {
+        const canAssign = await this.getAssignmentAuthority(task.project_id, userId);
+        if (!canAssign) {
+          throw new ForbiddenError('You are not authorized to assign task owners, reviewers, or contributors');
+        }
+        if (updates.owner && project?.team_id) {
+          const ownerRole = await teamsRepository.getMemberRole(updates.owner, project.team_id);
+          if (!ownerRole) {
+            throw new ForbiddenError('Assigned user must be a current member of the target team');
+          }
+        }
+      }
+
+      if (updates.status === 'done' && task.status !== 'done') {
+        const canAssign = await this.getAssignmentAuthority(task.project_id, userId);
+        const isReviewer = task.reviewer === userId;
+        if (!canAssign && !isReviewer) {
+          throw new ForbiddenError('Direct completion is not permitted; please submit the task for review');
+        }
+      }
     }
 
     await this.validateTaskReferences(task.project_id, updates, taskId);
@@ -410,11 +551,10 @@ export class ProjectsService {
 
     const isOwner = task.owner === userId;
     const isContributor = Array.isArray(task.contributors) && task.contributors.includes(userId);
-    const isCreator = task.created_by === userId;
-    const isAcceptedCollaborator = await projectsRepository.isAcceptedCollaborator(userId, task.project_id);
+    const isUnassignedCreator = task.created_by === userId && !task.owner;
 
-    if (!isOwner && !isContributor && !isCreator && !isAcceptedCollaborator) {
-      throw new ForbiddenError('Only assigned owner, contributor, or project collaborator can submit task for review');
+    if (!isOwner && !isContributor && !isUnassignedCreator) {
+      throw new ForbiddenError('Only assigned task owner or explicit contributor can submit task for review');
     }
 
     const updated = await tasksRepository.updateTask(taskId, { status: 'review' });
@@ -472,6 +612,43 @@ export class ProjectsService {
 
     if (!isReviewer && !isProjectCreator && !isTeamLeader) {
       throw new ForbiddenError('Only authorized reviewer or team leader can approve task');
+    }
+
+    if (task.status === 'pending') {
+      const updated = await tasksRepository.updateTask(taskId, {
+        status: 'todo',
+        owner: task.created_by,
+        reviewer: userId,
+      });
+
+      if (project?.team_id) {
+        await workStateHistoryService.recordTransition({
+          team_id: project.team_id,
+          artifact_type: 'task',
+          artifact_id: taskId,
+          event_type: 'proposal_approved',
+          actor_id: userId,
+          previous_state: { status: 'pending' },
+          new_state: { status: 'todo', owner: task.created_by, reviewer: userId },
+        });
+
+        realtimeProvider.publish(createRealtimeEvent('task.status_changed', { teamId: project.team_id }));
+      }
+
+      if (task.created_by && task.created_by !== userId) {
+        await notificationsService.notifyUser({
+          recipientUserId: task.created_by,
+          category: 'task.proposal_approved',
+          preferenceGroup: 'task_assignment',
+          title: 'Task Proposal Approved',
+          message: `Your task proposal "${task.title}" was approved!`,
+          taskId,
+          projectId: task.project_id,
+          teamId: project?.team_id || undefined,
+        });
+      }
+
+      return updated;
     }
 
     const updated = await tasksRepository.updateTask(taskId, { status: 'done', completed_at: new Date() });
@@ -684,7 +861,13 @@ export class ProjectsService {
               avatar_key: m.avatar_key,
               role: m.role,
               team_id: m.team_id,
+              team_ids: m.team_id ? [m.team_id] : [],
             });
+          } else {
+            const existing = userMap.get(m.user_id);
+            if (existing && m.team_id && !existing.team_ids.includes(m.team_id)) {
+              existing.team_ids.push(m.team_id);
+            }
           }
         }
       }

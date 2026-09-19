@@ -63,7 +63,10 @@ app.use(
         return callback(null, true);
       }
 
-      if (allowedOrigins.includes(origin)) {
+      if (
+        allowedOrigins.includes(origin) ||
+        /^https:\/\/commandcenter-[a-zA-Z0-9-]*\.vercel\.app$/.test(origin)
+      ) {
         return callback(null, true);
       }
 

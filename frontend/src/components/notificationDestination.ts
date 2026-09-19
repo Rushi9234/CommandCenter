@@ -46,7 +46,9 @@ export function getNotificationDestination(notification: {
 
   if (category.startsWith('team.')) {
     if (!teamId) return null;
-    return { path: '/teams', params: { teamId } };
+    const params: Record<string, string> = { teamId };
+    if (taskId) params.taskId = taskId;
+    return { path: '/teams', params };
   }
 
   if (category.startsWith('goal.')) {
@@ -56,11 +58,25 @@ export function getNotificationDestination(notification: {
     return { path: '/goals', params };
   }
 
-  if (category.startsWith('task.')) {
+  if (category === 'task.creation_proposed') {
     if (!projectId) return null;
     const params: Record<string, string> = { projectId };
     if (taskId) params.taskId = taskId;
     return { path: '/projects', params };
+  }
+
+  if (category.startsWith('task.')) {
+    if (projectId) {
+      const params: Record<string, string> = { projectId };
+      if (taskId) params.taskId = taskId;
+      return { path: '/projects', params };
+    }
+    if (teamId) {
+      const params: Record<string, string> = { teamId };
+      if (taskId) params.taskId = taskId;
+      return { path: '/teams', params };
+    }
+    return null;
   }
 
   if (category.startsWith('project.')) {

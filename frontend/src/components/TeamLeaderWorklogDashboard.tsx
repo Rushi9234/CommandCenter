@@ -923,6 +923,7 @@ export default function TeamLeaderWorklogDashboard({
         onClose={() => setIsAssignModalOpen(false)}
         onSuccess={fetchWorklog}
         teamId={teamId}
+        availableTeams={[{ team_id: teamId, team_name: worklog?.team_name || teamName || 'Team View', member_count: member_summary?.length || 0 }]}
       />
 
       {/* Review Work Modal */}

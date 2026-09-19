@@ -191,15 +191,27 @@ export class TasksRepository {
     const text = `
       SELECT tk.task_id FROM tasks tk
       INNER JOIN projects p ON tk.project_id = p.project_id
+      LEFT JOIN teams t ON p.team_id = t.team_id
       WHERE tk.task_id = $1 AND (
         p.created_by = $2 OR
-        (p.team_id IS NOT NULL AND p.team_id IN (SELECT team_id FROM team_members WHERE user_id = $2 AND role != 'viewer')) OR
+        tk.owner = $2 OR
+        tk.created_by = $2 OR
+        (tk.contributors IS NOT NULL AND tk.contributors::jsonb @> jsonb_build_array($2::text)) OR
         EXISTS (
           SELECT 1 FROM project_collaborators
           WHERE project_id = p.project_id AND user_id = $2 AND status = 'accepted'
         ) OR
-        tk.owner = $2 OR
-        tk.created_by = $2
+        (p.team_id IS NOT NULL AND (
+          t.created_by = $2 OR
+          EXISTS (
+            SELECT 1 FROM team_members
+            WHERE team_id = p.team_id AND user_id = $2 AND role IN ('owner', 'admin', 'manager')
+          ) OR
+          (t.parent_team_id IS NOT NULL AND EXISTS (
+            SELECT 1 FROM team_members
+            WHERE team_id = t.parent_team_id AND user_id = $2 AND role IN ('owner', 'admin', 'manager')
+          ))
+        ))
       )
     `;
     const result = await queryOne(text, [taskId, userId]);
@@ -210,9 +222,21 @@ export class TasksRepository {
     const text = `
       SELECT tk.task_id FROM tasks tk
       INNER JOIN projects p ON tk.project_id = p.project_id
+      LEFT JOIN teams t ON p.team_id = t.team_id
       WHERE tk.task_id = $1 AND (
         p.created_by = $2 OR
-        (p.team_id IS NOT NULL AND p.team_id IN (SELECT team_id FROM team_members WHERE user_id = $2 AND role != 'viewer'))
+        tk.created_by = $2 OR
+        (p.team_id IS NOT NULL AND (
+          t.created_by = $2 OR
+          EXISTS (
+            SELECT 1 FROM team_members
+            WHERE team_id = p.team_id AND user_id = $2 AND role IN ('owner', 'admin', 'manager')
+          ) OR
+          (t.parent_team_id IS NOT NULL AND EXISTS (
+            SELECT 1 FROM team_members
+            WHERE team_id = t.parent_team_id AND user_id = $2 AND role IN ('owner', 'admin', 'manager')
+          ))
+        ))
       )
     `;
     const result = await queryOne(text, [taskId, userId]);

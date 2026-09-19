@@ -80,7 +80,7 @@ export default function AttentionActionCenter({ scope, teamId, title }: Props) {
         setLoading(false);
         return;
       }
-      setData(res.data.data || res.data);
+      setData(res?.data?.data || res?.data || null);
     } catch (err: any) {
       console.error('Failed to load Action Center data:', err);
       setError(err.response?.data?.error || 'Failed to load attention items');

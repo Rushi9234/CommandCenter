@@ -11,10 +11,10 @@ export interface WorkPulseFeedProps {
 
 const CATEGORY_FILTERS = [
   { id: 'all', label: 'All Activity' },
-  { id: 'task', label: 'Tasks 📋' },
-  { id: 'goal', label: 'Goals 🎯' },
-  { id: 'blocker', label: 'Blockers 🚨' },
-  { id: 'guidance', label: 'Guidance 💡' },
+  { id: 'task', label: 'Tasks' },
+  { id: 'goal', label: 'Goals' },
+  { id: 'blocker', label: 'Blockers' },
+  { id: 'guidance', label: 'Guidance' },
 ];
 
 export default function WorkPulseFeed({ scope, teamId, onNavigateToItem }: WorkPulseFeedProps) {
@@ -26,40 +26,44 @@ export default function WorkPulseFeed({ scope, teamId, onNavigateToItem }: WorkP
   const [error, setError] = useState<string | null>(null);
   const [selectedTimelineItem, setSelectedTimelineItem] = useState<PulseItem | null>(null);
 
-  const fetchPulseEvents = useCallback(async (category?: string, cursor?: string, append = false) => {
-    if (!append) setLoading(true);
-    else setLoadingMore(true);
-    setError(null);
+  const fetchPulseEvents = useCallback(
+    async (category?: string, cursor?: string, append = false) => {
+      if (!append) setLoading(true);
+      else setLoadingMore(true);
+      setError(null);
 
-    try {
-      const catParam = category === 'all' ? undefined : category;
-      let res;
-      if (scope === 'TEAM' && teamId) {
-        res = await pulseService.getTeamPulse(teamId, { category: catParam, cursor, limit: 15 });
-      } else if (scope === 'CLASSROOM' && teamId) {
-        res = await pulseService.getClassroomPulse(teamId, { category: catParam, cursor, limit: 15 });
-      } else {
-        res = await pulseService.getIndividualPulse({ category: catParam, cursor, limit: 15 });
+      try {
+        const catParam = category === 'all' ? undefined : category;
+        let res;
+        if (scope === 'TEAM' && teamId) {
+          res = await pulseService.getTeamPulse(teamId, { category: catParam, cursor, limit: 15 });
+        } else if (scope === 'CLASSROOM' && teamId) {
+          res = await pulseService.getClassroomPulse(teamId, { category: catParam, cursor, limit: 15 });
+        } else {
+          res = await pulseService.getIndividualPulse({ category: catParam, cursor, limit: 15 });
+        }
+
+        setEvents((prev) => {
+          if (!append) return res.events;
+          const map = new Map<string, PulseItem>();
+          for (const item of prev) map.set(item.history_id, item);
+          for (const item of res.events) map.set(item.history_id, item);
+          return Array.from(map.values()).sort(
+            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          );
+        });
+
+        setNextCursor(res.next_cursor);
+      } catch (err: any) {
+        console.error('Failed to load pulse feed:', err);
+        setError(err.response?.data?.error || 'Failed to load work pulse events');
+      } finally {
+        setLoading(false);
+        setLoadingMore(false);
       }
-
-      setEvents((prev) => {
-        if (!append) return res.events;
-        // Idempotent merge by history_id
-        const map = new Map<string, PulseItem>();
-        for (const item of prev) map.set(item.history_id, item);
-        for (const item of res.events) map.set(item.history_id, item);
-        return Array.from(map.values()).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      });
-
-      setNextCursor(res.next_cursor);
-    } catch (err: any) {
-      console.error('Failed to load pulse feed:', err);
-      setError(err.response?.data?.error || 'Failed to load work pulse events');
-    } finally {
-      setLoading(false);
-      setLoadingMore(false);
-    }
-  }, [scope, teamId]);
+    },
+    [scope, teamId]
+  );
 
   useEffect(() => {
     fetchPulseEvents(activeCategory);
@@ -91,25 +95,25 @@ export default function WorkPulseFeed({ scope, teamId, onNavigateToItem }: WorkP
   const getEventBadge = (item: PulseItem) => {
     switch (item.event_type) {
       case 'completed':
-        return { text: 'Completed', bg: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' };
+        return { text: 'Completed', bg: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
       case 'reopened':
-        return { text: 'Reopened', bg: 'bg-amber-500/10 text-amber-400 border-amber-500/30' };
+        return { text: 'Reopened', bg: 'bg-amber-50 text-amber-700 border-amber-200' };
       case 'status_changed':
-        return { text: 'Status Change', bg: 'bg-blue-500/10 text-blue-400 border-blue-500/30' };
+        return { text: 'Status Change', bg: 'bg-blue-50 text-blue-700 border-blue-200' };
       case 'progress_changed':
-        return { text: 'Progress Update', bg: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30' };
+        return { text: 'Progress Update', bg: 'bg-indigo-50 text-indigo-700 border-indigo-200' };
       case 'created':
-        return { text: 'Created', bg: 'bg-sky-500/10 text-sky-400 border-sky-500/30' };
+        return { text: 'Created', bg: 'bg-sky-50 text-sky-700 border-sky-200' };
       case 'resolved':
-        return { text: 'Resolved', bg: 'bg-teal-500/10 text-teal-400 border-teal-500/30' };
+        return { text: 'Resolved', bg: 'bg-teal-50 text-teal-700 border-teal-200' };
       case 'guidance_created':
-        return { text: 'Guidance Issued', bg: 'bg-purple-500/10 text-purple-400 border-purple-500/30' };
+        return { text: 'Guidance Issued', bg: 'bg-purple-50 text-purple-700 border-purple-200' };
       case 'guidance_acknowledged':
-        return { text: 'Guidance Ack', bg: 'bg-blue-500/10 text-blue-400 border-blue-500/30' };
+        return { text: 'Guidance Ack', bg: 'bg-blue-50 text-blue-700 border-blue-200' };
       case 'guidance_resolved':
-        return { text: 'Guidance Resolved', bg: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' };
+        return { text: 'Guidance Resolved', bg: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
       default:
-        return { text: item.event_type.replace(/_/g, ' '), bg: 'bg-slate-700/50 text-slate-300 border-slate-600' };
+        return { text: item.event_type.replace(/_/g, ' '), bg: 'bg-slate-100 text-slate-700 border-slate-200' };
     }
   };
 
@@ -122,16 +126,16 @@ export default function WorkPulseFeed({ scope, teamId, onNavigateToItem }: WorkP
 
     if (prevProgress !== undefined && newProgress !== undefined && prevProgress !== newProgress) {
       return (
-        <span className="text-xs font-mono text-slate-400">
-          Progress: <span className="line-through">{prevProgress}%</span> → <span className="text-indigo-400 font-bold">{newProgress}%</span>
+        <span className="text-xs font-mono text-slate-500">
+          Progress: <span className="line-through">{prevProgress}%</span> → <span className="text-indigo-600 font-bold">{newProgress}%</span>
         </span>
       );
     }
 
     if (prevStatus && newStatus && prevStatus !== newStatus) {
       return (
-        <span className="text-xs font-mono text-slate-400">
-          Status: <span className="line-through">{prevStatus}</span> → <span className="text-sky-400 font-bold">{newStatus}</span>
+        <span className="text-xs font-mono text-slate-500">
+          Status: <span className="line-through">{prevStatus}</span> → <span className="text-blue-600 font-bold">{newStatus}</span>
         </span>
       );
     }
@@ -140,15 +144,18 @@ export default function WorkPulseFeed({ scope, teamId, onNavigateToItem }: WorkP
   };
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl text-slate-100 space-y-6" data-testid="work-pulse-feed">
+    <div className="bg-white border border-slate-200/80 rounded-2xl p-6 shadow-xs text-slate-900 space-y-6" data-testid="work-pulse-feed">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
         <div>
-          <h2 className="text-lg font-bold text-white flex items-center gap-2">
-            <span>⚡ Work Activity</span>
-            <span className="text-xs font-normal text-slate-400">({scope} Context)</span>
+          <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2 tracking-tight">
+            <svg className="w-5 h-5 text-blue-600 inline shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>Recent Activity</span>
+            <span className="text-xs font-semibold text-slate-400">({scope} Context)</span>
           </h2>
-          <p className="text-xs text-slate-400 mt-0.5">See meaningful work changes as they happen</p>
+          <p className="text-xs text-slate-500 mt-0.5">See what's happening across your work, teams, and projects.</p>
         </div>
 
         {/* Filter Pills */}
@@ -157,10 +164,10 @@ export default function WorkPulseFeed({ scope, teamId, onNavigateToItem }: WorkP
             <button
               key={cat.id}
               onClick={() => handleCategoryChange(cat.id)}
-              className={`px-3 py-1 text-xs rounded-lg font-medium transition-all ${
+              className={`px-3 py-1 text-xs rounded-xl font-bold transition-all ${
                 activeCategory === cat.id
-                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20'
-                  : 'bg-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+                  ? 'bg-blue-600 text-white shadow-xs shadow-blue-600/20'
+                  : 'bg-slate-100/80 text-slate-600 hover:text-slate-900 hover:bg-slate-200/80'
               }`}
             >
               {cat.label}
@@ -173,29 +180,29 @@ export default function WorkPulseFeed({ scope, teamId, onNavigateToItem }: WorkP
       {loading ? (
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="animate-pulse bg-slate-800/60 h-20 rounded-lg p-4 flex items-center gap-4">
-              <div className="w-10 h-10 rounded-full bg-slate-700"></div>
+            <div key={i} className="animate-pulse bg-slate-50 h-20 rounded-xl p-4 flex items-center gap-4 border border-slate-100">
+              <div className="w-10 h-10 rounded-full bg-slate-200"></div>
               <div className="flex-1 space-y-2">
-                <div className="h-4 bg-slate-700 rounded w-1/3"></div>
-                <div className="h-3 bg-slate-700 rounded w-2/3"></div>
+                <div className="h-4 bg-slate-200 rounded w-1/3"></div>
+                <div className="h-3 bg-slate-200 rounded w-2/3"></div>
               </div>
             </div>
           ))}
         </div>
       ) : error ? (
-        <div className="bg-rose-950/40 border border-rose-800/60 rounded-lg p-4 text-rose-300 text-sm flex items-center justify-between">
+        <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 text-rose-700 text-xs flex items-center justify-between">
           <span>{error}</span>
-          <button onClick={() => fetchPulseEvents(activeCategory)} className="text-xs bg-rose-900/60 hover:bg-rose-800 text-rose-100 px-3 py-1 rounded">
+          <button onClick={() => fetchPulseEvents(activeCategory)} className="text-xs bg-rose-100 hover:bg-rose-200 text-rose-800 px-3 py-1 rounded-lg font-bold">
             Retry
           </button>
         </div>
       ) : events.length === 0 ? (
-        <div className="text-center py-10 border border-dashed border-slate-800 rounded-xl bg-slate-950/40">
-          <p className="text-sm font-medium text-slate-400">No recent work changes in this context</p>
+        <div className="text-center py-10 border border-dashed border-slate-200 rounded-2xl bg-slate-50/50">
+          <p className="text-sm font-bold text-slate-700">No recent work changes in this context</p>
           <p className="text-xs text-slate-500 mt-1">Work events will appear here as team members make progress.</p>
         </div>
       ) : (
-        <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1 custom-scrollbar">
+        <div className="space-y-3 max-h-[540px] overflow-y-auto pr-1">
           {events.map((item) => {
             const badge = getEventBadge(item);
             const isDeleted = item.context_status === 'deleted';
@@ -203,26 +210,26 @@ export default function WorkPulseFeed({ scope, teamId, onNavigateToItem }: WorkP
             return (
               <div
                 key={item.history_id}
-                className="bg-slate-950/60 border border-slate-800/80 rounded-lg p-4 hover:border-slate-700 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 group"
+                className="bg-slate-50/60 border border-slate-200/80 rounded-xl p-4 hover:border-blue-300 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 group"
               >
                 <div className="flex items-start gap-3">
                   <Avatar name={item.actor_name || 'System'} src={item.actor_avatar || undefined} size="md" />
                   <div className="space-y-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-bold text-slate-200">{item.actor_name || 'Team Member'}</span>
-                      <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${badge.bg}`}>
+                      <span className="text-sm font-bold text-slate-900">{item.actor_name || 'Team Member'}</span>
+                      <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-md border ${badge.bg}`}>
                         {badge.text}
                       </span>
-                      <span className="text-xs text-slate-400 font-mono">
+                      <span className="text-xs text-slate-500 font-mono">
                         {item.team_name} {item.project_name ? `› ${item.project_name}` : ''}
                       </span>
                     </div>
 
-                    <div className="text-sm text-slate-300">
+                    <div className="text-xs text-slate-700">
                       {isDeleted ? (
-                        <span className="text-rose-400 italic text-xs">Linked work is no longer available</span>
+                        <span className="text-rose-500 italic text-xs">Linked work is no longer available</span>
                       ) : (
-                        <span className="font-medium text-white">{item.artifact_title || `${item.artifact_type} #${item.artifact_id.substring(0, 8)}`}</span>
+                        <span className="font-semibold text-slate-900">{item.artifact_title || `${item.artifact_type} #${item.artifact_id.substring(0, 8)}`}</span>
                       )}
                     </div>
 
@@ -230,19 +237,19 @@ export default function WorkPulseFeed({ scope, teamId, onNavigateToItem }: WorkP
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between sm:justify-end gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-800">
+                <div className="flex items-center justify-between sm:justify-end gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100">
                   <span className="text-xs text-slate-400 whitespace-nowrap">{formatTimestamp(item.created_at)}</span>
                   <button
                     onClick={() => setSelectedTimelineItem(item)}
                     data-testid={`view-timeline-${item.history_id}`}
-                    className="text-xs bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white px-3 py-1.5 rounded-md font-medium transition-all"
+                    className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-3 py-1.5 rounded-lg transition-all"
                   >
                     View Timeline
                   </button>
                   {!isDeleted && onNavigateToItem && (
                     <button
                       onClick={() => onNavigateToItem(item)}
-                      className="text-xs bg-slate-800 hover:bg-blue-600 text-slate-300 hover:text-white px-3 py-1.5 rounded-md font-medium transition-all group-hover:border-blue-500"
+                      className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold border border-blue-200 px-3 py-1.5 rounded-lg transition-all"
                     >
                       Open Target →
                     </button>
@@ -260,7 +267,7 @@ export default function WorkPulseFeed({ scope, teamId, onNavigateToItem }: WorkP
           <button
             onClick={handleLoadMore}
             disabled={loadingMore}
-            className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold px-4 py-2 rounded-lg transition-all disabled:opacity-50"
+            className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2 rounded-xl transition-all disabled:opacity-50"
           >
             {loadingMore ? 'Loading More Changes...' : 'Load More Changes ↓'}
           </button>
@@ -272,7 +279,7 @@ export default function WorkPulseFeed({ scope, teamId, onNavigateToItem }: WorkP
         (selectedTimelineItem.artifact_type === 'task' ||
           selectedTimelineItem.artifact_type === 'goal' ||
           selectedTimelineItem.artifact_type === 'blocker') && (
-          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
             <WorkActivityTimeline
               artifactType={selectedTimelineItem.artifact_type}
               artifactId={selectedTimelineItem.artifact_id}

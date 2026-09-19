@@ -27,12 +27,15 @@ export default function Teams() {
   const params = useParams<{ teamId?: string; memberId?: string; classId?: string }>();
   const [searchParams] = useSearchParams();
   const teamIdParam = params.teamId || searchParams.get('teamId') || undefined;
+  const taskIdParam = searchParams.get('taskId') || undefined;
   const navigate = useNavigate();
   const [teams, setTeams] = useState<any[]>([]);
   const [allTeams, setAllTeams] = useState<any[]>([]);
   const [invites, setInvites] = useState<any[]>([]);
   const [joinRequests, setJoinRequests] = useState<any[]>([]);
   const [selectedTeam, setSelectedTeam] = useState<any>(null);
+  const [teamTasks, setTeamTasks] = useState<any[]>([]);
+  const highlightedTaskRef = useRef<HTMLDivElement | null>(null);
   const [teamMembers, setTeamMembers] = useState<any[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
@@ -175,8 +178,8 @@ export default function Teams() {
       const list = response.data.data;
       setTeams(list);
 
-      if (params.teamId) {
-        const found = list.find((t: any) => t.team_id === params.teamId);
+      if (teamIdParam) {
+        const found = list.find((t: any) => t.team_id === teamIdParam);
         if (found) {
           selectTeam(found, false);
           return;
@@ -192,13 +195,13 @@ export default function Teams() {
   };
 
   useEffect(() => {
-    if (params.teamId && teams.length > 0) {
-      const found = teams.find((t: any) => t.team_id === params.teamId);
+    if (teamIdParam && teams.length > 0) {
+      const found = teams.find((t: any) => t.team_id === teamIdParam);
       if (found && found.team_id !== selectedTeam?.team_id) {
         selectTeam(found, false);
       }
     }
-  }, [params.teamId, teams]);
+  }, [teamIdParam, teams]);
 
   const loadAllTeams = async () => {
     try {
@@ -229,6 +232,7 @@ export default function Teams() {
     const currentSeq = ++teamSelectSeq.current;
     setSubTeams([]);
     setWorkSubmissions([]);
+    setTeamTasks([]);
 
     try {
       const [membersRes, requestsRes] = await Promise.all([
@@ -262,7 +266,28 @@ export default function Teams() {
     } catch (error) {
       console.error('Failed to load work submissions:', error);
     }
+
+    try {
+      const projRes = await Promise.resolve(api.getTeamProjects(team.team_id)).catch(() => ({ data: { data: [] } }));
+      if (currentSeq !== teamSelectSeq.current) return;
+      const projects = projRes?.data?.data || [];
+      const activeProj = projects.find((p: any) => p.status === 'active') || projects[0];
+      if (activeProj) {
+        const tasksRes = await Promise.resolve(api.getProjectTasks(activeProj.project_id)).catch(() => ({ data: { data: [] } }));
+        if (currentSeq === teamSelectSeq.current) {
+          setTeamTasks(tasksRes?.data?.data || []);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load team tasks:', error);
+    }
   };
+
+  useEffect(() => {
+    if (taskIdParam && highlightedTaskRef.current) {
+      highlightedTaskRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [taskIdParam, teamTasks]);
 
   const handleCreateTeam = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -931,6 +956,51 @@ export default function Teams() {
                           </button>
                         </div>
                       ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Team Tasks / Assigned Work */}
+                {teamTasks.length > 0 && (
+                  <div className="pro-card p-6" data-testid="team-tasks-section">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-1">📋 Team Tasks & Assigned Work</h3>
+                    <p className="text-sm text-gray-500 mb-4">Active work items assigned to this team or individual members.</p>
+                    <div className="space-y-3">
+                      {teamTasks.map((t: any) => {
+                        const isHighlighted = taskIdParam && t.task_id === taskIdParam;
+                        return (
+                          <div
+                            key={t.task_id}
+                            ref={isHighlighted ? highlightedTaskRef : null}
+                            className={`p-4 rounded-xl border transition-all ${
+                              isHighlighted
+                                ? 'bg-indigo-50/80 border-indigo-500 ring-2 ring-indigo-400 shadow-md'
+                                : 'bg-white border-gray-200 hover:border-gray-300'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="font-bold text-gray-900 flex items-center gap-2">
+                                <span>{t.title}</span>
+                                {isHighlighted && (
+                                  <span className="text-[10px] font-bold bg-indigo-600 text-white px-2 py-0.5 rounded-full uppercase tracking-wider">
+                                    Target Task
+                                  </span>
+                                )}
+                              </div>
+                              <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${
+                                t.status === 'completed' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
+                              }`}>
+                                {t.status || 'todo'}
+                              </span>
+                            </div>
+                            {t.description && <p className="text-xs text-gray-600 mt-1">{t.description}</p>}
+                            <div className="flex items-center gap-4 mt-2 text-[11px] text-gray-500">
+                              {t.owner_user && <span>👤 Owner: {t.owner_user.full_name || t.owner_user.username}</span>}
+                              {t.priority && <span>⚡ Priority: {t.priority}</span>}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}

@@ -47,6 +47,29 @@ export const AssignWorkModal: React.FC<AssignWorkModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [selectedIndividualTeam, setSelectedIndividualTeam] = useState<string>('');
+
+  const memberTeams = React.useMemo(() => {
+    if (!selectedMember) return [];
+    if (effectiveTeams.length === 0) return [];
+    return effectiveTeams.filter((t) => {
+      if (selectedMember.team_ids && Array.isArray(selectedMember.team_ids)) {
+        return selectedMember.team_ids.includes(t.team_id);
+      }
+      return selectedMember.team_id === t.team_id;
+    });
+  }, [selectedMember, effectiveTeams]);
+
+  useEffect(() => {
+    if (memberTeams.length > 0) {
+      if (!selectedIndividualTeam || !memberTeams.some((t) => t.team_id === selectedIndividualTeam)) {
+        setSelectedIndividualTeam(memberTeams[0].team_id);
+      }
+    } else if (selectedMember?.team_id) {
+      setSelectedIndividualTeam(selectedMember.team_id);
+    }
+  }, [memberTeams, selectedMember]);
+
   useEffect(() => {
     if (effectiveTeamId) {
       setSelectedTargetTeam(effectiveTeamId);
@@ -56,14 +79,76 @@ export const AssignWorkModal: React.FC<AssignWorkModalProps> = ({
   }, [effectiveTeamId, effectiveTeams]);
 
   useEffect(() => {
-    if (recipientType === 'individual' && effectiveClassId && memberSearchQuery.trim()) {
+    if (recipientType === 'individual' && memberSearchQuery.trim()) {
       const timer = setTimeout(async () => {
         setSearchingMembers(true);
         try {
-          const res = await api.searchClassroomMembers(effectiveClassId, memberSearchQuery);
-          setSearchResults(res.data.data || []);
+          if (effectiveClassId) {
+            const res = await api.searchClassroomMembers(effectiveClassId, memberSearchQuery);
+            setSearchResults(res.data.data || []);
+          } else if (effectiveTeamId) {
+            const res = await api.getTeamMembers(effectiveTeamId);
+            const members = res.data.data || [];
+            const q = memberSearchQuery.trim().toLowerCase();
+            const filtered = members
+              .filter((m: any) => {
+                const name = (m.user?.full_name || m.full_name || m.username || '').toLowerCase();
+                const uname = (m.user?.username || m.username || '').toLowerCase();
+                return name.includes(q) || uname.includes(q);
+              })
+              .map((m: any) => ({
+                user_id: m.user_id,
+                full_name: m.user?.full_name || m.full_name || m.username,
+                username: m.user?.username || m.username,
+                role: m.role || 'member',
+                team_id: effectiveTeamId,
+                team_ids: [effectiveTeamId],
+              }));
+            setSearchResults(filtered);
+          } else if (effectiveTeams.length > 0) {
+            const allMembersArrays = await Promise.all(
+              effectiveTeams.map((t) =>
+                api
+                  .getTeamMembers(t.team_id)
+                  .then((r) => (r.data.data || []).map((m: any) => ({ ...m, _team_id: t.team_id })))
+                  .catch(() => [])
+              )
+            );
+
+            const userMap = new Map<string, any>();
+            for (const arr of allMembersArrays) {
+              for (const m of arr) {
+                const uid = m.user_id || m.user?.user_id;
+                const fname = m.user?.full_name || m.full_name || m.username;
+                const uname = m.user?.username || m.username;
+                if (!uid) continue;
+                if (!userMap.has(uid)) {
+                  userMap.set(uid, {
+                    user_id: uid,
+                    full_name: fname,
+                    username: uname,
+                    role: m.role || 'member',
+                    team_id: m._team_id,
+                    team_ids: [m._team_id],
+                  });
+                } else {
+                  const existing = userMap.get(uid);
+                  if (m._team_id && !existing.team_ids.includes(m._team_id)) {
+                    existing.team_ids.push(m._team_id);
+                  }
+                }
+              }
+            }
+
+            const q = memberSearchQuery.trim().toLowerCase();
+            const filtered = Array.from(userMap.values()).filter(
+              (u: any) => u.full_name.toLowerCase().includes(q) || u.username.toLowerCase().includes(q)
+            );
+            setSearchResults(filtered);
+          }
         } catch (err) {
           console.error('Failed to search members:', err);
+          setSearchResults([]);
         } finally {
           setSearchingMembers(false);
         }
@@ -72,7 +157,7 @@ export const AssignWorkModal: React.FC<AssignWorkModalProps> = ({
     } else {
       setSearchResults([]);
     }
-  }, [recipientType, effectiveClassId, memberSearchQuery]);
+  }, [recipientType, effectiveClassId, effectiveTeamId, effectiveTeams, memberSearchQuery]);
 
   if (!isOpen) return null;
 
@@ -98,8 +183,10 @@ export const AssignWorkModal: React.FC<AssignWorkModalProps> = ({
         });
       } else if (recipientType === 'individual' && selectedMember) {
         // Individual Member Assignment
-        // Get target team's project or default
-        const targetTeamId = selectedMember.team_id || effectiveTeamId;
+        const targetTeamId = selectedIndividualTeam || selectedMember.team_id || effectiveTeamId;
+        if (!targetTeamId) {
+          throw new Error('Target team must be selected');
+        }
         const projRes = await api.getTeamProjects(targetTeamId);
         const projects = projRes.data.data || [];
         let targetProj = projects.find((p: any) => p.status === 'active') || projects[0];
@@ -274,21 +361,45 @@ export const AssignWorkModal: React.FC<AssignWorkModalProps> = ({
               <div className="space-y-2">
                 <label className="block text-xs font-semibold text-gray-700">Search & Select Member *</label>
                 {selectedMember ? (
-                  <div className="flex items-center justify-between p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-xs">
-                    <div className="flex items-center gap-3">
-                      <Avatar name={selectedMember.full_name} size="md" />
-                      <div>
-                        <div className="font-bold text-gray-900">{selectedMember.full_name}</div>
-                        <div className="text-gray-500">@{selectedMember.username} • {selectedMember.role || 'Member'}</div>
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-xs">
+                      <div className="flex items-center gap-3">
+                        <Avatar name={selectedMember.full_name} size="md" />
+                        <div>
+                          <div className="font-bold text-gray-900">{selectedMember.full_name}</div>
+                          <div className="text-gray-500">@{selectedMember.username} • {selectedMember.role || 'Member'}</div>
+                        </div>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => { setSelectedMember(null); setSelectedIndividualTeam(''); }}
+                        className="text-indigo-700 hover:text-indigo-900 font-bold px-2 py-1 text-xs"
+                      >
+                        Change Member
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedMember(null)}
-                      className="text-indigo-700 hover:text-indigo-900 font-bold px-2 py-1 text-xs"
-                    >
-                      Change Member
-                    </button>
+
+                    {memberTeams.length > 1 && (
+                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs space-y-2">
+                        <label className="block font-bold text-amber-900">
+                          Which team should this work be assigned under? *
+                        </label>
+                        <p className="text-amber-800 text-[11px]">
+                          {selectedMember.full_name} is a member of multiple teams you manage. Select the target team context:
+                        </p>
+                        <select
+                          value={selectedIndividualTeam}
+                          onChange={(e) => setSelectedIndividualTeam(e.target.value)}
+                          className="w-full text-xs font-semibold border border-amber-300 rounded-lg p-2 bg-white text-gray-900 focus:ring-2 focus:ring-amber-500"
+                        >
+                          {memberTeams.map((t) => (
+                            <option key={t.team_id} value={t.team_id}>
+                              {t.team_name} ({t.member_count ?? t.members_count ?? 0} members)
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="relative space-y-2">
