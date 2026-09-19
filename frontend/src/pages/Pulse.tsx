@@ -838,7 +838,6 @@ export default function Pulse() {
                       requestAnimationFrame(() => aiChatPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
                     }}
                     className="text-xs font-bold text-purple-700 hover:text-purple-900"
-                    title="Ask the Help Center"
                   >
                     Help Center
                   </button>
@@ -865,68 +864,93 @@ export default function Pulse() {
                   </div>
                 )}
 
-                {suggestions?.suggestions?.length > 0 && showSuggestions && (
-                  <div className="flex flex-wrap gap-2">
-                    {suggestions.suggestions.slice(0, 4).map((s: string, i: number) => (
-                      <button
-                        key={i}
-                        onClick={() => {
-                          setAiChatMessage(s);
-                          setShowAIChat(true);
-                        }}
-                        className="px-2.5 py-1.5 text-[11px] font-semibold text-blue-700 bg-white border border-blue-200 rounded-full hover:bg-blue-50 transition-colors"
-                      >
-                        {s.length > 38 ? s.slice(0, 38) + '…' : s}
-                      </button>
-                    ))}
-                  </div>
-                )}
-
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={() => { setShowSuggestions(true); loadSuggestions(); }}
-                    className="px-2.5 py-1.5 text-[11px] font-semibold text-emerald-700 bg-white border border-emerald-200 rounded-full hover:bg-emerald-50"
-                  >
+                  <button onClick={() => { setShowSuggestions(true); loadSuggestions(); }} className="px-2.5 py-1.5 text-[11px] font-semibold text-emerald-700 bg-white border border-emerald-200 rounded-full hover:bg-emerald-50">
                     💡 Suggest next steps
                   </button>
-                  <button
-                    onClick={() => setAiChatMessage('Draft a status update from my recent work.')}
-                    className="px-2.5 py-1.5 text-[11px] font-semibold text-blue-700 bg-white border border-blue-200 rounded-full hover:bg-blue-50"
-                  >
+                  <button onClick={() => setAiChatMessage('Draft a status update from my recent work.')} className="px-2.5 py-1.5 text-[11px] font-semibold text-blue-700 bg-white border border-blue-200 rounded-full hover:bg-blue-50">
                     📝 Draft a status update
                   </button>
-                  <button
-                    onClick={() => setAiChatMessage('Summarize my recent tasks.')}
-                    className="px-2.5 py-1.5 text-[11px] font-semibold text-blue-700 bg-white border border-blue-200 rounded-full hover:bg-blue-50"
-                  >
+                  <button onClick={() => setAiChatMessage('Summarize my recent tasks.')} className="px-2.5 py-1.5 text-[11px] font-semibold text-blue-700 bg-white border border-blue-200 rounded-full hover:bg-blue-50">
                     🔎 Summarize my tasks
                   </button>
-                  <button
-                    onClick={() => setAiChatMessage('How do I use CommandCenter?')}
-                    className="px-2.5 py-1.5 text-[11px] font-semibold text-purple-700 bg-white border border-purple-200 rounded-full hover:bg-purple-50"
-                  >
+                  <button onClick={() => setAiChatMessage('How do I use CommandCenter?')} className="px-2.5 py-1.5 text-[11px] font-semibold text-purple-700 bg-white border border-purple-200 rounded-full hover:bg-purple-50">
                     ❓ Help Center
                   </button>
                 </div>
 
                 <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={aiChatMessage}
-                    onChange={(e) => setAiChatMessage(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleAIChat()}
-                    placeholder="Ask me anything about your work..."
-                    className="input-field flex-1 text-xs bg-white"
-                    disabled={aiChatLoading}
-                  />
-                  <button
-                    onClick={handleAIChat}
-                    disabled={aiChatLoading || !aiChatMessage.trim()}
-                    className="w-10 shrink-0 rounded-xl bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center disabled:opacity-50"
-                    aria-label="Send message"
-                  >
+                  <input type="text" value={aiChatMessage} onChange={(e) => setAiChatMessage(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleAIChat()} placeholder="Ask me anything about your work..." className="input-field flex-1 text-xs bg-white" disabled={aiChatLoading} />
+                  <button onClick={handleAIChat} disabled={aiChatLoading || !aiChatMessage.trim()} className="w-10 shrink-0 rounded-xl bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center disabled:opacity-50" aria-label="Send message">
                     {aiChatLoading ? '…' : '➤'}
                   </button>
                 </div>
                 <p className="text-[10px] text-slate-400 text-center">AI can make mistakes. Verify important information.</p>
               </motion.div>
+
+              {/* Add Another Log Trigger */}
+              <div className="pt-2">
+                <button
+                  onClick={() => {
+                    const el = document.getElementById('new-log-section');
+                    if (el) el.scrollIntoView({ behavior: 'smooth' });
+                  }}
+                  className="w-full py-2 px-3 text-xs font-bold text-blue-600 bg-blue-50/50 hover:bg-blue-100/60 border border-blue-200 rounded-xl transition-all"
+                >
+                  + Add Another Log
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* RECENT ACTIVITY CONTAINER */}
+        <WorkPulseFeed scope={selectedTeam ? 'TEAM' : 'INDIVIDUAL'} teamId={selectedTeam || undefined} />
+      </div>
+
+      {/* SUCCESS NOTIFICATION ALERT */}
+      <AnimatePresence>
+        {success && (
+          <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="fixed bottom-6 right-6 z-50 alert alert-success shadow-lg">
+            <div>
+              <div className="font-bold text-xs">Log submitted successfully!</div>
+              <div className="text-[11px]">AI analysis complete</div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* FULL LOG MODAL */}
+      <AnimatePresence>
+        {selectedLog && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4" onClick={() => setSelectedLog(null)}>
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} onClick={(e) => e.stopPropagation()} className="pro-card p-6 w-full max-w-2xl max-h-[80vh] overflow-auto">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-bold text-slate-900">{new Date(selectedLog.created_at).toLocaleString()}</h2>
+                <button onClick={() => setSelectedLog(null)} className="btn-ghost text-xs">
+                  Close
+                </button>
+              </div>
+
+              {selectedLog.bullet_points && selectedLog.bullet_points.length > 0 && (
+                <div className="mb-4 p-4 bg-blue-50/70 border border-blue-200 rounded-xl">
+                  <h3 className="font-bold text-blue-900 text-xs mb-2">Key Points</h3>
+                  <div className="space-y-1.5">
+                    {selectedLog.bullet_points.map((point: string, i: number) => (
+                      <div key={i} className="text-xs text-blue-800 flex items-start gap-1.5">
+                        <span className="text-blue-500">•</span>
+                        <span>{point}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <p className="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">{selectedLog.entry_text}</p>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
