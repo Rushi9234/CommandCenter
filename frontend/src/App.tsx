@@ -22,6 +22,7 @@ import ExecutiveBrief from './pages/ExecutiveBrief';
 import Profile from './pages/Profile';
 import Chat from './pages/Chat';
 import Overview from './pages/Overview';
+import GlobalAIAssistant from './components/GlobalAIAssistant';
 
 function RedirectClass() {
   const { classId } = useParams();
@@ -75,6 +76,7 @@ export function ProtectedLayoutWithWalkthrough({ children }: { children: React.R
         <main className="flex-1 overflow-auto bg-gray-50">
           {children}
         </main>
+        <GlobalAIAssistant />
       </div>
     </div>
   );
@@ -278,59 +280,3 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <ExecutiveBrief />
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/analytics/teams/:teamId/members/:memberId"
-        element={
-          <ProtectedRoute>
-            <ExecutiveBrief />
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/analytics/members/:memberId"
-        element={
-          <ProtectedRoute>
-            <ExecutiveBrief />
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/profile"
-        element={
-          <ProtectedRoute>
-            <Profile />
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/chat"
-        element={
-          <ProtectedRoute>
-            <Chat />
-          </ProtectedRoute>
-        }
-      />
-
-      <Route path="/" element={<Navigate to="/pulse" />} />
-    </Routes>
-  );
-}
-
-export default function App() {
-  return (
-    <ErrorBoundary>
-      <BrowserRouter>
-        <AuthProvider>
-          <AppRoutes />
-        </AuthProvider>
-      </BrowserRouter>
-    </ErrorBoundary>
-  );
-}
