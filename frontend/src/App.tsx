@@ -280,3 +280,59 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <ExecutiveBrief />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/analytics/teams/:teamId/members/:memberId"
+        element={
+          <ProtectedRoute>
+            <ExecutiveBrief />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/analytics/members/:memberId"
+        element={
+          <ProtectedRoute>
+            <ExecutiveBrief />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/profile"
+        element={
+          <ProtectedRoute>
+            <Profile />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/chat"
+        element={
+          <ProtectedRoute>
+            <Chat />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route path="/" element={<Navigate to="/pulse" />} />
+    </Routes>
+  );
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <BrowserRouter>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
+  );
+}
