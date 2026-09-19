@@ -833,11 +833,14 @@ export default function Pulse() {
                     </div>
                   </div>
                   <button
-                    onClick={() => navigate('/help-center')}
+                    onClick={() => {
+                      setAiChatMessage('How do I use CommandCenter?');
+                      requestAnimationFrame(() => aiChatPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+                    }}
                     className="text-xs font-bold text-purple-700 hover:text-purple-900"
-                    title="Open Help Center"
+                    title="Ask the Help Center"
                   >
-                    Help
+                    Help Center
                   </button>
                 </div>
 
@@ -899,7 +902,7 @@ export default function Pulse() {
                     🔎 Summarize my tasks
                   </button>
                   <button
-                    onClick={() => navigate('/help-center')}
+                    onClick={() => setAiChatMessage('How do I use CommandCenter?')}
                     className="px-2.5 py-1.5 text-[11px] font-semibold text-purple-700 bg-white border border-purple-200 rounded-full hover:bg-purple-50"
                   >
                     ❓ Help Center
@@ -927,60 +930,3 @@ export default function Pulse() {
                 </div>
                 <p className="text-[10px] text-slate-400 text-center">AI can make mistakes. Verify important information.</p>
               </motion.div>
-
-              {/* Add Another Log Trigger */}
-              <div className="pt-2">
-                <button
-                  onClick={() => {
-                    const el = document.getElementById('new-log-section');
-                    if (el) el.scrollIntoView({ behavior: 'smooth' });
-                  }}
-                  className="w-full py-2 px-3 text-xs font-bold text-blue-600 bg-blue-50/50 hover:bg-blue-100/60 border border-blue-200 rounded-xl transition-all"
-                >
-                  + Add Another Log
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* RECENT ACTIVITY CONTAINER */}
-        <WorkPulseFeed scope={selectedTeam ? 'TEAM' : 'INDIVIDUAL'} teamId={selectedTeam || undefined} />
-      </div>
-
-      {/* SUCCESS NOTIFICATION ALERT */}
-      <AnimatePresence>
-        {success && (
-          <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="fixed bottom-6 right-6 z-50 alert alert-success shadow-lg">
-            <div>
-              <div className="font-bold text-xs">Log submitted successfully!</div>
-              <div className="text-[11px]">AI analysis complete</div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* FULL LOG MODAL */}
-      <AnimatePresence>
-        {selectedLog && (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4" onClick={() => setSelectedLog(null)}>
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} onClick={(e) => e.stopPropagation()} className="pro-card p-6 w-full max-w-2xl max-h-[80vh] overflow-auto">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-bold text-slate-900">{new Date(selectedLog.created_at).toLocaleString()}</h2>
-                <button onClick={() => setSelectedLog(null)} className="btn-ghost text-xs">
-                  Close
-                </button>
-              </div>
-
-              {selectedLog.bullet_points && selectedLog.bullet_points.length > 0 && (
-                <div className="mb-4 p-4 bg-blue-50/70 border border-blue-200 rounded-xl">
-                  <h3 className="font-bold text-blue-900 text-xs mb-2">Key Points</h3>
-                  <div className="space-y-1.5">
-                    {selectedLog.bullet_points.map((point: string, i: number) => (
-                      <div key={i} className="text-xs text-blue-800 flex items-start gap-1.5">
-                        <span className="text-blue-500">•</span>
-                        <span>{point}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
