@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../hooks/useAuth';
@@ -18,6 +18,8 @@ export default function Pulse() {
   const [success, setSuccess] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [showAIChat, setShowAIChat] = useState(false);
+  const aiChatPanelRef = useRef<HTMLDivElement | null>(null);
+  const suggestionsPanelRef = useRef<HTMLDivElement | null>(null);
   const [aiChatMessage, setAiChatMessage] = useState('');
   const [aiChatHistory, setAiChatHistory] = useState<any[]>([]);
   const [aiChatLoading, setAiChatLoading] = useState(false);
@@ -64,6 +66,24 @@ export default function Pulse() {
     loadMyTeams();
     loadAssignedTasks();
   }, []);
+
+  // When a quick action opens a panel, bring the panel into view so the
+  // button click has an immediate, visible effect instead of only toggling state.
+  useEffect(() => {
+    if (showAIChat) {
+      requestAnimationFrame(() => {
+        aiChatPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    }
+  }, [showAIChat]);
+
+  useEffect(() => {
+    if (showSuggestions && suggestions) {
+      requestAnimationFrame(() => {
+        suggestionsPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    }
+  }, [showSuggestions, suggestions]);
 
   useEffect(() => {
     setTodaysSubmission(null);
@@ -432,7 +452,7 @@ export default function Pulse() {
             </div>
             <div className="pt-4">
               <button
-                onClick={() => setShowAIChat(!showAIChat)}
+                onClick={() => setShowAIChat((visible) => !visible)}
                 className="w-full py-2 px-3 text-xs font-bold bg-purple-600 hover:bg-purple-700 text-white rounded-xl shadow-xs shadow-purple-600/20 transition-all flex items-center justify-center gap-1.5"
               >
                 <span>{showAIChat ? 'Hide AI Chat' : 'Open AI Chat'}</span>
@@ -608,7 +628,7 @@ export default function Pulse() {
 
               {/* AI Chat Panel */}
               {showAIChat && (
-                <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="p-4 bg-purple-50/70 border border-purple-200 rounded-xl space-y-3">
+                <motion.div ref={aiChatPanelRef} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="p-4 bg-purple-50/70 border border-purple-200 rounded-xl space-y-3 scroll-mt-24">
                   <div className="flex items-center justify-between">
                     <h3 className="font-bold text-purple-900 text-sm">Chat with AI Assistant</h3>
                     <button onClick={() => setShowAIChat(false)} className="text-purple-600 text-xs font-semibold hover:text-purple-800">
@@ -642,7 +662,7 @@ export default function Pulse() {
 
               {/* Suggestions Panel */}
               {showSuggestions && suggestions && (
-                <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="p-4 bg-blue-50/70 border border-blue-200 rounded-xl space-y-2">
+                <motion.div ref={suggestionsPanelRef} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="p-4 bg-blue-50/70 border border-blue-200 rounded-xl space-y-2 scroll-mt-24">
                   <div className="flex items-center justify-between">
                     <h3 className="font-bold text-blue-900 text-sm">AI Suggestions</h3>
                     <button onClick={() => setShowSuggestions(false)} className="text-blue-600 text-xs font-semibold">
