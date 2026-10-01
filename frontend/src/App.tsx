@@ -118,6 +118,15 @@ function AppRoutes() {
       />
 
       <Route
+        path="/tasks"
+        element={
+          <ProtectedRoute>
+            <Pulse />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
         path="/daily-log"
         element={
           <ProtectedRoute>

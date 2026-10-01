@@ -1,7 +1,7 @@
 import { Response } from 'express';
 import { AuthRequest } from '../../middleware/auth';
 import { ok } from '../../common/http/respond';
-import { chatWithAI } from './ai.service';
+import { chatWithAI, chatWithScopeAwareAI } from './ai.service';
 import { privacyService, AI_DISABLED_MESSAGE } from '../privacy/privacy.service';
 import { teamsRepository } from '../teams/teams.repository';
 import { ForbiddenError } from '../../common/errors';
@@ -24,4 +24,24 @@ export const chat = async (req: AuthRequest, res: Response) => {
 
   const response = await chatWithAI(message, context || '', userId, teamId);
   ok(res, response);
+};
+
+export const assistantChat = async (req: AuthRequest, res: Response) => {
+  const userId = req.user!.userId;
+  const aiEnabled = await privacyService.isAiEnabledForUser(userId);
+  if (!aiEnabled) {
+    return ok(res, { answer: AI_DISABLED_MESSAGE });
+  }
+
+  const { message, scopeType, scopeId, pageContext, explicitScopeType, explicitScopeId } = req.body;
+
+  const result = await chatWithScopeAwareAI(userId, message, {
+    scopeType,
+    scopeId: scopeId || undefined,
+    explicitScopeType,
+    explicitScopeId,
+    pageContext: pageContext || undefined,
+  });
+
+  ok(res, result);
 };

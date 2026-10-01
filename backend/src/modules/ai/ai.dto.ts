@@ -10,3 +10,18 @@ export const chatSchema = z.object({
   context: z.string().max(5000).optional(),
   teamId: z.string().uuid().optional(),
 });
+
+export const aiAssistantSchema = z.object({
+  message: requiredString('Message is required', 1, 5000),
+  scopeType: z.enum(['global', 'personal', 'team', 'class', 'project']).optional(),
+  scopeId: z.string().uuid().optional().nullable(),
+  explicitScopeType: z.enum(['global', 'personal', 'team', 'class', 'project']).optional(),
+  explicitScopeId: z.string().uuid().optional().nullable(),
+  pageContext: z.object({
+    path: z.string().max(500).optional(),
+    search: z.string().max(500).optional(),
+    classId: z.string().uuid().optional().nullable(),
+    teamId: z.string().uuid().optional().nullable(),
+    projectId: z.string().uuid().optional().nullable(),
+  }).optional(),
+});

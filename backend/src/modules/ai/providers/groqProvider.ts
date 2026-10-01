@@ -1,11 +1,11 @@
 import { env } from '../../../config/env';
-import { AIProvider, AIMessage, AICompletionOptions } from './aiProvider.interface';
+import { AIProvider, AIMessage, AICompletionOptions, AIToolDefinition, AICompletionResult } from './aiProvider.interface';
 
 // Charter rule 5: Groq-specific code (URL, model, request/response shape)
 // stays isolated in this provider. Business logic never depends on
 // Groq-specific details.
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODEL = 'openai/gpt-oss-20b';
+const GROQ_MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
 
 export class GroqProvider implements AIProvider {
   async generateCompletion(
@@ -53,5 +53,84 @@ export class GroqProvider implements AIProvider {
     }
 
     return content;
+  }
+
+  async generateWithTools(
+    messages: AIMessage[],
+    tools: AIToolDefinition[],
+    options: AICompletionOptions = {}
+  ): Promise<AICompletionResult> {
+    if (!env.groqApiKey) {
+      throw new Error('Groq AI provider is not configured: GROQ_API_KEY is missing');
+    }
+
+    const groqTools = tools.map((t) => ({
+      type: 'function',
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      },
+    }));
+
+    const response = await fetch(GROQ_API_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.groqApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        messages,
+        tools: groqTools.length > 0 ? groqTools : undefined,
+        tool_choice: groqTools.length > 0 ? 'auto' : undefined,
+        temperature: options.temperature ?? 0.3,
+        max_tokens: options.max_tokens ?? 600,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Groq API request failed with HTTP ${response.status}`);
+    }
+
+    let data: any;
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error('Groq API returned an invalid JSON response');
+    }
+
+    const choiceMessage = data?.choices?.[0]?.message;
+    const content = choiceMessage?.content || '';
+    const rawToolCalls = choiceMessage?.tool_calls;
+
+    const toolCalls: Array<{ name: string; arguments: Record<string, any> }> = [];
+    if (Array.isArray(rawToolCalls)) {
+      for (const tc of rawToolCalls) {
+        if (tc.function?.name) {
+          let parsedArgs = {};
+          if (typeof tc.function.arguments === 'string') {
+            try {
+              parsedArgs = JSON.parse(tc.function.arguments);
+            } catch {
+              parsedArgs = {};
+            }
+          } else if (typeof tc.function.arguments === 'object' && tc.function.arguments !== null) {
+            parsedArgs = tc.function.arguments;
+          }
+          toolCalls.push({
+            name: tc.function.name,
+            arguments: parsedArgs,
+          });
+        }
+      }
+    }
+
+    return {
+      content,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      inputTokens: data?.usage?.prompt_tokens || 0,
+      outputTokens: data?.usage?.completion_tokens || 0,
+    };
   }
 }

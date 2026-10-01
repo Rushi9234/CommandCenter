@@ -5,22 +5,15 @@ import { getInitials } from './types';
 interface EligibleUser {
   user_id: string;
   full_name: string;
+  username?: string;
 }
 
 interface EligibleTeam {
   team_id: string;
   team_name: string;
+  member_count?: number;
 }
 
-// Start-a-conversation picker. Eligibility is never decided here --
-// GET /api/users already returns only users who share a team with the
-// caller (the exact same rule chat.service.ts's usersShareATeam enforces
-// server-side), and GET /teams/my already returns only teams the caller
-// is a CURRENT member of (live team_members, no parent-team shortcut --
-// same rule requireTeamMembership enforces server-side). This panel does
-// not reimplement either check; the backend remains the final authority
-// either way (a stale/bypassed client list would just get a 403/404 from
-// the create call itself).
 export default function NewConversationPanel({
   currentUserId,
   onClose,
@@ -31,6 +24,7 @@ export default function NewConversationPanel({
   onCreated: (conversationId: string) => void;
 }) {
   const [tab, setTab] = useState<'direct' | 'team'>('direct');
+  const [query, setQuery] = useState('');
   const [users, setUsers] = useState<EligibleUser[] | null>(null);
   const [teams, setTeams] = useState<EligibleTeam[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -93,23 +87,39 @@ export default function NewConversationPanel({
     }
   };
 
+  const trimmedQuery = query.trim().toLowerCase();
+
+  const filteredUsers = users?.filter(
+    (u) =>
+      u.full_name.toLowerCase().includes(trimmedQuery) ||
+      (u.username && u.username.toLowerCase().includes(trimmedQuery))
+  );
+
+  const filteredTeams = teams?.filter((t) =>
+    t.team_name.toLowerCase().includes(trimmedQuery)
+  );
+
+  const recentUsers = users ? users.slice(0, 3) : [];
+
   return (
-    <div className="pro-card absolute left-0 right-0 top-full mt-2 z-30 max-h-96 flex flex-col" role="dialog" aria-label="Start a new conversation">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-        <h3 className="text-sm font-semibold text-gray-900">New conversation</h3>
-        <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-600" aria-label="Close">
+    <div className="pro-card absolute left-0 right-0 top-full mt-2 z-30 max-h-96 flex flex-col shadow-xl border border-slate-200 bg-white rounded-2xl overflow-hidden" role="dialog" aria-label="Start a new conversation">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50/50">
+        <h3 className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">New conversation</h3>
+        <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors p-1" aria-label="Close">
           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
       </div>
 
-      <div className="flex border-b border-gray-200 px-2">
+      {/* Tabs */}
+      <div className="flex border-b border-slate-100 bg-white px-3">
         <button
           type="button"
           onClick={() => setTab('direct')}
-          className={`px-3 py-2 text-xs font-medium border-b-2 -mb-px ${
-            tab === 'direct' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'
+          className={`px-3 py-2 text-xs font-bold border-b-2 transition-colors cursor-pointer ${
+            tab === 'direct' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-800'
           }`}
         >
           Direct message
@@ -117,73 +127,132 @@ export default function NewConversationPanel({
         <button
           type="button"
           onClick={() => setTab('team')}
-          className={`px-3 py-2 text-xs font-medium border-b-2 -mb-px ${
-            tab === 'team' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'
+          className={`px-3 py-2 text-xs font-bold border-b-2 transition-colors cursor-pointer ${
+            tab === 'team' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-800'
           }`}
         >
           Team chat
         </button>
       </div>
 
-      <div className="overflow-y-auto flex-1 p-2">
+      {/* Search Bar */}
+      <div className="p-3 border-b border-slate-100 bg-slate-50/30">
+        <div className="relative">
+          <svg className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={tab === 'direct' ? 'Search people by name or username...' : 'Search authorized teams...'}
+            className="w-full text-xs pl-9 pr-3 py-2 rounded-xl border border-slate-200 bg-white focus:outline-hidden focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 text-slate-900 placeholder:text-slate-400"
+            autoFocus
+          />
+        </div>
+      </div>
+
+      {/* Options List */}
+      <div className="overflow-y-auto flex-1 p-2 space-y-1">
         {loading && (
-          <div role="status" className="text-sm text-gray-500 text-center py-6">
-            <div className="spinner w-5 h-5 mx-auto mb-2"></div>
-            Loading...
+          <div role="status" className="text-xs text-slate-500 text-center py-6">
+            <div className="spinner w-4 h-4 mx-auto mb-2 text-indigo-600"></div>
+            Loading options...
           </div>
         )}
 
         {error && (
-          <div role="alert" className="text-sm text-red-600 text-center py-4 px-2">
+          <div role="alert" className="text-xs text-red-600 text-center py-4 px-2 font-medium">
             {error}
           </div>
         )}
 
-        {!loading && tab === 'direct' && users !== null && users.length === 0 && (
-          <p className="text-sm text-gray-500 text-center py-6">No eligible teammates yet -- join a team first.</p>
+        {/* DIRECT MESSAGES */}
+        {!loading && tab === 'direct' && (
+          <>
+            {/* Empty Search Prompt & Recent Teammates */}
+            {!trimmedQuery && (
+              <div className="mb-2">
+                {recentUsers.length > 0 && (
+                  <div className="px-2 pt-1 pb-1">
+                    <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 mb-1">Teammates</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {filteredUsers?.length === 0 && (
+              <div className="text-center py-6 px-4 space-y-1">
+                <p className="text-xs font-semibold text-slate-700">No matching teammates found</p>
+                <p className="text-[11px] text-slate-400">Try searching for a different name or username.</p>
+              </div>
+            )}
+
+            {filteredUsers?.map((eligibleUser) => (
+              <button
+                key={eligibleUser.user_id}
+                type="button"
+                onClick={() => handlePickUser(eligibleUser.user_id)}
+                disabled={creatingId !== null}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left hover:bg-indigo-50/60 transition-colors disabled:opacity-50 group cursor-pointer"
+              >
+                <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 font-extrabold text-xs flex items-center justify-center shrink-0 border border-indigo-200">
+                  {getInitials(eligibleUser.full_name)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-bold text-slate-900 truncate group-hover:text-indigo-600 transition-colors">
+                    {eligibleUser.full_name}
+                  </p>
+                  {eligibleUser.username && (
+                    <p className="text-[11px] text-slate-400 truncate">@{eligibleUser.username}</p>
+                  )}
+                </div>
+                {creatingId === eligibleUser.user_id && (
+                  <span className="spinner w-3.5 h-3.5 ml-auto text-indigo-600 shrink-0" />
+                )}
+              </button>
+            ))}
+          </>
         )}
 
-        {!loading &&
-          tab === 'direct' &&
-          users?.map((eligibleUser) => (
-            <button
-              key={eligibleUser.user_id}
-              type="button"
-              onClick={() => handlePickUser(eligibleUser.user_id)}
-              disabled={creatingId !== null}
-              className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left hover:bg-gray-50 disabled:opacity-50"
-            >
-              <div className="avatar w-8 h-8 text-xs flex-shrink-0" aria-hidden="true">
-                {getInitials(eligibleUser.full_name)}
+        {/* TEAM CHAT */}
+        {!loading && tab === 'team' && (
+          <>
+            {filteredTeams?.length === 0 && (
+              <div className="text-center py-6 px-4 space-y-1">
+                <p className="text-xs font-semibold text-slate-700">No matching authorized teams</p>
+                <p className="text-[11px] text-slate-400">You must be an active member of a team to access its chat.</p>
               </div>
-              <span className="text-sm text-gray-900 truncate">{eligibleUser.full_name}</span>
-              {creatingId === eligibleUser.user_id && <span className="spinner w-3.5 h-3.5 ml-auto flex-shrink-0" />}
-            </button>
-          ))}
+            )}
 
-        {!loading && tab === 'team' && teams !== null && teams.length === 0 && (
-          <p className="text-sm text-gray-500 text-center py-6">You're not on any teams yet.</p>
+            {filteredTeams?.map((eligibleTeam) => (
+              <button
+                key={eligibleTeam.team_id}
+                type="button"
+                onClick={() => handlePickTeam(eligibleTeam.team_id)}
+                disabled={creatingId !== null}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left hover:bg-indigo-50/60 transition-colors disabled:opacity-50 group cursor-pointer"
+              >
+                <div className="w-8 h-8 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m9-2.13a4 4 0 10-8 0 4 4 0 008 0zM12 14a4 4 0 100-8 4 4 0 000 8z" />
+                  </svg>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-bold text-slate-900 truncate group-hover:text-indigo-600 transition-colors">
+                    {eligibleTeam.team_name}
+                  </p>
+                  {eligibleTeam.member_count !== undefined && (
+                    <p className="text-[11px] text-slate-400 truncate">{eligibleTeam.member_count} members</p>
+                  )}
+                </div>
+                {creatingId === eligibleTeam.team_id && (
+                  <span className="spinner w-3.5 h-3.5 ml-auto text-indigo-600 shrink-0" />
+                )}
+              </button>
+            ))}
+          </>
         )}
-
-        {!loading &&
-          tab === 'team' &&
-          teams?.map((eligibleTeam) => (
-            <button
-              key={eligibleTeam.team_id}
-              type="button"
-              onClick={() => handlePickTeam(eligibleTeam.team_id)}
-              disabled={creatingId !== null}
-              className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left hover:bg-gray-50 disabled:opacity-50"
-            >
-              <div className="w-8 h-8 flex-shrink-0 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center text-gray-500" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m9-2.13a4 4 0 10-8 0 4 4 0 008 0zM12 14a4 4 0 100-8 4 4 0 000 8z" />
-                </svg>
-              </div>
-              <span className="text-sm text-gray-900 truncate">{eligibleTeam.team_name}</span>
-              {creatingId === eligibleTeam.team_id && <span className="spinner w-3.5 h-3.5 ml-auto flex-shrink-0" />}
-            </button>
-          ))}
       </div>
     </div>
   );

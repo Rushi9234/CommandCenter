@@ -271,15 +271,19 @@ export default function Projects() {
   useEffect(() => {
     const projectId = searchParams.get('projectId');
     const taskId = searchParams.get('taskId');
-    if (!projectId) {
+    if (!projectId && !taskId) {
       lastProcessedProjectDeepLink.current = null;
       return;
     }
-    const deepLinkKey = `${projectId}:${taskId || ''}`;
+    const deepLinkKey = `${projectId || ''}:${taskId || ''}`;
     if (lastProcessedProjectDeepLink.current === deepLinkKey) return;
     if (projectsLoading && !projectsLoadedOnce) return;
 
-    const target = projects.find((p: any) => p.project_id === projectId);
+    let target = projectId ? projects.find((p: any) => p.project_id === projectId) : null;
+    if (!target && !projectId && taskId) {
+      target = projects.find((p: any) => p.project_id === selectedProjectId) || projects[0] || null;
+    }
+
     if (target) {
       lastProcessedProjectDeepLink.current = deepLinkKey;
       setProjectDeepLinkError('');
@@ -290,7 +294,7 @@ export default function Projects() {
         loadTasks(target.project_id);
       }
       setSearchParams({}, { replace: true });
-    } else if (projectsLoadedOnce) {
+    } else if (projectsLoadedOnce && projectId) {
       lastProcessedProjectDeepLink.current = deepLinkKey;
       setProjectDeepLinkError("You no longer have access to that project, or it doesn't exist.");
       setSelectedProjectId((current) => {

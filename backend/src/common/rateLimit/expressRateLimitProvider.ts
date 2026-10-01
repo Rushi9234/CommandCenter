@@ -45,7 +45,7 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
   createApiLimiter(): RequestHandler {
     return rateLimit({
       windowMs: 5 * 60 * 1000,
-      max: 20,
+      max: process.env.NODE_ENV === 'test' ? 10000 : 20,
       standardHeaders: true,
       legacyHeaders: false,
       keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),

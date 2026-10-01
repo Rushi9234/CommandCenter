@@ -105,6 +105,19 @@ export class DailyWorkRepository {
     `;
     return query<any>(text, [teamId, workDate || null]);
   }
+
+  async getClassMemberSubmissions(teamIds: string[], memberUserId: string, limit: number = 20) {
+    if (teamIds.length === 0) return [];
+    const text = `
+      SELECT s.work_date, s.confirmed_summary, s.confirmed_at, t.team_name
+      FROM daily_work_submissions s
+      INNER JOIN teams t ON s.team_id = t.team_id
+      WHERE s.team_id = ANY($1) AND s.user_id = $2
+      ORDER BY s.work_date DESC
+      LIMIT $3
+    `;
+    return query<any>(text, [teamIds, memberUserId, limit]);
+  }
 }
 
 export const dailyWorkRepository = new DailyWorkRepository();

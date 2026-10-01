@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import NotificationBell from './NotificationBell';
 import Avatar from './common/Avatar';
+import AIAssistantDrawer from './ai/AIAssistantDrawer';
 
 interface NavigationProps {
   onToggleMobileSidebar?: () => void;
@@ -12,6 +13,7 @@ interface NavigationProps {
 export default function Navigation({ onToggleMobileSidebar, isMobileSidebarOpen }: NavigationProps = {}) {
   const { user, logout } = useAuth();
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [isAIDrawerOpen, setIsAIDrawerOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -61,8 +63,18 @@ export default function Navigation({ onToggleMobileSidebar, isMobileSidebarOpen 
         {/* Center: Space for header content / breadcrumbs */}
         <div className="flex-1 hidden md:flex items-center" />
 
-        {/* Right: Notification Bell + User Menu */}
+        {/* Right: AI Assistant + Notification Bell + User Menu */}
         <div className="flex items-center gap-3 sm:gap-4">
+          <button
+            onClick={() => setIsAIDrawerOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
+            title="Open AI Assistant"
+            aria-label="Open AI Assistant"
+          >
+            <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+            AI Assistant
+          </button>
+
           <div data-tour-target="notifications">
             <NotificationBell />
           </div>
@@ -106,6 +118,8 @@ export default function Navigation({ onToggleMobileSidebar, isMobileSidebarOpen 
           </div>
         </div>
       </div>
+
+      <AIAssistantDrawer isOpen={isAIDrawerOpen} onClose={() => setIsAIDrawerOpen(false)} />
     </header>
   );
 }

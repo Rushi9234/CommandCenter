@@ -13,12 +13,32 @@ export interface AICompletionOptions {
   max_tokens?: number;
 }
 
+export interface AIToolDefinition {
+  name: string;
+  description: string;
+  parameters: Record<string, any>;
+}
+
+export interface AICompletionResult {
+  content: string;
+  toolCalls?: Array<{
+    name: string;
+    arguments: Record<string, any>;
+  }>;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
 export interface AIProvider {
   // Returns the completion text, or '' if the provider has nothing to
   // return (e.g. NullProvider, or a real provider's own failure once it
-  // catches its own error internally). ai.service.ts's 8 functions
-  // already treat a missing/unparseable result as "fall back" -- this
-  // return type lets every provider reuse that existing logic instead of
-  // each provider needing its own bespoke error contract.
+  // catches its own error internally). ai.service.ts's functions
+  // treat a missing/unparseable result as "fall back".
   generateCompletion(messages: AIMessage[], options?: AICompletionOptions): Promise<string>;
+
+  generateWithTools?(
+    messages: AIMessage[],
+    tools: AIToolDefinition[],
+    options?: AICompletionOptions
+  ): Promise<AICompletionResult>;
 }

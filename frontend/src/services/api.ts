@@ -271,6 +271,14 @@ export const getAIAdvice = (blockerId: string) =>
 export const chatWithAI = (message: string, context: string) =>
   api.post('/ai/chat', { message, context });
 
+export const sendAIAssistantMessage = (
+  message: string,
+  scopeType?: string,
+  scopeId?: string,
+  pageContext?: { path?: string; classId?: string | null; teamId?: string | null; projectId?: string | null }
+) => api.post('/ai/assistant', { message, scopeType, scopeId, pageContext });
+
+
 export const generateStandup = (teamId?: string) =>
   api.get('/logs/standup', { params: { teamId } });
 

@@ -4,7 +4,7 @@ import { asyncHandler } from '../../common/middleware/asyncHandler';
 import { validate } from '../../common/middleware/validate';
 import { getRateLimitProvider } from '../../common/rateLimit/rateLimitProviderFactory';
 import * as aiController from './ai.controller';
-import { chatSchema } from './ai.dto';
+import { chatSchema, aiAssistantSchema } from './ai.dto';
 
 const router = Router();
 
@@ -15,5 +15,6 @@ const router = Router();
 // so the limiter's per-user key (common/rateLimit/expressRateLimitProvider.ts)
 // has req.user available; no other AI endpoint is affected.
 router.post('/chat', authenticate, getRateLimitProvider().createApiLimiter(), validate(chatSchema), asyncHandler(aiController.chat));
+router.post('/assistant', authenticate, getRateLimitProvider().createApiLimiter(), validate(aiAssistantSchema), asyncHandler(aiController.assistantChat));
 
 export default router;

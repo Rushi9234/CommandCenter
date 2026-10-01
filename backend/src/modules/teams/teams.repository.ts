@@ -745,6 +745,66 @@ export class TeamsRepository {
     const result = await queryOne(text, [userId, teamId]);
     return result !== null;
   }
+
+  async getDescendantTeamIds(parentClassId: string): Promise<string[]> {
+    const text = `
+      WITH RECURSIVE team_tree AS (
+        SELECT team_id, parent_team_id, 1 AS depth
+        FROM teams
+        WHERE team_id = $1
+        UNION ALL
+        SELECT t.team_id, t.parent_team_id, tt.depth + 1
+        FROM teams t
+        INNER JOIN team_tree tt ON t.parent_team_id = tt.team_id
+        WHERE tt.depth < 5
+      )
+      SELECT team_id FROM team_tree
+    `;
+    const rows = await query<{ team_id: string }>(text, [parentClassId]);
+    return rows.map((r) => r.team_id);
+  }
+
+  async isMemberOfClassOrSubteam(userId: string, classId: string): Promise<boolean> {
+    const text = `
+      WITH RECURSIVE team_tree AS (
+        SELECT team_id, parent_team_id, 1 AS depth
+        FROM teams
+        WHERE team_id = $1
+        UNION ALL
+        SELECT t.team_id, t.parent_team_id, tt.depth + 1
+        FROM teams t
+        INNER JOIN team_tree tt ON t.parent_team_id = tt.team_id
+        WHERE tt.depth < 5
+      )
+      SELECT 1 FROM team_members tm
+      INNER JOIN team_tree tt ON tm.team_id = tt.team_id
+      WHERE tm.user_id = $2
+      LIMIT 1
+    `;
+    const result = await queryOne(text, [classId, userId]);
+    return result !== null;
+  }
+
+  async getClassMembers(classId: string) {
+    const text = `
+      WITH RECURSIVE team_tree AS (
+        SELECT team_id, parent_team_id, 1 AS depth
+        FROM teams
+        WHERE team_id = $1
+        UNION ALL
+        SELECT t.team_id, t.parent_team_id, tt.depth + 1
+        FROM teams t
+        INNER JOIN team_tree tt ON t.parent_team_id = tt.team_id
+        WHERE tt.depth < 5
+      )
+      SELECT DISTINCT tm.user_id, u.full_name, u.username, u.email
+      FROM team_members tm
+      INNER JOIN users u ON tm.user_id = u.user_id
+      INNER JOIN team_tree tt ON tm.team_id = tt.team_id
+    `;
+    return query<any>(text, [classId]);
+  }
+
 }
 
 export const teamsRepository = new TeamsRepository();

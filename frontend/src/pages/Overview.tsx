@@ -7,6 +7,8 @@ import ClassroomCoordinatorDashboard from '../components/ClassroomCoordinatorDas
 import TeamLeaderWorklogDashboard from '../components/TeamLeaderWorklogDashboard';
 import MemberDetailView from '../components/MemberDetailView';
 import AssignWorkModal from '../components/AssignWorkModal';
+import AIAssistantDrawer from '../components/ai/AIAssistantDrawer';
+
 
 export interface ClassOverviewCardData {
   class_id: string;
@@ -163,6 +165,8 @@ export default function Overview() {
 
   // Assign Work Modal state
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
+  const [isAiDrawerOpen, setIsAiDrawerOpen] = useState(false);
+
 
   // Role assertions
   const isOwnerOrCoordinator =
@@ -507,7 +511,51 @@ export default function Overview() {
               </div>
             </div>
 
+            {/* AI WORK COPILOT & TODAY AT A GLANCE BANNER */}
+            <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-2xl p-5 text-white shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border border-indigo-900/30">
+              <div className="space-y-1 max-w-xl">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-pulse" />
+                  <h2 className="text-sm font-bold tracking-tight text-white uppercase">CommandCenter AI Work Copilot</h2>
+                </div>
+                <p className="text-xs text-indigo-200/90 leading-relaxed">
+                  Your context-aware AI assistant. Get personal workload summaries, attention items, project progress, and product guidance instantly.
+                </p>
+                <div className="pt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => setIsAiDrawerOpen(true)}
+                    className="px-3 py-1 bg-white/10 hover:bg-white/20 text-indigo-100 text-[11px] font-medium rounded-full border border-white/10 transition-colors"
+                  >
+                    What needs my attention?
+                  </button>
+                  <button
+                    onClick={() => setIsAiDrawerOpen(true)}
+                    className="px-3 py-1 bg-white/10 hover:bg-white/20 text-indigo-100 text-[11px] font-medium rounded-full border border-white/10 transition-colors"
+                  >
+                    What are my tasks today?
+                  </button>
+                  <button
+                    onClick={() => setIsAiDrawerOpen(true)}
+                    className="px-3 py-1 bg-white/10 hover:bg-white/20 text-indigo-100 text-[11px] font-medium rounded-full border border-white/10 transition-colors"
+                  >
+                    How do I create a team?
+                  </button>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setIsAiDrawerOpen(true)}
+                className="px-4 py-2.5 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold rounded-xl text-xs shadow-sm transition-all flex items-center gap-2 shrink-0"
+              >
+                <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                <span>Launch AI Copilot</span>
+              </button>
+            </div>
+
             {/* 2. HIGH-LEVEL SUMMARY CARDS (1 ROW OF 4 CARDS) */}
+
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {/* My Tasks Card */}
               <div
@@ -1024,6 +1072,11 @@ export default function Overview() {
         classId={activeClassId}
         teamId={activeTeamId}
         teams={myTeams}
+      />
+
+      <AIAssistantDrawer
+        isOpen={isAiDrawerOpen}
+        onClose={() => setIsAiDrawerOpen(false)}
       />
     </div>
   );
