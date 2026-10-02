@@ -52,6 +52,8 @@ const avatarRateLimiter = getRateLimitProvider().createAvatarLimiter();
 const passwordChangeRateLimiter = getRateLimitProvider().createPasswordChangeLimiter();
 const emailChangeRateLimiter = getRateLimitProvider().createEmailChangeLimiter();
 const emailChangeResendRateLimiter = getRateLimitProvider().createEmailChangeResendLimiter();
+const phoneVerificationGlobalIpLimiter = getRateLimitProvider().createPhoneVerificationGlobalIpLimiter();
+const phoneVerificationPhoneNumberLimiter = getRateLimitProvider().createPhoneVerificationPhoneNumberLimiter();
 const phoneVerificationRateLimiter = getRateLimitProvider().createPhoneVerificationLimiter();
 const phoneVerificationResendRateLimiter = getRateLimitProvider().createPhoneVerificationResendLimiter();
 const phoneVerifyRateLimiter = getRateLimitProvider().createPhoneVerifyLimiter();
@@ -89,6 +91,8 @@ router.post(
 router.post(
   '/me/request-phone-verification',
   authenticate,
+  phoneVerificationGlobalIpLimiter,
+  phoneVerificationPhoneNumberLimiter,
   phoneVerificationRateLimiter,
   validate(requestPhoneVerificationSchema),
   asyncHandler(usersController.requestPhoneVerification)
@@ -98,6 +102,7 @@ router.post(
 router.post(
   '/me/resend-phone-verification',
   authenticate,
+  phoneVerificationGlobalIpLimiter,
   phoneVerificationResendRateLimiter,
   asyncHandler(usersController.resendPhoneVerification)
 );

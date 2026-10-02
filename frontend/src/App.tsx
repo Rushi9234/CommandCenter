@@ -9,6 +9,7 @@ import { useQuickOverview } from './hooks/useQuickOverview';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import VerifyEmail from './pages/VerifyEmail';
+import VerifyOtp from './pages/VerifyOtp';
 import VerifyEmailChange from './pages/VerifyEmailChange';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
@@ -22,6 +23,7 @@ import ExecutiveBrief from './pages/ExecutiveBrief';
 import Profile from './pages/Profile';
 import Chat from './pages/Chat';
 import Overview from './pages/Overview';
+import OAuthCallback from './pages/OAuthCallback';
 import GlobalAIAssistant from './components/GlobalAIAssistant';
 
 function RedirectClass() {
@@ -103,7 +105,9 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={<PublicOnlyRoute><Login /></PublicOnlyRoute>} />
       <Route path="/register" element={<PublicOnlyRoute><Register /></PublicOnlyRoute>} />
+      <Route path="/oauth/callback/:provider" element={<OAuthCallback />} />
       <Route path="/verify-email" element={<VerifyEmail />} />
+      <Route path="/verify-otp" element={<PublicOnlyRoute><VerifyOtp /></PublicOnlyRoute>} />
       <Route path="/verify-email-change" element={<VerifyEmailChange />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />

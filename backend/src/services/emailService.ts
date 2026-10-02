@@ -1,46 +1,13 @@
-import { getEmailProvider } from './email/providers/emailProviderFactory';
+import * as emailProviderFactory from './email/providers/emailProviderFactory';
 import { EmailMessage } from './email/providers/emailProvider.interface';
 import { env } from '../config/env';
 import { getLogger } from '../common/logging/loggerFactory';
 
-// Milestone 4: generateVerificationToken removed -- it duplicated
-// modules/auth/jwt.ts's generateOpaqueToken (same crypto.randomBytes(32)
-// implementation), which auth.service.ts now uses instead. This file's job
-// is sending, not generating, tokens.
-//
-// Milestone 11: sendVerificationEmail/sendPasswordResetEmail used to log
-// the raw, unhashed token as a clickable link -- in every environment,
-// including production, with no guard at all. Anyone with read access to
-// server logs could lift a live password-reset or email-verification
-// token straight out of them and take over the account it belonged to.
-// The URL is still built the same way (so a real provider can be wired in
-// here later without changing this function's signature or return
-// behavior); it just never goes into `metadata` (see providers/README.md
-// -- only `metadata` is safe for a provider to log).
-//
-// Milestone 15: this file no longer logs anything itself, or knows how a
-// send actually happens -- it builds the message (recipient, subject,
-// body, and which fields are safe to log) and hands it to whichever
-// EmailProvider emailProviderFactory selects. Every exported function's
-// signature and return behavior is unchanged.
-// Milestone 55: was a locally hardcoded production URL, independent of --
-// and inconsistent with -- app.ts's own CORS config, which already reads
-// FRONTEND_URL via config/env.ts. env.frontendUrl is now the single
-// source of truth for "what is the frontend's URL" in both places.
 const getBaseUrl = () => env.frontendUrl;
 
-// Milestone 55: a real EmailProvider (Resend) can fail -- a thrown
-// exception (network error, SDK error) or a resolved `false` (see
-// ResendEmailProvider). Either must never propagate: the caller (e.g.
-// authService.register/forgotPassword) has already committed the
-// account/token to the database before calling this, so a failed send
-// should never turn into an error response for an otherwise-successful
-// request. Failures are logged server-side via the existing LoggerProvider
-// and swallowed here -- the existing resendVerification/forgotPassword
-// flows remain the user's own recovery path either way.
 const sendSafely = async (message: EmailMessage): Promise<boolean> => {
   try {
-    const sent = await getEmailProvider().send(message);
+    const sent = await emailProviderFactory.getEmailProvider().send(message);
     if (!sent) {
       getLogger().error('Email send failed', { event: 'email.send_failed', to: message.to, subject: message.subject });
     }
@@ -51,36 +18,129 @@ const sendSafely = async (message: EmailMessage): Promise<boolean> => {
   }
 };
 
-export const sendVerificationEmail = async (email: string, token: string, fullName: string) => {
+/**
+ * Renders a standardized, responsive HTML email template for CommandCenter transactional emails.
+ */
+const buildBrandedHtml = (options: {
+  title: string;
+  recipientName: string;
+  headline: string;
+  bodyText: string;
+  otpCode?: string;
+  ctaText?: string;
+  ctaUrl?: string;
+  footerNote?: string;
+}): string => {
+  const { title, recipientName, headline, bodyText, otpCode, ctaText, ctaUrl, footerNote } = options;
+
+  const otpSection = otpCode
+    ? `
+      <div style="margin: 24px 0; text-align: center;">
+        <p style="font-size: 14px; color: #4b5563; margin-bottom: 8px; font-weight: 500;">Your 6-Digit Verification Code:</p>
+        <div style="font-size: 32px; letter-spacing: 10px; font-weight: 700; font-family: 'Courier New', Courier, monospace; background-color: #f3f4f6; color: #1e3a8a; padding: 16px 24px; border-radius: 12px; display: inline-block; border: 1px solid #e5e7eb;">
+          ${otpCode}
+        </div>
+        <p style="font-size: 12px; color: #6b7280; margin-top: 8px;">Code expires in 10 minutes. Do not share this code with anyone.</p>
+      </div>
+    `
+    : '';
+
+  const ctaSection = ctaUrl && ctaText
+    ? `
+      <div style="margin: 24px 0; text-align: center;">
+        <a href="${ctaUrl}" style="background: linear-gradient(135deg, #2563eb, #4f46e5); color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; display: inline-block; font-size: 15px; box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2);">
+          ${ctaText}
+        </a>
+      </div>
+    `
+    : '';
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
+  <div style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05);">
+    <!-- Header -->
+    <div style="background: linear-gradient(135deg, #1e3a8a, #3b82f6); padding: 28px 32px; text-align: center;">
+      <div style="display: inline-block; background-color: rgba(255, 255, 255, 0.15); width: 44px; h-44px; border-radius: 10px; margin-bottom: 8px; line-height: 44px; color: #ffffff; font-weight: bold; font-size: 20px;">
+        CC
+      </div>
+      <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.5px;">CommandCenter</h1>
+    </div>
+
+    <!-- Content Card -->
+    <div style="padding: 32px;">
+      <h2 style="font-size: 18px; color: #0f172a; margin-top: 0; margin-bottom: 12px; font-weight: 600;">${headline}</h2>
+      <p style="font-size: 15px; color: #334155; line-height: 1.6; margin-bottom: 16px;">Hi ${recipientName},</p>
+      <p style="font-size: 15px; color: #334155; line-height: 1.6; margin-bottom: 16px;">${bodyText}</p>
+
+      ${otpSection}
+      ${ctaSection}
+
+      ${footerNote ? `<p style="font-size: 13px; color: #64748b; line-height: 1.5; margin-top: 24px; border-top: 1px solid #f1f5f9; padding-top: 16px;">${footerNote}</p>` : ''}
+    </div>
+
+    <!-- Footer -->
+    <div style="background-color: #f8fafc; padding: 20px 32px; text-align: center; border-top: 1px solid #e2e8f0;">
+      <p style="font-size: 12px; color: #94a3b8; margin: 0;">CommandCenter Transactional Email Service</p>
+      <p style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Sent to ${options.recipientName} &bull; Unsubscribe or manage preferences in your profile.</p>
+    </div>
+
+  </div>
+</body>
+</html>
+  `;
+};
+
+export const sendVerificationEmail = async (email: string, token: string, fullName: string, otpCode?: string) => {
   const verificationUrl = `${getBaseUrl()}/verify-email?token=${token}`;
+  const otpMessage = otpCode ? ` Your 6-digit verification code is: ${otpCode} (expires in 10 minutes).\n\nAlternatively, verify using this link:` : '';
+
+  const html = buildBrandedHtml({
+    title: 'Verify your CommandCenter account',
+    recipientName: fullName,
+    headline: 'Welcome to CommandCenter',
+    bodyText: 'Thank you for creating an account. Please verify your email address to complete your registration.',
+    otpCode,
+    ctaText: 'Verify Account',
+    ctaUrl: verificationUrl,
+    footerNote: 'If you did not request this registration, you can safely ignore this email.',
+  });
 
   return sendSafely({
     to: email,
     subject: 'Verify your CommandCenter account',
-    body: `Hi ${fullName}, please verify your email by visiting: ${verificationUrl}`,
-    templateData: { fullName, verificationUrl },
+    body: `Hi ${fullName},${otpMessage} ${verificationUrl}`,
+    html,
+    templateData: { fullName, verificationUrl, otpCode },
     metadata: { event: 'email.verification_sent', to: email, name: fullName },
   });
 };
 
-// Phase 4 email-change verification. Sent to the NEW address only -- see
-// modules/users/users.service.ts's requestEmailChange for why: possession
-// of the new address must be proven before it becomes authoritative, and
-// the raw token itself (not just a notification) is what proves it. The
-// current/old address gets a separate, token-free security notice via the
-// existing in-app notification system instead (notifications.service.ts),
-// not a second email from this file -- matching the established
-// password-change precedent, which also only ever notifies in-app.
 export const sendEmailChangeVerification = async (newEmail: string, token: string, fullName: string) => {
   const verificationUrl = `${getBaseUrl()}/verify-email-change?token=${token}`;
+
+  const html = buildBrandedHtml({
+    title: 'Confirm your new email address',
+    recipientName: fullName,
+    headline: 'Email Address Change Request',
+    bodyText: 'We received a request to update your CommandCenter account email address to this address.',
+    ctaText: 'Confirm New Email',
+    ctaUrl: verificationUrl,
+    footerNote: 'This link will expire in 1 hour. If you did not initiate this change, please contact support immediately.',
+  });
 
   return sendSafely({
     to: newEmail,
     subject: 'Confirm your new CommandCenter email address',
     body: `Hi ${fullName}, confirm your new email address by visiting: ${verificationUrl} (expires in 1 hour)`,
+    html,
     templateData: { fullName, verificationUrl },
-    // Same Milestone 11 rule as every other credential-bearing link in
-    // this file -- the raw token/URL never goes into `metadata`.
     metadata: { event: 'email.email_change_verification_sent', to: newEmail, name: fullName },
   });
 };
@@ -88,26 +148,84 @@ export const sendEmailChangeVerification = async (newEmail: string, token: strin
 export const sendPasswordResetEmail = async (email: string, token: string, fullName: string) => {
   const resetUrl = `${getBaseUrl()}/reset-password?token=${token}`;
 
+  const html = buildBrandedHtml({
+    title: 'Reset your password',
+    recipientName: fullName,
+    headline: 'Password Reset Request',
+    bodyText: 'We received a request to reset your password. Click the button below to choose a new password.',
+    ctaText: 'Reset Password',
+    ctaUrl: resetUrl,
+    footerNote: 'This link will expire in 1 hour. If you did not request a password reset, your account remains secure and no action is required.',
+  });
+
   return sendSafely({
     to: email,
     subject: 'Reset your CommandCenter password',
     body: `Hi ${fullName}, reset your password (expires in 1 hour): ${resetUrl}`,
+    html,
     templateData: { fullName, resetUrl },
     metadata: { event: 'email.password_reset_sent', to: email, name: fullName },
+  });
+};
+
+export const sendPasswordResetOtpEmail = async (email: string, otpCode: string, fullName: string) => {
+  const html = buildBrandedHtml({
+    title: 'Reset your password - Verification Code',
+    recipientName: fullName,
+    headline: 'Password Reset Verification Code',
+    bodyText: 'We received a request to reset your password. Use the 6-digit verification code below to set a new password.',
+    otpCode,
+    footerNote: 'This code will expire in 10 minutes. If you did not request a password reset, your account remains secure and no action is required.',
+  });
+
+  return sendSafely({
+    to: email,
+    subject: 'Your CommandCenter password reset code',
+    body: `Hi ${fullName}, your password reset code is: ${otpCode} (expires in 10 minutes).`,
+    html,
+    templateData: { fullName, otpCode },
+    metadata: { event: 'email.password_reset_otp_sent', to: email, name: fullName },
+  });
+};
+
+export const sendSecurityAlertEmail = async (email: string, fullName: string, alertDetail: string) => {
+  const html = buildBrandedHtml({
+    title: 'Security Alert',
+    recipientName: fullName,
+    headline: 'Security Alert for Your Account',
+    bodyText: alertDetail,
+    footerNote: 'If you suspect unauthorized access to your account, please reset your password immediately.',
+  });
+
+  return sendSafely({
+    to: email,
+    subject: 'CommandCenter Security Alert',
+    body: `Hi ${fullName}, Security Alert: ${alertDetail}`,
+    html,
+    templateData: { fullName, alertDetail },
+    metadata: { event: 'email.security_alert', to: email, name: fullName },
   });
 };
 
 export const sendTeamInviteEmail = async (email: string, teamName: string, inviterName: string) => {
   const inviteLink = `${getBaseUrl()}/login?invite=${encodeURIComponent(email)}&team=${encodeURIComponent(teamName)}`;
 
+  const html = buildBrandedHtml({
+    title: `Team Invitation: ${teamName}`,
+    recipientName: email.split('@')[0],
+    headline: `Join ${teamName} on CommandCenter`,
+    bodyText: `${inviterName} has invited you to join the team "${teamName}" on CommandCenter.`,
+    ctaText: 'Accept Invitation',
+    ctaUrl: inviteLink,
+    footerNote: 'If you do not wish to join this team, you can ignore this email.',
+  });
+
   return sendSafely({
     to: email,
     subject: `You've been invited to join ${teamName} on CommandCenter`,
     body: `${inviterName} invited you to join ${teamName}. Accept your invitation: ${inviteLink}`,
+    html,
     templateData: { teamName, inviterName, inviteLink },
-    // Not a credential-bearing link (unlike the two tokens above), so
-    // including it in metadata (and therefore in ConsoleEmailProvider's
-    // log output) is unchanged from before this milestone.
     metadata: { event: 'email.team_invite_sent', to: email, team: teamName, invitedBy: inviterName, inviteLink },
   });
 };

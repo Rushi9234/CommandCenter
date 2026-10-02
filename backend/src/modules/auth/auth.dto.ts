@@ -23,13 +23,24 @@ export const resendVerificationSchema = z.object({
 
 export const forgotPasswordSchema = z.object({
   email: requiredString('Email required'),
+  mode: z.enum(['link', 'otp']).optional(),
 });
 
 export const resetPasswordSchema = z.object({
   token: requiredString('Reset token required'),
   newPassword: requiredString('Password must be at least 8 characters', 8),
+  email: z.string().email().optional(),
 });
 
 export const verifyEmailChangeSchema = z.object({
   token: requiredString('Verification token required'),
+});
+
+export const verifyOtpSchema = z.object({
+  email: requiredString('Email required'),
+  otp: z.string().regex(/^\d{6}$/, 'OTP must be a 6-digit number'),
+});
+
+export const resendOtpSchema = z.object({
+  email: requiredString('Email required'),
 });

@@ -1,6 +1,7 @@
+import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { authRepository } from './auth.repository';
-import { sendVerificationEmail, sendPasswordResetEmail } from '../../services/emailService';
+import * as emailService from '../../services/emailService';
 import {
   signAccessToken,
   generateOpaqueToken,
@@ -17,6 +18,9 @@ import { notificationsService } from '../notifications/notifications.service';
 const BCRYPT_COST = 12; // raised from 10 -- existing hashes still verify fine, bcrypt embeds its own cost
 const VERIFICATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour -- shorter-lived, more sensitive
+const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+const generateNumericOTP = (): string => crypto.randomInt(100000, 1000000).toString();
 
 // Milestone 38: a fixed-cost bcrypt hash with no corresponding real
 // account, compared against whenever the real user lookup comes back
@@ -41,24 +45,16 @@ export class AuthService {
   async register(email: string, username: string, fullName: string, password: string) {
     const existingByEmail = await authRepository.getUserByEmail(email);
     if (existingByEmail) {
-      throw new BadRequestError('Email or username already exists');
+      if (existingByEmail.is_verified) {
+        throw new BadRequestError('Email or username already exists');
+      }
     }
 
-    // Milestone 40: this pre-check used to only cover email -- username
-    // carries its own UNIQUE constraint too, so a duplicate username with
-    // a brand-new email previously reached createUser's INSERT unchecked
-    // and threw a raw, uncaught 23505 (a plain, always-reproducible bug,
-    // not a race). A genuine concurrent race (two requests for the same
-    // email/username both passing this check before either INSERT
-    // commits) is still possible and is NOT fixed here with a lock/
-    // transaction -- errorHandler.ts's Milestone 40 Postgres-error
-    // translation is the deliberate backstop for that narrow remaining
-    // window, turning the second INSERT's 23505 into a safe 409 instead of
-    // a 500, exactly as it does for every other untranslated constraint
-    // violation.
     const existingByUsername = await authRepository.getUserByUsername(username);
     if (existingByUsername) {
-      throw new BadRequestError('Email or username already exists');
+      if (!existingByEmail || existingByUsername.user_id !== existingByEmail.user_id) {
+        throw new BadRequestError('Email or username already exists');
+      }
     }
 
     const passwordHash = await bcrypt.hash(password, BCRYPT_COST);
@@ -67,28 +63,45 @@ export class AuthService {
     const verificationTokenHash = hashToken(rawVerificationToken);
     const verificationExpires = new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS);
 
-    const user = await authRepository.createUser(
-      email,
-      username,
-      fullName,
-      passwordHash,
-      verificationTokenHash,
-      verificationExpires
-    );
+    const rawOtp = generateNumericOTP();
+    const otpHash = hashToken(rawOtp);
+    const otpExpires = new Date(Date.now() + OTP_TTL_MS);
+
+    let user: any;
+    if (existingByEmail && !existingByEmail.is_verified) {
+      // Unverified account recovery: update existing unverified user row atomically
+      user = await authRepository.updateUnverifiedUserWithOTP(
+        existingByEmail.user_id,
+        username,
+        fullName,
+        passwordHash,
+        verificationTokenHash,
+        verificationExpires,
+        otpHash,
+        otpExpires
+      );
+    } else {
+      // Fresh user registration: atomic INSERT with initial OTP columns
+      user = await authRepository.createUserWithOTP(
+        email,
+        username,
+        fullName,
+        passwordHash,
+        verificationTokenHash,
+        verificationExpires,
+        otpHash,
+        otpExpires
+      );
+    }
 
     if (env.autoVerify) {
-      // Explicit, visible auto-verify step for local/demo use -- not a
-      // hardcoded `is_verified: true` baked into every INSERT regardless of
-      // this flag, which is what the previous implementation did (the bug
-      // that made the login verification gate unconditionally unreachable).
-      await authRepository.updateUser(user.user_id, {
-        is_verified: true,
-        verification_token: null,
-        verification_token_expires: null,
-      });
+      await authRepository.verifyUserEmail(user.user_id);
       getLogger().info('Auto-verified user', { event: 'auth.auto_verified', email });
     } else {
-      await sendVerificationEmail(email, rawVerificationToken, fullName);
+      const sent = await emailService.sendVerificationEmail(email, rawVerificationToken, fullName, rawOtp);
+      if (!sent) {
+        getLogger().warn('Registration verification email failed to send', { event: 'auth.registration_email_failed', email });
+      }
     }
 
     return {
@@ -210,52 +223,94 @@ export class AuthService {
       throw new BadRequestError('Invalid or expired verification token');
     }
 
-    await authRepository.updateUser(user.user_id, {
-      is_verified: true,
-      verification_token: null,
-      verification_token_expires: null,
-    });
-
-    return this.issueSession({ ...user, is_verified: true });
+    const updatedUser = await authRepository.verifyUserEmail(user.user_id);
+    if (!updatedUser) {
+      throw new BadRequestError('Invalid or expired verification token');
+    }
+    return this.issueSession(updatedUser);
   }
 
-  // Milestone 26: mirrors forgotPassword's existing anti-enumeration
-  // shape exactly -- silently returns (no throw) whether the email
-  // doesn't exist or is already verified, instead of the two distinct
-  // BadRequestErrors this used to throw ('User not found' /
-  // 'User already verified'), which let anyone unauthenticated probe
-  // whether a given email had an account and whether it was verified.
-  async resendVerification(email: string) {
+  async verifyOTP(email: string, rawOtp: string) {
+    const user = await authRepository.getUserByEmail(email);
+    if (!user || user.is_verified) {
+      throw new BadRequestError('Invalid or expired verification code');
+    }
+
+    if ((user.email_otp_attempts || 0) >= 5) {
+      throw new BadRequestError('Maximum verification attempts exceeded. Please request a new verification code.');
+    }
+
+    if (!user.email_otp_expires || new Date(user.email_otp_expires).getTime() < Date.now()) {
+      throw new BadRequestError('Invalid or expired verification code');
+    }
+
+    const otpHash = hashToken(rawOtp);
+    if (user.email_otp_hash !== otpHash) {
+      await authRepository.incrementOTPAttempts(user.user_id);
+      throw new BadRequestError('Invalid or expired verification code');
+    }
+
+    const updatedUser = await authRepository.verifyUserEmail(user.user_id);
+    if (!updatedUser) {
+      throw new BadRequestError('Invalid or expired verification code');
+    }
+    return this.issueSession(updatedUser);
+  }
+
+  async resendOTP(email: string) {
     const user = await authRepository.getUserByEmail(email);
     if (!user || user.is_verified) {
       return;
     }
 
     const rawToken = generateOpaqueToken();
+    const rawOtp = generateNumericOTP();
     await authRepository.updateUser(user.user_id, {
       verification_token: hashToken(rawToken),
       verification_token_expires: new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS),
+      email_otp_hash: hashToken(rawOtp),
+      email_otp_expires: new Date(Date.now() + OTP_TTL_MS),
+      email_otp_attempts: 0,
     });
 
-    await sendVerificationEmail(email, rawToken, user.full_name);
+    const sent = await emailService.sendVerificationEmail(email, rawToken, user.full_name, rawOtp);
+    if (!sent) {
+      throw new BadRequestError('Failed to send verification email. Please try again later.');
+    }
+  }
+
+  async resendVerification(email: string) {
+    return this.resendOTP(email);
   }
 
   // Always succeeds from the caller's point of view, whether or not the
   // email exists -- prevents an attacker from using this endpoint to
   // enumerate registered emails.
-  async forgotPassword(email: string) {
+  async forgotPassword(email: string, mode: 'link' | 'otp' = 'link') {
     const user = await authRepository.getUserByEmail(email);
     if (!user) {
       return;
     }
 
-    const rawToken = generateOpaqueToken();
-    await authRepository.updateUser(user.user_id, {
-      password_reset_token_hash: hashToken(rawToken),
-      password_reset_expires: new Date(Date.now() + PASSWORD_RESET_TTL_MS),
-    });
+    if (mode === 'otp') {
+      const rawOtp = generateNumericOTP();
+      await authRepository.updateUser(user.user_id, {
+        password_reset_token_hash: hashToken(rawOtp),
+        password_reset_expires: new Date(Date.now() + OTP_TTL_MS),
+        password_reset_attempts: 0,
+      });
 
-    await sendPasswordResetEmail(email, rawToken, user.full_name);
+      await emailService.sendPasswordResetOtpEmail(email, rawOtp, user.full_name);
+    } else {
+      const rawToken = generateOpaqueToken();
+      await authRepository.updateUser(user.user_id, {
+        password_reset_token_hash: hashToken(rawToken),
+        password_reset_expires: new Date(Date.now() + PASSWORD_RESET_TTL_MS),
+        password_reset_attempts: 0,
+      });
+
+      await emailService.sendPasswordResetEmail(email, rawToken, user.full_name);
+    }
   }
 
   // Milestone 38: the password update and the refresh-token revocation
@@ -265,10 +320,30 @@ export class AuthService {
   // same statement as password_hash, which is what lets
   // middleware/auth.ts reject a JWT (legacy bearer or short-lived access
   // token) issued before this reset, not just a refresh token.
-  async resetPassword(rawToken: string, newPassword: string) {
-    const user = await authRepository.getUserByPasswordResetTokenHash(hashToken(rawToken));
+  async resetPassword(rawToken: string, newPassword: string, email?: string) {
+    const tokenHash = hashToken(rawToken);
+    let user = await authRepository.getUserByPasswordResetTokenHash(tokenHash);
+
+    if (!user && email) {
+      const existingUser = await authRepository.getUserByEmail(email);
+      if (existingUser && existingUser.password_reset_token_hash) {
+        const updated = await authRepository.incrementPasswordResetAttempts(existingUser.user_id);
+        const attempts = Number(updated?.password_reset_attempts || 0);
+        if (attempts >= 5) {
+          await authRepository.clearPasswordResetToken(existingUser.user_id);
+          throw new BadRequestError('Maximum password reset attempts exceeded. Please request a new recovery code.');
+        }
+        throw new BadRequestError('Invalid or expired reset token');
+      }
+    }
+
     if (!user) {
       throw new BadRequestError('Invalid or expired reset token');
+    }
+
+    if (Number(user.password_reset_attempts || 0) >= 5) {
+      await authRepository.clearPasswordResetToken(user.user_id);
+      throw new BadRequestError('Maximum password reset attempts exceeded. Please request a new recovery code.');
     }
 
     const passwordHash = await bcrypt.hash(newPassword, BCRYPT_COST);

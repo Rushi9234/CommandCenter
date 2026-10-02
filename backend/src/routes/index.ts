@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as authController from '../controllers/authController';
+import * as oauthController from '../controllers/oauthController';
 import { asyncHandler } from '../common/middleware/asyncHandler';
 import { validate } from '../common/middleware/validate';
 import { getRateLimitProvider } from '../common/rateLimit/rateLimitProviderFactory';
@@ -8,6 +9,8 @@ import {
   loginSchema,
   verifyEmailSchema,
   resendVerificationSchema,
+  verifyOtpSchema,
+  resendOtpSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
   verifyEmailChangeSchema,
@@ -35,20 +38,29 @@ import analyticsRoutes from '../modules/analytics/analytics.routes';
 
 const router = Router();
 
+const authRateLimiter = getRateLimitProvider().createAuthLimiter();
+
 // Auth routes. Milestone 4: all business logic now lives in
 // modules/auth/auth.service.ts; this file only wires paths to the
 // (now-thin) controller, same as every other module.
-router.post('/auth/register', validate(registerSchema), asyncHandler(authController.register));
-router.post('/auth/login', validate(loginSchema), asyncHandler(authController.login));
+router.post('/auth/register', authRateLimiter, validate(registerSchema), asyncHandler(authController.register));
+router.post('/auth/login', authRateLimiter, validate(loginSchema), asyncHandler(authController.login));
 router.post('/auth/verify-email', validate(verifyEmailSchema), asyncHandler(authController.verifyEmail));
-router.post('/auth/resend-verification', validate(resendVerificationSchema), asyncHandler(authController.resendVerification));
+router.post('/auth/resend-verification', authRateLimiter, validate(resendVerificationSchema), asyncHandler(authController.resendVerification));
+router.post('/auth/verify-otp', authRateLimiter, validate(verifyOtpSchema), asyncHandler(authController.verifyOtp));
+router.post('/auth/resend-otp', authRateLimiter, validate(resendOtpSchema), asyncHandler(authController.resendOtp));
+
+// OAuth 2.0 / OIDC routes (Phase 2: Google & Microsoft)
+router.get('/auth/oauth/:provider/init', authRateLimiter, asyncHandler(oauthController.initiateOAuth));
+router.get('/auth/oauth/:provider/callback', authRateLimiter, asyncHandler(oauthController.handleOAuthCallback));
+router.post('/auth/oauth/:provider/callback', authRateLimiter, asyncHandler(oauthController.handleOAuthCallback));
 
 // New in Milestone 4: refresh/logout read their token from a cookie first,
 // falling back to the request body, so these work whether or not the
 // caller has migrated to the cookie-based flow yet.
 router.post('/auth/refresh', asyncHandler(authController.refresh));
 router.post('/auth/logout', asyncHandler(authController.logout));
-router.post('/auth/forgot-password', validate(forgotPasswordSchema), asyncHandler(authController.forgotPassword));
+router.post('/auth/forgot-password', authRateLimiter, validate(forgotPasswordSchema), asyncHandler(authController.forgotPassword));
 router.post('/auth/reset-password', validate(resetPasswordSchema), asyncHandler(authController.resetPassword));
 
 // Phase 4 email-change verification: no authenticate() -- the token itself

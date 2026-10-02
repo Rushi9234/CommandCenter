@@ -61,11 +61,23 @@ export const verifyEmail = (token: string) =>
 export const resendVerification = (email: string) =>
   api.post('/auth/resend-verification', { email });
 
-export const forgotPassword = (email: string) =>
-  api.post('/auth/forgot-password', { email });
+export const verifyOtp = (email: string, otp: string) =>
+  api.post('/auth/verify-otp', { email, otp });
 
-export const resetPassword = (token: string, newPassword: string) =>
-  api.post('/auth/reset-password', { token, newPassword });
+export const resendOtp = (email: string) =>
+  api.post('/auth/resend-otp', { email });
+
+export const forgotPassword = (email: string, mode: 'link' | 'otp' = 'link') =>
+  api.post('/auth/forgot-password', { email, mode });
+
+export const resetPassword = (token: string, newPassword: string, email?: string) =>
+  api.post('/auth/reset-password', { token, newPassword, email });
+
+export const initiateOAuth = (provider: 'google' | 'microsoft') =>
+  api.get(`/auth/oauth/${provider}/init`);
+
+export const handleOAuthCallback = (provider: 'google' | 'microsoft', code: string, state: string) =>
+  api.post(`/auth/oauth/${provider}/callback`, { code, state });
 
 // Logs
 export const createLog = (entryText: string) =>

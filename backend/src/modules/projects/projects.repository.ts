@@ -114,7 +114,7 @@ export class ProjectsRepository {
       SELECT p.project_id FROM projects p
       WHERE p.project_id = $1 AND (
         p.created_by = $2 OR
-        p.is_public = true OR
+        (p.team_id IS NULL AND p.is_public = true) OR
         (p.team_id IS NOT NULL AND p.team_id IN (
           SELECT team_id FROM team_members WHERE user_id = $2
         )) OR

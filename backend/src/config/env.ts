@@ -39,6 +39,7 @@ export const env = {
   // free default) if unset. Business logic never reads this directly --
   // only the factory does.
   emailProvider: process.env.EMAIL_PROVIDER || 'console',
+  emailFrom: process.env.EMAIL_FROM || 'CommandCenter <commandcenter@gmail.com>',
   // Phone verification (Profile Phase 4): which SmsProvider implementation
   // smsProviderFactory.ts's getSmsProvider() selects. 'console' (the free
   // default) if unset -- matching emailProvider's exact precedent, this
@@ -58,4 +59,12 @@ export const env = {
   isProduction,
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
   vercelBlobToken: process.env.VERCEL_BLOB_READ_WRITE_TOKEN,
+  // Google & Microsoft OAuth 2.0 / OIDC configuration (Phase 2)
+  googleClientId: process.env.GOOGLE_CLIENT_ID || '',
+  googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+  googleRedirectUri: process.env.GOOGLE_REDIRECT_URI || '',
+  microsoftClientId: process.env.MICROSOFT_CLIENT_ID || '',
+  microsoftClientSecret: process.env.MICROSOFT_CLIENT_SECRET || '',
+  microsoftTenantId: process.env.MICROSOFT_TENANT_ID || 'common',
+  microsoftRedirectUri: process.env.MICROSOFT_REDIRECT_URI || '',
 };

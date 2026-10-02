@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import * as api from '../services/api';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../hooks/useAuth';
@@ -1031,9 +1032,14 @@ export default function Profile() {
             <input type="password" className="hidden" aria-hidden="true" tabIndex={-1} autoComplete="current-password" />
 
             <div>
-              <label htmlFor="current_password" className="block text-sm font-medium text-gray-700 mb-1">
-                Current Password <span className="text-red-500">*</span>
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label htmlFor="current_password" className="block text-sm font-medium text-gray-700">
+                  Current Password <span className="text-red-500">*</span>
+                </label>
+                <Link to="/forgot-password" className="text-xs text-blue-600 hover:text-blue-700 font-medium">
+                  Forgot current password?
+                </Link>
+              </div>
               <input
                 id="current_password"
                 name="current_password_security_field"

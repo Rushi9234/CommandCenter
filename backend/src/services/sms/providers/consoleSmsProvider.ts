@@ -20,9 +20,10 @@ import { SmsProvider } from './smsProvider.interface';
 // since the phone-otp hash column already exists to be read from directly.
 export class ConsoleSmsProvider implements SmsProvider {
   async sendOtp(phoneNumber: string): Promise<boolean> {
-    getLogger().info('SMS OTP sent (console provider)', {
+    getLogger().info('[SIMULATED] SMS OTP sent (console provider - no real SMS sent)', {
       event: 'sms.otp_sent',
       to: phoneNumber,
+      simulated: true,
     });
 
     return true;

@@ -81,7 +81,7 @@ export class ProjectsService {
       team_id: body.teamId,
       priority: body.priority || 'medium',
       deadline: body.deadline ? new Date(body.deadline) : undefined,
-      is_public: body.isPublic !== false,
+      is_public: body.isPublic !== undefined ? body.isPublic : !body.teamId,
     });
   }
 

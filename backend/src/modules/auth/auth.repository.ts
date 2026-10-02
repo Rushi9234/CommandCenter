@@ -7,6 +7,7 @@ const AUTH_UPDATABLE_COLUMNS = [
   'password_hash',
   'password_reset_token_hash',
   'password_reset_expires',
+  'password_reset_attempts',
   'password_changed_at',
   // Phase 4 email-change verification -- request/resend both go through
   // this same generic updateUser() (matching how every other single-slot
@@ -19,6 +20,13 @@ const AUTH_UPDATABLE_COLUMNS = [
   'pending_email',
   'email_change_token_hash',
   'email_change_expires',
+  // Email OTP & OAuth fields (migration 1791000000000_add-oauth-and-email-otp-fields.sql)
+  'email_otp_hash',
+  'email_otp_expires',
+  'email_otp_attempts',
+  'google_id',
+  'microsoft_id',
+  'auth_provider',
 ];
 
 export class AuthRepository {
@@ -38,6 +46,79 @@ export class AuthRepository {
     return queryOne<any>(text, [email, username, fullName, passwordHash, verificationTokenHash, verificationTokenExpires]);
   }
 
+  async createUserWithOTP(
+    email: string,
+    username: string,
+    fullName: string,
+    passwordHash: string,
+    verificationTokenHash: string | null,
+    verificationTokenExpires: Date | null,
+    otpHash: string | null,
+    otpExpires: Date | null
+  ) {
+    return withTransaction(async (client) => {
+      const res = await client.query(
+        `INSERT INTO users (
+          email, username, full_name, password_hash, is_verified,
+          verification_token, verification_token_expires,
+          email_otp_hash, email_otp_expires, email_otp_attempts
+        )
+        VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8, 0)
+        RETURNING *`,
+        [
+          email,
+          username,
+          fullName,
+          passwordHash,
+          verificationTokenHash,
+          verificationTokenExpires,
+          otpHash,
+          otpExpires,
+        ]
+      );
+      return res.rows[0];
+    });
+  }
+
+  async updateUnverifiedUserWithOTP(
+    userId: string,
+    username: string,
+    fullName: string,
+    passwordHash: string,
+    verificationTokenHash: string | null,
+    verificationTokenExpires: Date | null,
+    otpHash: string | null,
+    otpExpires: Date | null
+  ) {
+    return withTransaction(async (client) => {
+      const res = await client.query(
+        `UPDATE users
+         SET username = $2,
+             full_name = $3,
+             password_hash = $4,
+             verification_token = $5,
+             verification_token_expires = $6,
+             email_otp_hash = $7,
+             email_otp_expires = $8,
+             email_otp_attempts = 0,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = $1 AND is_verified = false
+         RETURNING *`,
+        [
+          userId,
+          username,
+          fullName,
+          passwordHash,
+          verificationTokenHash,
+          verificationTokenExpires,
+          otpHash,
+          otpExpires,
+        ]
+      );
+      return res.rows[0];
+    });
+  }
+
   async getUserByEmail(email: string) {
     return queryOne<any>('SELECT * FROM users WHERE email = $1', [email]);
   }
@@ -55,6 +136,31 @@ export class AuthRepository {
 
   async getUserById(userId: string) {
     return queryOne<any>('SELECT * FROM users WHERE user_id = $1', [userId]);
+  }
+
+  async getUserByGoogleId(googleId: string) {
+    return queryOne<any>('SELECT * FROM users WHERE google_id = $1', [googleId]);
+  }
+
+  async getUserByMicrosoftId(microsoftId: string) {
+    return queryOne<any>('SELECT * FROM users WHERE microsoft_id = $1', [microsoftId]);
+  }
+
+  async createOAuthUser(
+    email: string,
+    username: string,
+    fullName: string,
+    provider: 'google' | 'microsoft',
+    providerId: string
+  ) {
+    const googleId = provider === 'google' ? providerId : null;
+    const microsoftId = provider === 'microsoft' ? providerId : null;
+    const text = `
+      INSERT INTO users (email, username, full_name, password_hash, is_verified, auth_provider, google_id, microsoft_id)
+      VALUES ($1, $2, $3, NULL, true, $4, $5, $6)
+      RETURNING *
+    `;
+    return queryOne<any>(text, [email, username, fullName, provider, googleId, microsoftId]);
   }
 
   // Same allowlisted-update pattern introduced in Milestone 3 -- a client
@@ -181,6 +287,7 @@ export class AuthRepository {
          SET password_hash = $1,
              password_reset_token_hash = NULL,
              password_reset_expires = NULL,
+             password_reset_attempts = 0,
              password_changed_at = $2,
              updated_at = CURRENT_TIMESTAMP
          WHERE user_id = $3`,
@@ -191,6 +298,29 @@ export class AuthRepository {
         [userId]
       );
     });
+  }
+
+  async incrementPasswordResetAttempts(userId: string) {
+    const text = `
+      UPDATE users
+      SET password_reset_attempts = COALESCE(password_reset_attempts, 0) + 1,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = $1
+      RETURNING password_reset_attempts
+    `;
+    return queryOne<{ password_reset_attempts: number }>(text, [userId]);
+  }
+
+  async clearPasswordResetToken(userId: string) {
+    const text = `
+      UPDATE users
+      SET password_reset_token_hash = NULL,
+          password_reset_expires = NULL,
+          password_reset_attempts = 0,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = $1
+    `;
+    return query(text, [userId]);
   }
 
   // ---- Refresh tokens ----
@@ -248,6 +378,32 @@ export class AuthRepository {
       RETURNING token_id
     `;
     return query<{ token_id: string }>(text);
+  }
+  async incrementOTPAttempts(userId: string) {
+    const text = `
+      UPDATE users
+      SET email_otp_attempts = COALESCE(email_otp_attempts, 0) + 1,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = $1
+      RETURNING email_otp_attempts
+    `;
+    return queryOne<{ email_otp_attempts: number }>(text, [userId]);
+  }
+
+  async verifyUserEmail(userId: string) {
+    const text = `
+      UPDATE users
+      SET is_verified = true,
+          verification_token = NULL,
+          verification_token_expires = NULL,
+          email_otp_hash = NULL,
+          email_otp_expires = NULL,
+          email_otp_attempts = 0,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = $1 AND is_verified = false
+      RETURNING *
+    `;
+    return queryOne<any>(text, [userId]);
   }
 }
 

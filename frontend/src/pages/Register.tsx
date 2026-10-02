@@ -46,13 +46,31 @@ export default function Register() {
           animate={{ opacity: 1, scale: 1 }}
           className="w-full max-w-md pro-card p-8 shadow-xl text-center"
         >
-          <h1 className="text-2xl font-bold text-gray-900 mb-3">Check your email</h1>
-          <p className="text-gray-600 mb-6">
-            We've sent a verification link to <strong>{formData.email}</strong>. Click it to activate your account.
+          <div className="w-16 h-16 bg-gradient-to-br from-indigo-600 to-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
+            <span className="text-white font-bold text-2xl">CC</span>
+          </div>
+          <h1 className="text-2xl font-bold text-gray-900 mb-3">Check Your Email</h1>
+          <p className="text-gray-600 mb-6 text-sm">
+            We sent a 6-digit OTP code and a verification link to <strong className="text-gray-900">{formData.email}</strong>.
           </p>
-          <Link to="/login" className="text-blue-600 hover:text-blue-700 font-medium">
-            Back to sign in
-          </Link>
+
+          <div className="space-y-3">
+            <button
+              onClick={() => navigate(`/verify-otp?email=${encodeURIComponent(formData.email)}`)}
+              className="btn-primary w-full"
+            >
+              Enter 6-Digit Code
+            </button>
+            <p className="text-xs text-gray-500">
+              Or click the <strong>&quot;Verify Account&quot;</strong> link inside your email inbox.
+            </p>
+          </div>
+
+          <div className="mt-6 pt-6 border-t border-gray-100">
+            <Link to="/login" className="text-sm text-indigo-600 hover:text-indigo-700 font-medium">
+              Back to Sign In
+            </Link>
+          </div>
         </motion.div>
       </div>
     );

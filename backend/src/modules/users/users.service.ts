@@ -168,7 +168,15 @@ export class UsersService {
 
     // Sent to the NEW address (proves possession before it becomes
     // authoritative -- audit §2.2 step 4), never to the old one.
-    await sendEmailChangeVerification(newEmail, rawToken, user.full_name);
+    const sent = await sendEmailChangeVerification(newEmail, rawToken, user.full_name);
+    if (!sent) {
+      await authRepository.updateUser(userId, {
+        pending_email: null,
+        email_change_token_hash: null,
+        email_change_expires: null,
+      });
+      throw new BadRequestError('Failed to send verification email. Please check email settings or try again.');
+    }
 
     // In-app security notice to the account itself (still reachable via
     // the OLD, still-authoritative email/login throughout the pending
@@ -212,7 +220,10 @@ export class UsersService {
       email_change_expires: new Date(Date.now() + EMAIL_CHANGE_TOKEN_TTL_MS),
     });
 
-    await sendEmailChangeVerification(user.pending_email, rawToken, user.full_name);
+    const resendSent = await sendEmailChangeVerification(user.pending_email, rawToken, user.full_name);
+    if (!resendSent) {
+      throw new BadRequestError('Failed to send verification email. Please check email settings or try again.');
+    }
 
     return { pending_email: user.pending_email };
   }

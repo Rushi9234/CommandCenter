@@ -1,42 +1,44 @@
 import nodemailer, { Transporter } from 'nodemailer';
 import { EmailProvider, EmailMessage } from './emailProvider.interface';
+import { env } from '../../../config/env';
+import { getLogger } from '../../../common/logging/loggerFactory';
 
-// Temporary E2E-testing provider only -- selected via EMAIL_PROVIDER=smtp,
-// entirely additive alongside ConsoleEmailProvider/ResendEmailProvider.
-// Production remains EMAIL_PROVIDER=resend; this class exists so an
-// authenticated E2E pass can be run against a free SMTP testing sandbox
-// (e.g. Mailtrap) without touching the Resend configuration at all.
-// All connection details come from environment variables -- nothing here
-// is hardcoded, matching ResendEmailProvider's own "no vendor detail
-// outside its own provider file" convention.
 export class SmtpEmailProvider implements EmailProvider {
   private readonly transporter: Transporter;
+  private readonly fromAddress: string;
 
-  constructor(host: string, port: number, user: string, pass: string) {
+  constructor(host: string, port: number, user: string, pass: string, fromAddress?: string) {
+    const isSecure = port === 465;
+    this.fromAddress = fromAddress || env.emailFrom;
+
     this.transporter = nodemailer.createTransport({
-      host,
+      host: host.trim(),
       port,
-      auth: { user, pass },
+      secure: isSecure,
+      auth: { user: user.trim(), pass: pass.trim() },
     });
   }
 
   async send(message: EmailMessage): Promise<boolean> {
     try {
       await this.transporter.sendMail({
-        from: 'CommandCenter <test@commandcenter.local>',
+        from: this.fromAddress,
         to: message.to,
         subject: message.subject,
         text: message.body,
+        html: message.html || message.body,
       });
       return true;
-    } catch {
-      // Mirrors ResendEmailProvider's boundary: a send failure here becomes
-      // a plain `false`, never a thrown detail -- emailService.ts's
-      // sendSafely() is the layer that decides how (and how safely) that
-      // gets logged, exactly as it already does for Resend. Never include
-      // the caught error itself (it could echo back host/user/pass from
-      // the transport's own connection string) or any part of `message`
-      // (body/templateData carries the verification/reset token).
+    } catch (err: any) {
+      getLogger().error('SMTP send failed', {
+        event: 'smtp.send_error',
+        to: message.to,
+        subject: message.subject,
+        code: err?.code,
+        command: err?.command,
+        responseCode: err?.responseCode,
+        message: err?.message,
+      });
       return false;
     }
   }

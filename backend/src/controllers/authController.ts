@@ -65,6 +65,22 @@ export const verifyEmail = async (req: Request, res: Response) => {
   }
 };
 
+export const verifyOtp = async (req: Request, res: Response) => {
+  try {
+    const { email, otp } = req.body;
+    const session = await authService.verifyOTP(email, otp);
+    setSessionCookies(res, session.accessToken, session.refreshToken);
+
+    res.json({
+      success: true,
+      message: 'Email verified successfully!',
+      data: { user: session.user, token: session.token },
+    });
+  } catch (error: any) {
+    res.status(error.status || 400).json({ error: error.status ? error.message : 'OTP verification failed' });
+  }
+};
+
 // Milestone 26: mirrors forgotPassword's pattern below -- errors are
 // swallowed and the response is always the same generic success message,
 // whether the email doesn't exist, is already verified, or a real
@@ -80,6 +96,15 @@ export const resendVerification = async (req: Request, res: Response) => {
     // differing response.
   }
   res.json({ success: true, message: 'If that email is registered and not yet verified, a verification link has been sent.' });
+};
+
+export const resendOtp = async (req: Request, res: Response) => {
+  try {
+    await authService.resendOTP(req.body.email);
+  } catch (error) {
+    // Intentionally swallowed for security / anti-enumeration
+  }
+  res.json({ success: true, message: 'If that email is registered and not yet verified, a verification OTP has been sent.' });
 };
 
 // ---- New in Milestone 4 ----
@@ -134,17 +159,19 @@ export const logout = async (req: Request, res: Response) => {
 
 export const forgotPassword = async (req: Request, res: Response) => {
   try {
-    await authService.forgotPassword(req.body.email);
+    const { email, mode } = req.body;
+    await authService.forgotPassword(email, mode);
   } catch (error) {
     // Intentionally swallowed -- see auth.service.ts: this endpoint must
     // not reveal whether the email exists via a differing response.
   }
-  res.json({ success: true, message: 'If that email is registered, a reset link has been sent.' });
+  res.json({ success: true, message: 'If that email is registered, recovery instructions have been sent.' });
 };
 
 export const resetPassword = async (req: Request, res: Response) => {
   try {
-    await authService.resetPassword(req.body.token, req.body.newPassword);
+    const { token, newPassword, email } = req.body;
+    await authService.resetPassword(token, newPassword, email);
     res.json({ success: true, message: 'Password reset successfully. Please log in again.' });
   } catch (error: any) {
     // Milestone 40: same fix as verifyEmail/refresh above.

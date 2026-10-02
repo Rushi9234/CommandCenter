@@ -28,7 +28,7 @@ app.use(requestId);
 // this, every request looks like it comes from the same IP and the
 // per-IP+email limiter stops working correctly. Left unset in
 // development, where requests connect directly.
-if (env.isProduction) {
+if (env.isProduction || process.env.NODE_ENV === 'test') {
   app.set('trust proxy', 1);
 }
 

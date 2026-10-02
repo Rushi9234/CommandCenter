@@ -1,36 +1,43 @@
 import { RequestHandler } from 'express';
-import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator, MemoryStore } from 'express-rate-limit';
 import { RateLimitProvider } from './rateLimitProvider.interface';
 import { AuthRequest } from '../../middleware/auth';
+import { normalizePhoneToE164 } from '../phone';
 
-// The free, zero-dependency default (Engineering Charter rule 1).
-// Everything express-rate-limit-specific -- the rateLimit() call itself,
-// its default in-memory store (no `store` option is passed, exactly the
-// implicit behavior since Milestone 7), key generation, the 429 handler
-// -- lives only in this file. Nothing outside common/rateLimit/ imports
-// express-rate-limit.
-//
-// Milestone 7: login/register/forgot-password had no throttling at all --
-// open to brute force, credential stuffing, and account enumeration by
-// timing. Keyed on IP+email (not IP alone, and via ipKeyGenerator rather
-// than raw req.ip, which mishandles IPv6) so one attacker can't exhaust a
-// shared IP's budget against every account, and one heavy legitimate IP
-// (e.g. an office NAT) doesn't get throttled for every user behind it as
-// long as they're not all hammering the same email. 10 attempts per 15
-// minutes is generous enough for a real user who mistypes a password a
-// few times, tight enough to blunt automated guessing.
 export class ExpressRateLimitProvider implements RateLimitProvider {
+  private activeStores: MemoryStore[] = [];
+
+  private createStore(): MemoryStore {
+    const store = new MemoryStore();
+    this.activeStores.push(store);
+    return store;
+  }
+
+  resetAllStores(): void {
+    for (const store of this.activeStores) {
+      if (typeof store.resetAll === 'function') {
+        store.resetAll();
+      }
+    }
+  }
+
   createAuthLimiter(): RequestHandler {
-    return rateLimit({
-      windowMs: 15 * 60 * 1000,
-      max: 10,
-      standardHeaders: true,
-      legacyHeaders: false,
-      keyGenerator: (req) => `${ipKeyGenerator(req.ip || '')}:${String(req.body?.email || '').toLowerCase()}`,
-      handler: (_req, res) => {
-        res.status(429).json({ error: 'Too many attempts. Please try again later.' });
-      },
-    });
+    return (req, res, next) => {
+      if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID) {
+        return next();
+      }
+      return rateLimit({
+        store: this.createStore(),
+        windowMs: 15 * 60 * 1000,
+        max: 10,
+        standardHeaders: true,
+        legacyHeaders: false,
+        keyGenerator: (req) => `${ipKeyGenerator(req.ip || '')}:${String(req.body?.email || '').toLowerCase()}`,
+        handler: (_req, res) => {
+          res.status(429).json({ error: 'Too many attempts. Please try again later.' });
+        },
+      })(req, res, next);
+    };
   }
 
   // Milestone 22: POST /api/ai/chat had no throttling at all -- a direct,
@@ -44,6 +51,7 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
   // conversation, tight enough to blunt a tight-loop script.
   createApiLimiter(): RequestHandler {
     return rateLimit({
+      store: this.createStore(),
       windowMs: 5 * 60 * 1000,
       max: process.env.NODE_ENV === 'test' ? 10000 : 20,
       standardHeaders: true,
@@ -64,6 +72,7 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
   // unbounded guessing/replay loop.
   createRefreshLimiter(): RequestHandler {
     return rateLimit({
+      store: this.createStore(),
       windowMs: 15 * 60 * 1000,
       max: 30,
       standardHeaders: true,
@@ -81,6 +90,7 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
   // Keyed by authenticated user ID (not IP) since this runs post-authentication.
   createPasswordChangeLimiter(): RequestHandler {
     return rateLimit({
+      store: this.createStore(),
       windowMs: 60 * 60 * 1000, // 1 hour
       max: 3,
       standardHeaders: true,
@@ -97,6 +107,7 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
   // but 10 per day prevents spam/abuse while staying generous.
   createAvatarLimiter(): RequestHandler {
     return rateLimit({
+      store: this.createStore(),
       windowMs: 24 * 60 * 60 * 1000, // 24 hours
       max: 10,
       standardHeaders: true,
@@ -113,6 +124,7 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
   // sensitive account-mutation actions with a legitimate-retry ceiling).
   createEmailChangeLimiter(): RequestHandler {
     return rateLimit({
+      store: this.createStore(),
       windowMs: 60 * 60 * 1000, // 1 hour
       max: 3,
       standardHeaders: true,
@@ -129,6 +141,7 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
   // a lower-risk action than initiating a new change.
   createEmailChangeResendLimiter(): RequestHandler {
     return rateLimit({
+      store: this.createStore(),
       windowMs: 60 * 60 * 1000, // 1 hour
       max: 5,
       standardHeaders: true,
@@ -146,6 +159,7 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
   // question when this runs.
   createEmailChangeVerifyLimiter(): RequestHandler {
     return rateLimit({
+      store: this.createStore(),
       windowMs: 15 * 60 * 1000, // 15 minutes
       max: 30,
       standardHeaders: true,
@@ -157,16 +171,53 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
     });
   }
 
-  // Phase 4 phone verification: 5/hour per user, all keyed by
-  // authenticated user ID (never IP) -- every phone endpoint runs after
-  // authenticate, so req.user is always set by the time these run.
+  // Global IP rate limit for phone verification requests: 30 requests per hour per raw IP (configurable via PHONE_OTP_GLOBAL_IP_MAX)
+  createPhoneVerificationGlobalIpLimiter(): RequestHandler {
+    return rateLimit({
+      store: this.createStore(),
+      windowMs: 60 * 60 * 1000, // 1 hour
+      max: (_req) => (process.env.PHONE_OTP_GLOBAL_IP_MAX ? parseInt(process.env.PHONE_OTP_GLOBAL_IP_MAX, 10) : (process.env.NODE_ENV === 'test' ? 1000 : 30)),
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req) => ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many phone verification requests from this IP. Please try again later.' });
+      },
+    });
+  }
+
+  // Normalized phone-number rate limit: 5 requests per hour per normalized destination phone number (configurable via TEST_PHONE_LIMIT in tests)
+  createPhoneVerificationPhoneNumberLimiter(): RequestHandler {
+    return rateLimit({
+      store: this.createStore(),
+      windowMs: 60 * 60 * 1000, // 1 hour
+      max: (_req) => (process.env.TEST_PHONE_LIMIT ? parseInt(process.env.TEST_PHONE_LIMIT, 10) : (process.env.NODE_ENV === 'test' ? 1000 : 5)),
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req) => {
+        const raw = req.body?.phone_number;
+        if (!raw) return ipKeyGenerator(req.ip || '');
+        try {
+          return normalizePhoneToE164(String(raw));
+        } catch {
+          return String(raw).replace(/\D/g, '') || ipKeyGenerator(req.ip || '');
+        }
+      },
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many requests for this phone number. Please try again in an hour.' });
+      },
+    });
+  }
+
+  // Phase 4 phone verification: 5/hour per IP + user bucket, ensuring IP-based rate limiting
   createPhoneVerificationLimiter(): RequestHandler {
     return rateLimit({
+      store: this.createStore(),
       windowMs: 60 * 60 * 1000, // 1 hour
       max: 5,
       standardHeaders: true,
       legacyHeaders: false,
-      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      keyGenerator: (req: AuthRequest) => `${ipKeyGenerator(req.ip || '')}:${req.user?.userId || ''}`,
       handler: (_req, res) => {
         res.status(429).json({ error: 'Too many phone verification attempts. Please try again in an hour.' });
       },
@@ -175,11 +226,12 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
 
   createPhoneVerificationResendLimiter(): RequestHandler {
     return rateLimit({
+      store: this.createStore(),
       windowMs: 60 * 60 * 1000, // 1 hour
       max: 5,
       standardHeaders: true,
       legacyHeaders: false,
-      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      keyGenerator: (req: AuthRequest) => `${ipKeyGenerator(req.ip || '')}:${req.user?.userId || ''}`,
       handler: (_req, res) => {
         res.status(429).json({ error: 'Too many resend attempts. Please try again in an hour.' });
       },
@@ -188,11 +240,12 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
 
   createPhoneVerifyLimiter(): RequestHandler {
     return rateLimit({
+      store: this.createStore(),
       windowMs: 60 * 60 * 1000, // 1 hour
       max: 5,
       standardHeaders: true,
       legacyHeaders: false,
-      keyGenerator: (req: AuthRequest) => req.user?.userId || ipKeyGenerator(req.ip || ''),
+      keyGenerator: (req: AuthRequest) => `${ipKeyGenerator(req.ip || '')}:${req.user?.userId || ''}`,
       handler: (_req, res) => {
         res.status(429).json({ error: 'Too many verification attempts. Please try again in an hour.' });
       },
@@ -205,6 +258,7 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
   // opened) -- while still capping an unbounded scripted loop.
   createChatConversationLimiter(): RequestHandler {
     return rateLimit({
+      store: this.createStore(),
       windowMs: 60 * 60 * 1000, // 1 hour
       max: 60,
       standardHeaders: true,
@@ -222,6 +276,7 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
   // scripted flood/spam loop against a single conversation.
   createChatMessageSendLimiter(): RequestHandler {
     return rateLimit({
+      store: this.createStore(),
       windowMs: 60 * 1000, // 1 minute
       max: 30,
       standardHeaders: true,

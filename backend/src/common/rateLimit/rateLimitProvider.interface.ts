@@ -83,6 +83,8 @@ export interface RateLimitProvider {
   // 5-incorrect-attempts-per-OTP ceiling is verify-phone's PRIMARY
   // defense; this limiter is a secondary backstop against attempting
   // many different OTPs in sequence.
+  createPhoneVerificationGlobalIpLimiter(): RequestHandler;
+  createPhoneVerificationPhoneNumberLimiter(): RequestHandler;
   createPhoneVerificationLimiter(): RequestHandler;
   createPhoneVerificationResendLimiter(): RequestHandler;
   createPhoneVerifyLimiter(): RequestHandler;

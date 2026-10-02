@@ -8,6 +8,7 @@ export interface EmailMessage {
   to: string;
   subject: string;
   body: string;
+  html?: string;
   // Whatever a real provider (SendGrid, SES, ...) would need to render or
   // send the actual message later -- may contain sensitive values like a
   // verification/reset URL. Providers decide for themselves what's safe

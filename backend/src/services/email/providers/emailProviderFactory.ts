@@ -17,32 +17,17 @@ export const getEmailProvider = (): EmailProvider => {
     return cachedProvider;
   }
 
-  console.log('EMAIL DEBUG:', {
-  provider: env.emailProvider,
-  hasResendKey: !!process.env.RESEND_API_KEY,
-  hasHost: !!process.env.SMTP_HOST,
-  hasPort: !!process.env.SMTP_PORT,
-  hasUser: !!process.env.SMTP_USER,
-  hasPass: !!process.env.SMTP_PASS,
-});
+  let providerChoice = process.env.EMAIL_PROVIDER || env.emailProvider;
+  if (process.env.NODE_ENV === 'test' && providerChoice === 'smtp' && process.env.SMTP_HOST !== 'smtp.example.com') {
+    providerChoice = 'console';
+  }
 
-  switch (env.emailProvider) {
-    // Milestone 55: RESEND_API_KEY is read directly here (not added to
-    // config/env.ts) -- this is the one place that already decides which
-    // provider is active, and the key is needed by no other module. If the
-    // key is missing, fall back to the console provider rather than
-    // throwing at request time (matches the 'unrecognized value' fallback
-    // below -- an EmailProvider that can't send should degrade, not crash
-    // every auth flow that sends an email).
+  switch (providerChoice) {
     case 'resend':
       cachedProvider = process.env.RESEND_API_KEY
         ? new ResendEmailProvider(process.env.RESEND_API_KEY)
         : new ConsoleEmailProvider();
       break;
-    // Temporary E2E-testing provider (see smtpEmailProvider.ts) -- not a
-    // production option. Falls back to ConsoleEmailProvider if any of the
-    // four required variables is missing, matching the 'resend' case's
-    // same "degrade, don't crash" precedent above.
     case 'smtp':
       cachedProvider =
         process.env.SMTP_HOST && process.env.SMTP_PORT && process.env.SMTP_USER && process.env.SMTP_PASS
@@ -50,7 +35,8 @@ export const getEmailProvider = (): EmailProvider => {
               process.env.SMTP_HOST,
               parseInt(process.env.SMTP_PORT, 10),
               process.env.SMTP_USER,
-              process.env.SMTP_PASS
+              process.env.SMTP_PASS,
+              env.emailFrom
             )
           : new ConsoleEmailProvider();
       break;

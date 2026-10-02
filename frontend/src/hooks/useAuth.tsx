@@ -25,6 +25,10 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   register: (data: any) => Promise<RegisterResult>;
   completeEmailVerification: (token: string) => Promise<void>;
+  verifyOtp: (email: string, otp: string) => Promise<void>;
+  resendOtp: (email: string) => Promise<void>;
+  loginWithOAuth: (provider: 'google' | 'microsoft') => Promise<void>;
+  handleOAuthCallback: (provider: 'google' | 'microsoft', code: string, state: string) => Promise<void>;
   updateUser: (fields: Partial<User>) => void;
   logout: () => void;
   isAuthenticated: boolean;
@@ -88,6 +92,30 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     persistSession(user, sessionToken);
   };
 
+  const verifyOtp = async (email: string, otp: string) => {
+    const response = await api.verifyOtp(email, otp);
+    const { user, token: sessionToken } = response.data.data;
+    persistSession(user, sessionToken);
+  };
+
+  const resendOtp = async (email: string) => {
+    await api.resendOtp(email);
+  };
+
+  const loginWithOAuth = async (provider: 'google' | 'microsoft') => {
+    const response = await api.initiateOAuth(provider);
+    const { authUrl } = response.data.data;
+    if (authUrl) {
+      window.location.href = authUrl;
+    }
+  };
+
+  const handleOAuthCallback = async (provider: 'google' | 'microsoft', code: string, state: string) => {
+    const response = await api.handleOAuthCallback(provider, code, state);
+    const { user, token: sessionToken } = response.data.data;
+    persistSession(user, sessionToken);
+  };
+
   const logout = () => {
     setUser(null);
     setToken(null);
@@ -103,6 +131,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         login,
         register,
         completeEmailVerification,
+        verifyOtp,
+        resendOtp,
+        loginWithOAuth,
+        handleOAuthCallback,
         updateUser,
         logout,
         isAuthenticated: !!token,

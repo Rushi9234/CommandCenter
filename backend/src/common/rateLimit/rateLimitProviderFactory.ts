@@ -35,3 +35,9 @@ export const getRateLimitProvider = (): RateLimitProvider => {
 export const resetRateLimitProviderCache = (): void => {
   cachedProvider = null;
 };
+
+export const resetAllRateLimitStores = (): void => {
+  if (cachedProvider && 'resetAllStores' in cachedProvider && typeof (cachedProvider as any).resetAllStores === 'function') {
+    (cachedProvider as any).resetAllStores();
+  }
+};
