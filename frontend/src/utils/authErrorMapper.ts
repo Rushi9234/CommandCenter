@@ -67,7 +67,7 @@ export function mapAuthError(err: any, fallbackMessage?: string): MappedAuthErro
   // Invalid Credentials (HTTP 401)
   if (status === 401 && (lowerErr.includes('invalid email or password') || lowerErr.includes('invalid credentials') || lowerErr.includes('unauthorized'))) {
     return {
-      message: "Email or password is incorrect. Please check and try again.",
+      message: "Invalid email or password. Please check your credentials and try again.",
     };
   }
 

@@ -22,21 +22,23 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
   }
 
   createAuthLimiter(): RequestHandler {
+    const limiter = rateLimit({
+      store: this.createStore(),
+      windowMs: 15 * 60 * 1000,
+      max: 10,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req) => `${ipKeyGenerator(req.ip || '')}:${String(req.body?.email || '').toLowerCase()}`,
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many attempts. Please try again later.' });
+      },
+    });
+
     return (req, res, next) => {
       if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID) {
         return next();
       }
-      return rateLimit({
-        store: this.createStore(),
-        windowMs: 15 * 60 * 1000,
-        max: 10,
-        standardHeaders: true,
-        legacyHeaders: false,
-        keyGenerator: (req) => `${ipKeyGenerator(req.ip || '')}:${String(req.body?.email || '').toLowerCase()}`,
-        handler: (_req, res) => {
-          res.status(429).json({ error: 'Too many attempts. Please try again later.' });
-        },
-      })(req, res, next);
+      return limiter(req, res, next);
     };
   }
 

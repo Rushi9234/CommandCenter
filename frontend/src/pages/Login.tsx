@@ -42,7 +42,7 @@ export default function Login() {
       await login(email, password);
       navigate('/pulse');
     } catch (err: any) {
-      setMappedError(mapAuthError(err, 'Email or password is incorrect. Please check and try again.'));
+      setMappedError(mapAuthError(err, 'Invalid email or password. Please check your credentials and try again.'));
     } finally {
       setLoading(false);
     }
