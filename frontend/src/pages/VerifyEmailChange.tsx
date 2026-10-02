@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useAuth } from '../hooks/useAuth';
 import * as api from '../services/api';
+import { mapAuthError } from '../utils/authErrorMapper';
 
 // Lands here from the link users.service.ts's requestEmailChange (backend)
 // sends via emailService.ts's sendEmailChangeVerification
@@ -63,7 +64,8 @@ export default function VerifyEmailChange() {
         setStatus('success');
       } catch (err: any) {
         if (!cancelled) {
-          setError(err.response?.data?.error || 'Failed to verify email change');
+          const mapped = mapAuthError(err, 'This verification link is invalid or has expired. Request a new one.');
+          setError(mapped.message);
           setStatus('error');
         }
       }
@@ -106,7 +108,7 @@ export default function VerifyEmailChange() {
               Your account email has been changed to <span className="font-medium text-gray-900">{newEmail}</span>.
             </p>
             <p className="text-gray-600 mb-6">For your security, you&apos;ve been signed out everywhere. Please log in again with your new email.</p>
-            <button onClick={() => navigate('/login')} className="btn-primary inline-block">
+            <button onClick={() => navigate('/login?email_changed=success')} className="btn-primary inline-block">
               Go to sign in
             </button>
           </>

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useAuth } from '../hooks/useAuth';
+import { mapAuthError, MappedAuthError } from '../utils/authErrorMapper';
 
 export default function VerifyOtp() {
   const [searchParams] = useSearchParams();
@@ -9,7 +10,7 @@ export default function VerifyOtp() {
 
   const [email, setEmail] = useState(initialEmail);
   const [digits, setDigits] = useState<string[]>(Array(6).fill(''));
-  const [error, setError] = useState('');
+  const [mappedError, setMappedError] = useState<MappedAuthError | null>(null);
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
   const [resendSent, setResendSent] = useState(false);
@@ -44,7 +45,7 @@ export default function VerifyOtp() {
     const newDigits = [...digits];
     newDigits[index] = numericValue.slice(-1); // Take single digit
     setDigits(newDigits);
-    setError('');
+    setMappedError(null);
 
     // Auto-advance to next input if filled
     if (numericValue && index < 5) {
@@ -69,7 +70,7 @@ export default function VerifyOtp() {
       newDigits[idx] = digit;
     });
     setDigits(newDigits);
-    setError('');
+    setMappedError(null);
 
     // Focus last filled input or verify button
     const nextFocusIndex = Math.min(pastedDigits.length, 5);
@@ -80,22 +81,22 @@ export default function VerifyOtp() {
     e.preventDefault();
     const otpCode = digits.join('');
     if (otpCode.length !== 6) {
-      setError('Please enter all 6 digits of the verification code.');
+      setMappedError({ message: 'Please enter all 6 digits of the verification code.' });
       return;
     }
     if (!email.trim()) {
-      setError('Please provide the email address associated with your account.');
+      setMappedError({ message: 'Please provide the email address associated with your account.' });
       return;
     }
 
-    setError('');
+    setMappedError(null);
     setLoading(true);
 
     try {
       await verifyOtp(email.trim(), otpCode);
       navigate('/pulse');
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Invalid or expired verification code');
+      setMappedError(mapAuthError(err, 'Invalid or expired verification code. Please check and try again.'));
     } finally {
       setLoading(false);
     }
@@ -104,7 +105,7 @@ export default function VerifyOtp() {
   const handleResend = async () => {
     if (cooldown > 0 || resending || !email.trim()) return;
     setResending(true);
-    setError('');
+    setMappedError(null);
     setResendSent(false);
 
     try {
@@ -149,13 +150,13 @@ export default function VerifyOtp() {
         </div>
 
         <div className="pro-card p-8 shadow-xl">
-          {error && (
+          {mappedError && (
             <motion.div
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
               className="alert alert-error mb-6 text-sm"
             >
-              {error}
+              {mappedError.message}
             </motion.div>
           )}
 

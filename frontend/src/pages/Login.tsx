@@ -1,28 +1,59 @@
-import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useAuth } from '../hooks/useAuth';
+import { mapAuthError, MappedAuthError } from '../utils/authErrorMapper';
 
 export default function Login() {
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [mappedError, setMappedError] = useState<MappedAuthError | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const { login, loginWithOAuth } = useAuth();
   const navigate = useNavigate();
 
+  useEffect(() => {
+    const reason = searchParams.get('reason');
+    const passwordReset = searchParams.get('password_reset');
+    const emailChanged = searchParams.get('email_changed');
+    const oauthStatus = searchParams.get('oauth');
+
+    if (reason === 'session_expired') {
+      setInfoMessage('Your session has expired or your credentials were updated. Please sign in again.');
+    } else if (passwordReset === 'success') {
+      setSuccessMessage('Your password has been changed successfully. Please sign in using your new password.');
+    } else if (emailChanged === 'success') {
+      setSuccessMessage('Your email address has been updated. Please sign in with your new email.');
+    } else if (oauthStatus === 'failed') {
+      setMappedError({ message: "Google sign-in couldn't be completed. Please try again." });
+    }
+  }, [searchParams]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
+    setMappedError(null);
+    setInfoMessage(null);
     setLoading(true);
 
     try {
       await login(email, password);
       navigate('/pulse');
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Login failed');
+      setMappedError(mapAuthError(err, 'Email or password is incorrect. Please check and try again.'));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleOAuthLogin = async (provider: 'google' | 'microsoft') => {
+    setMappedError(null);
+    try {
+      await loginWithOAuth(provider);
+    } catch (err: any) {
+      setMappedError(mapAuthError(err, "Google sign-in couldn't be completed. Please try again."));
     }
   };
 
@@ -67,13 +98,41 @@ export default function Login() {
           transition={{ delay: 0.5 }}
           className="pro-card p-8 shadow-xl"
         >
-          {error && (
+          {successMessage && (
             <motion.div
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
-              className="alert alert-error mb-6 text-sm"
+              className="alert alert-success mb-6 text-sm bg-green-50 border border-green-200 text-green-800 p-3 rounded-xl"
             >
-              {error}
+              {successMessage}
+            </motion.div>
+          )}
+
+          {infoMessage && (
+            <motion.div
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="alert alert-info mb-6 text-sm bg-blue-50 border border-blue-200 text-blue-800 p-3 rounded-xl"
+            >
+              {infoMessage}
+            </motion.div>
+          )}
+
+          {mappedError && (
+            <motion.div
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="alert alert-error mb-6 text-sm flex flex-col gap-2"
+            >
+              <span>{mappedError.message}</span>
+              {mappedError.isUnverified && (
+                <Link
+                  to={`/verify-otp?email=${encodeURIComponent(email)}`}
+                  className="text-xs font-semibold text-blue-700 underline hover:text-blue-900 mt-1 inline-block"
+                >
+                  Verify Email Now &rarr;
+                </Link>
+              )}
             </motion.div>
           )}
 
@@ -140,7 +199,7 @@ export default function Login() {
           <div className="grid grid-cols-2 gap-3">
             <button
               type="button"
-              onClick={() => loginWithOAuth('google')}
+              onClick={() => handleOAuthLogin('google')}
               className="flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors shadow-sm"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24">
@@ -153,7 +212,7 @@ export default function Login() {
             </button>
             <button
               type="button"
-              onClick={() => loginWithOAuth('microsoft')}
+              onClick={() => handleOAuthLogin('microsoft')}
               className="flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors shadow-sm"
             >
               <svg className="w-4 h-4" viewBox="0 0 23 23">

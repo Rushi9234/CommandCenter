@@ -2,12 +2,8 @@ import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import * as api from '../services/api';
+import { mapAuthError, MappedAuthError } from '../utils/authErrorMapper';
 
-// Milestone 55: the landing page for the link sendPasswordResetEmail
-// builds (`${FRONTEND_URL}/reset-password?token=...`). POST /auth/reset-
-// password does NOT return a session (confirmed against auth.service.ts
-// -- it only updates the password and revokes existing sessions), so a
-// successful reset here links to /login rather than auto-logging in.
 export default function ResetPassword() {
   const [searchParams] = useSearchParams();
   const tokenParam = searchParams.get('token');
@@ -16,7 +12,7 @@ export default function ResetPassword() {
   const [newPassword, setNewPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
-  const [error, setError] = useState('');
+  const [mappedError, setMappedError] = useState<MappedAuthError | null>(null);
 
   const emailParam = searchParams.get('email') || undefined;
 
@@ -25,16 +21,16 @@ export default function ResetPassword() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!effectiveToken) {
-      setError('Please provide a valid verification token or 6-digit code.');
+      setMappedError({ message: 'Please provide a valid verification token or 6-digit code.' });
       return;
     }
-    setError('');
+    setMappedError(null);
     setLoading(true);
     try {
       await api.resetPassword(effectiveToken, newPassword, emailParam);
       setSuccess(true);
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to reset password');
+      setMappedError(mapAuthError(err, "We couldn't reset your password. Please try again or request a new reset link."));
     } finally {
       setLoading(false);
     }
@@ -50,8 +46,8 @@ export default function ResetPassword() {
         {success ? (
           <>
             <h1 className="text-2xl font-bold text-gray-900 mb-3">Password reset</h1>
-            <p className="text-gray-600 mb-6">Your password has been reset successfully. Please log in again.</p>
-            <Link to="/login" className="btn-primary inline-block">
+            <p className="text-gray-600 mb-6">Your password has been changed successfully. Please sign in using your new password.</p>
+            <Link to="/login?password_reset=success" className="btn-primary inline-block">
               Go to sign in
             </Link>
           </>
@@ -64,7 +60,14 @@ export default function ResetPassword() {
                 : 'Enter your 6-digit OTP recovery code and choose a new password.'}
             </p>
             <form onSubmit={handleSubmit} className="space-y-4 text-left mt-4">
-              {error && <div className="alert alert-error text-sm">{error}</div>}
+              {mappedError && (
+                <div className="alert alert-error text-sm flex flex-col gap-2">
+                  <span>{mappedError.message}</span>
+                  <Link to="/forgot-password" className="text-xs font-semibold text-blue-700 underline hover:text-blue-900 mt-1 inline-block">
+                    Request a new reset link &rarr;
+                  </Link>
+                </div>
+              )}
 
               {!tokenParam && (
                 <div>

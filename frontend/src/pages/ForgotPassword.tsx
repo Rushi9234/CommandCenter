@@ -2,27 +2,24 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import * as api from '../services/api';
+import { mapAuthError, MappedAuthError } from '../utils/authErrorMapper';
 
-// Milestone 55: the entry point for POST /auth/forgot-password, which
-// already existed backend-side with no frontend caller. Not routed
-// through useAuth -- this never establishes a session, unlike
-// login/register/completeEmailVerification.
 export default function ForgotPassword() {
   const [email, setEmail] = useState('');
   const [mode, setMode] = useState<'link' | 'otp'>('link');
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [mappedError, setMappedError] = useState<MappedAuthError | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
+    setMappedError(null);
     setLoading(true);
     try {
       await api.forgotPassword(email, mode);
       setSubmitted(true);
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Something went wrong. Please try again.');
+      setMappedError(mapAuthError(err, "We couldn't connect right now. Please try again shortly."));
     } finally {
       setLoading(false);
     }
@@ -81,7 +78,7 @@ export default function ForgotPassword() {
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
-            {error && <div className="alert alert-error text-sm">{error}</div>}
+            {mappedError && <div className="alert alert-error text-sm">{mappedError.message}</div>}
             <div>
               <label className="block text-xs font-semibold text-gray-700 mb-1">Email Address</label>
               <input

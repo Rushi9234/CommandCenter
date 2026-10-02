@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { mapAuthError } from '../utils/authErrorMapper';
 
 export default function OAuthCallback() {
   const { provider } = useParams<{ provider: 'google' | 'microsoft' }>();
@@ -16,12 +17,12 @@ export default function OAuthCallback() {
       const providerError = searchParams.get('error') || searchParams.get('error_description');
 
       if (providerError) {
-        setError(providerError);
+        setError("Google sign-in couldn't be completed. Please try again.");
         return;
       }
 
       if (!code || !state || !provider) {
-        setError('Invalid OAuth callback parameters');
+        setError("Google sign-in couldn't be completed. Please try again.");
         return;
       }
 
@@ -29,7 +30,8 @@ export default function OAuthCallback() {
         await handleOAuthCallback(provider as 'google' | 'microsoft', code, state);
         navigate('/pulse');
       } catch (err: any) {
-        setError(err.response?.data?.error || err.message || 'OAuth authentication failed');
+        const mapped = mapAuthError(err, "Google sign-in couldn't be completed. Please try again.");
+        setError(mapped.message);
       }
     };
 

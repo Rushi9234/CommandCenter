@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useAuth } from '../hooks/useAuth';
+import { mapAuthError, MappedAuthError } from '../utils/authErrorMapper';
 
 export default function Register() {
   const [formData, setFormData] = useState({
@@ -10,18 +11,15 @@ export default function Register() {
     fullName: '',
     password: '',
   });
-  const [error, setError] = useState('');
+  const [mappedError, setMappedError] = useState<MappedAuthError | null>(null);
   const [loading, setLoading] = useState(false);
-  // Milestone 55: register() never returns a session when verification is
-  // required (see useAuth.tsx) -- this page must not assume login
-  // succeeded and navigate to a protected route in that case.
   const [pendingVerification, setPendingVerification] = useState(false);
   const { register } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
+    setMappedError(null);
     setLoading(true);
 
     try {
@@ -32,7 +30,7 @@ export default function Register() {
         setPendingVerification(true);
       }
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Registration failed');
+      setMappedError(mapAuthError(err, 'Registration failed. Please check your information and try again.'));
     } finally {
       setLoading(false);
     }
@@ -117,13 +115,23 @@ export default function Register() {
           transition={{ delay: 0.5 }}
           className="pro-card p-8 shadow-xl"
         >
-          {error && (
+          {mappedError && (
             <motion.div
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
-              className="alert alert-error mb-6 text-sm"
+              className="alert alert-error mb-6 text-sm flex flex-col gap-2"
             >
-              {error}
+              <span>{mappedError.message}</span>
+              {mappedError.isDuplicateEmail && (
+                <div className="flex items-center gap-3 mt-1 text-xs">
+                  <Link to="/login" className="font-semibold text-blue-700 underline hover:text-blue-900">
+                    Sign In &rarr;
+                  </Link>
+                  <Link to="/forgot-password" className="font-semibold text-blue-700 underline hover:text-blue-900">
+                    Forgot Password? &rarr;
+                  </Link>
+                </div>
+              )}
             </motion.div>
           )}
 

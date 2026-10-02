@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useAuth } from '../hooks/useAuth';
 import * as api from '../services/api';
+import { mapAuthError } from '../utils/authErrorMapper';
 
 // Milestone 55: lands here from the link emailService.ts builds
 // (`${FRONTEND_URL}/verify-email?token=...`). No token in the URL means
@@ -30,7 +31,8 @@ export default function VerifyEmail() {
         if (!cancelled) navigate('/pulse');
       } catch (err: any) {
         if (!cancelled) {
-          setError(err.response?.data?.error || 'Failed to verify email');
+          const mapped = mapAuthError(err, 'This verification link is invalid or has expired. Request a new one.');
+          setError(mapped.message);
           setStatus('error');
         }
       }
