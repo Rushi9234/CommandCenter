@@ -35,6 +35,11 @@ import attentionRoutes from '../modules/attention/attention.routes';
 import guidanceRoutes from '../modules/guidance/guidance.routes';
 import pulseRoutes from '../modules/pulse/pulse.routes';
 import analyticsRoutes from '../modules/analytics/analytics.routes';
+import helpRoutes from './help.routes';
+import feedbackRoutes from '../modules/feedback/feedback.routes';
+import adminAnalyticsRoutes from '../modules/admin/adminAnalytics.routes';
+
+import { authenticate } from '../middleware/auth';
 
 const router = Router();
 
@@ -43,6 +48,7 @@ const authRateLimiter = getRateLimitProvider().createAuthLimiter();
 // Auth routes. Milestone 4: all business logic now lives in
 // modules/auth/auth.service.ts; this file only wires paths to the
 // (now-thin) controller, same as every other module.
+router.get('/auth/me', authenticate, asyncHandler(authController.getMe));
 router.post('/auth/register', authRateLimiter, validate(registerSchema), asyncHandler(authController.register));
 router.post('/auth/login', authRateLimiter, validate(loginSchema), asyncHandler(authController.login));
 router.post('/auth/verify-email', validate(verifyEmailSchema), asyncHandler(authController.verifyEmail));
@@ -102,5 +108,8 @@ router.use('/', attentionRoutes);
 router.use('/', guidanceRoutes);
 router.use('/pulse', pulseRoutes);
 router.use('/', analyticsRoutes);
+router.use('/help', helpRoutes);
+router.use('/', feedbackRoutes);
+router.use('/', adminAnalyticsRoutes);
 
 export default router;

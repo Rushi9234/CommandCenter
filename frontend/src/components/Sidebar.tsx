@@ -70,9 +70,21 @@ export default function Sidebar({ isOpenMobile, onCloseMobile, onToggleMobile }:
       title: 'Help',
       items: [
         { path: '#how-to-use', label: 'How to Use', isButton: true },
-        { path: '#help-center', label: 'Help Center' },
+        { path: '/help-center', label: 'Help Center' },
+        { path: '/my-feedback', label: 'My Reports' },
       ],
     },
+    ...(user?.role === 'admin'
+      ? [
+          {
+            title: 'Admin',
+            items: [
+              { path: '/admin/dashboard', label: 'Admin Dashboard' },
+              { path: '/admin/tickets', label: 'Support Queue' },
+            ],
+          },
+        ]
+      : []),
   ];
 
   const isActive = (path: string) => {

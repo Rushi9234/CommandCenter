@@ -25,6 +25,10 @@ import Chat from './pages/Chat';
 import Overview from './pages/Overview';
 import OAuthCallback from './pages/OAuthCallback';
 import GlobalAIAssistant from './components/GlobalAIAssistant';
+import HelpCenter from './pages/HelpCenter';
+import MyFeedback from './pages/MyFeedback';
+import SupportAdminQueue from './pages/SupportAdminQueue';
+import AdminDashboard from './pages/AdminDashboard';
 
 function RedirectClass() {
   const { classId } = useParams();
@@ -92,6 +96,14 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   ) : (
     <Navigate to="/login" />
   );
+}
+
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, isInitializing, user } = useAuth();
+  if (isInitializing) return null;
+  if (!isAuthenticated) return <Navigate to="/login" />;
+  if (user?.role !== 'admin') return <Navigate to="/pulse" replace />;
+  return <ProtectedLayoutWithWalkthrough>{children}</ProtectedLayoutWithWalkthrough>;
 }
 
 function PublicOnlyRoute({ children }: { children: React.ReactNode }) {
@@ -249,6 +261,42 @@ function AppRoutes() {
           <ProtectedRoute>
             <SOSHub />
           </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/help-center"
+        element={
+          <ProtectedRoute>
+            <HelpCenter />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/my-feedback"
+        element={
+          <ProtectedRoute>
+            <MyFeedback />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/admin/tickets"
+        element={
+          <AdminRoute>
+            <SupportAdminQueue />
+          </AdminRoute>
+        }
+      />
+
+      <Route
+        path="/admin/dashboard"
+        element={
+          <AdminRoute>
+            <AdminDashboard />
+          </AdminRoute>
         }
       />
 

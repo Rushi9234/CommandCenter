@@ -44,6 +44,15 @@ export function useQuickOverview() {
     }
   }, [isAuthenticated, isInitializing]);
 
+  useEffect(() => {
+    const handleReopenEvent = () => {
+      localStorage.removeItem(STORAGE_KEY);
+      setIsOpen(true);
+    };
+    window.addEventListener('commandcenter:reopen-tour', handleReopenEvent);
+    return () => window.removeEventListener('commandcenter:reopen-tour', handleReopenEvent);
+  }, []);
+
   const handleClose = () => {
     setIsOpen(false);
     // Persist the dismissal in localStorage so it doesn't reopen on next visit
@@ -52,11 +61,12 @@ export function useQuickOverview() {
 
   /**
    * Allow users to reopen the walkthrough from settings or help menu.
-   * This will be called if/when a "Reopen Guide" option is added to the UI.
+   * Dispatches global custom event so the layout instance opens the tour.
    */
   const handleReopenGuide = () => {
     localStorage.removeItem(STORAGE_KEY);
     setIsOpen(true);
+    window.dispatchEvent(new CustomEvent('commandcenter:reopen-tour'));
   };
 
   return { isOpen, onClose: handleClose, onReopenGuide: handleReopenGuide };
