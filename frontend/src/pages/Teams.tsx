@@ -88,6 +88,12 @@ export default function Teams() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState('');
 
+  // Discover Teams state
+  const [discoverLoading, setDiscoverLoading] = useState(false);
+  const [discoverError, setDiscoverError] = useState<string | null>(null);
+  const [discoverAuthRequired, setDiscoverAuthRequired] = useState(false);
+  const discoverReqSeq = useRef(0);
+
   // Sub-teams & work submissions
   const [subTeams, setSubTeams] = useState<any[]>([]);
   const [workSubmissions, setWorkSubmissions] = useState<any[]>([]);
@@ -204,13 +210,38 @@ export default function Teams() {
   }, [teamIdParam, teams]);
 
   const loadAllTeams = async () => {
+    const currentSeq = ++discoverReqSeq.current;
+    setDiscoverLoading(true);
+    setDiscoverError(null);
+    setDiscoverAuthRequired(false);
     try {
       const response = await api.getAllTeams();
-      setAllTeams(response.data.data);
-    } catch (error) {
+      if (currentSeq !== discoverReqSeq.current) return;
+      setAllTeams(response.data?.data || []);
+    } catch (error: any) {
+      if (currentSeq !== discoverReqSeq.current) return;
       console.error('Failed to load all teams:', error);
+      const status = error.response?.status;
+      if (status === 401) {
+        setDiscoverAuthRequired(true);
+        setDiscoverError('Authentication required: Your session has expired or you are not logged in. Please log in to view discoverable teams.');
+      } else if (status === 403) {
+        setDiscoverError('Access Denied: You do not have permission to view discoverable teams.');
+      } else {
+        setDiscoverError(error.response?.data?.error || 'Failed to load discoverable teams. Please check your connection and try again.');
+      }
+    } finally {
+      if (currentSeq === discoverReqSeq.current) {
+        setDiscoverLoading(false);
+      }
     }
   };
+
+  useEffect(() => {
+    if (showDiscoverModal) {
+      loadAllTeams();
+    }
+  }, [showDiscoverModal]);
 
   const loadInvites = async () => {
     try {
@@ -317,6 +348,13 @@ export default function Teams() {
   const handlePreviewTeamId = async () => {
     const teamId = joinByIdInput.trim();
     if (!teamId) return;
+
+    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!UUID_REGEX.test(teamId)) {
+      setPreviewError('Please enter a valid 36-character Team UUID (e.g. 123e4567-e89b-12d3-a456-426614174000).');
+      return;
+    }
+
     setPreviewLoading(true);
     setPreviewError('');
     setPreviewedTeam(null);
@@ -1400,18 +1438,46 @@ export default function Teams() {
 
               {/* Internal Scrollable Content */}
               <div className="space-y-3 overflow-y-auto flex-1 pr-1">
-                {searchLoading ? (
-                  <div className="text-center py-8">
+                {discoverLoading || searchLoading ? (
+                  <div className="text-center py-10">
                     <div className="spinner w-6 h-6 mx-auto mb-2"></div>
-                    <p className="text-gray-500 text-sm">Searching teams...</p>
+                    <p className="text-gray-500 text-sm">
+                      {searchQuery ? 'Searching teams...' : 'Loading discoverable teams...'}
+                    </p>
+                  </div>
+                ) : discoverError && !searchQuery ? (
+                  <div className="text-center py-10 px-4 space-y-3 bg-red-50 rounded-xl border border-red-200 my-4">
+                    <div className="text-3xl">{discoverAuthRequired ? '🔐' : '⚠️'}</div>
+                    <p className="font-semibold text-red-800 text-sm">{discoverError}</p>
+                    <div className="flex justify-center items-center gap-3 pt-2">
+                      {discoverAuthRequired && (
+                        <button
+                          type="button"
+                          onClick={() => navigate('/login?reason=session_expired')}
+                          className="btn-primary text-xs px-4 py-2 flex items-center gap-1.5"
+                        >
+                          🔐 Log In
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={loadAllTeams}
+                        className="btn-secondary text-xs px-4 py-2"
+                      >
+                        🔄 Retry Loading Teams
+                      </button>
+                    </div>
                   </div>
                 ) : (searchQuery ? searchResults : allTeams).length === 0 ? (
-                  <div className="text-center text-gray-500 py-10 space-y-1">
-                    <p className="font-medium text-base">
-                      {searchQuery ? 'No search results' : 'No teams available'}
+                  <div className="text-center py-10 px-4 space-y-3 bg-gray-50 rounded-xl border border-dashed border-gray-200 my-4">
+                    <div className="text-3xl">👥</div>
+                    <p className="font-semibold text-gray-800 text-base">
+                      {searchQuery ? 'No search results found' : 'No public teams currently discoverable'}
                     </p>
-                    <p className="text-xs">
-                      {searchQuery ? 'Try matching another team name or description' : 'No discoverable public teams found'}
+                    <p className="text-xs text-gray-500 max-w-sm mx-auto">
+                      {searchQuery
+                        ? 'Try searching with different keywords or clear your search query.'
+                        : 'There are currently no public teams available to join. Be the first to create one!'}
                     </p>
                   </div>
                 ) : (

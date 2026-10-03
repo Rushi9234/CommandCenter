@@ -8,6 +8,12 @@ const getApiBaseUrl = () => {
   return import.meta.env.PROD ? 'https://commandcenter-backend.vercel.app/api' : '/api';
 };
 
+declare module 'axios' {
+  export interface AxiosRequestConfig {
+    skipAuthRedirect?: boolean;
+  }
+}
+
 const api = axios.create({
   baseURL: getApiBaseUrl(),
   headers: {
@@ -39,8 +45,10 @@ api.interceptors.response.use(
         url.includes('/auth/reset-password') ||
         url.includes('/auth/oauth');
 
-      // Do NOT trigger full page reload if 401 came from an auth endpoint
-      if (!isAuthEndpoint) {
+      const skipRedirect = error.config?.skipAuthRedirect;
+
+      // Do NOT trigger full page reload if 401 came from an auth endpoint or request set skipAuthRedirect
+      if (!isAuthEndpoint && !skipRedirect) {
         localStorage.removeItem('token');
         localStorage.removeItem('user');
         if (window.location.pathname !== '/login') {
@@ -63,6 +71,8 @@ api.interceptors.response.use(
 );
 
 // Auth
+export const getMe = () => api.get('/auth/me');
+
 export const register = (data: { email: string; username: string; fullName: string; password: string }) =>
   api.post('/auth/register', data);
 
@@ -116,8 +126,8 @@ export const createTeam = (teamName: string, description: string, isPublic?: boo
 export const getMyTeams = () =>
   api.get('/teams/my');
 
-export const getAllTeams = () =>
-  api.get('/teams');
+export const getAllTeams = (options?: { skipAuthRedirect?: boolean }) =>
+  api.get('/teams', { skipAuthRedirect: true, ...options });
 
 export const getSubTeams = (teamId: string) =>
   api.get(`/teams/${teamId}/sub-teams`);
@@ -452,6 +462,13 @@ export const getMemberAnalytics = (memberId: string, teamId?: string) =>
 export const requestProjectCollaboration = (projectId: string) =>
   api.post(`/projects/${projectId}/collaborate`);
 
+// Help Center Documentation
+export const getHelpDocs = () =>
+  api.get('/help/docs');
+
+export const searchHelpDocs = (q: string) =>
+  api.get('/help/search', { params: { q } });
+
 export const acceptProjectCollaboration = (projectId: string, targetUserId: string) =>
   api.post(`/projects/${projectId}/collaboration/${targetUserId}/accept`);
 
@@ -463,5 +480,39 @@ export const revokeProjectCollaboration = (projectId: string, targetUserId: stri
 
 export const getProjectCollaborators = (projectId: string) =>
   api.get(`/projects/${projectId}/collaborators`);
+
+// User Feedback & Support
+export const createFeedback = (data: any) =>
+  api.post('/feedback', data);
+
+export const getMyFeedback = () =>
+  api.get('/feedback/my');
+
+export const getFeedbackByReferenceId = (referenceId: string) =>
+  api.get(`/feedback/${referenceId}`);
+
+export const addFeedbackMessage = (referenceId: string, message: string, isInternal?: boolean, attachment?: any) =>
+  api.post(`/feedback/${referenceId}/messages`, { message, is_internal: isInternal, attachment });
+
+export const reopenTicket = (referenceId: string, reason?: string) =>
+  api.post(`/feedback/${referenceId}/reopen`, { reason });
+
+export const downloadAttachment = (referenceId: string, attachmentId: string) =>
+  api.get(`/feedback/${referenceId}/attachments/${attachmentId}`, { responseType: 'blob' });
+
+export const getAdminTickets = (params?: { status?: string; severity?: string; report_type?: string; search?: string; page?: number; limit?: number }) =>
+  api.get('/admin/tickets', { params });
+
+export const getAdminDashboardMetrics = () =>
+  api.get('/admin/dashboard');
+
+export const updateTicketStatus = (referenceId: string, status: string, resolution_notes?: string, change_reason?: string) =>
+  api.patch(`/admin/tickets/${referenceId}/status`, { status, resolution_notes, change_reason });
+
+export const assignTicket = (referenceId: string, assigned_to: string) =>
+  api.patch(`/admin/tickets/${referenceId}/assign`, { assigned_to });
+
+export const getPlatformAnalytics = (params?: { period?: string; startDate?: string; endDate?: string }) =>
+  api.get('/admin/analytics/platform', { params });
 
 export default api;
