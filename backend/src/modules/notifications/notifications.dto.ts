@@ -32,6 +32,7 @@ export const NOTIFICATION_PREFERENCE_KEYS = [
   'chat_message',
   'guidance',
   'goal_review',
+  'support_ticket',
 ] as const;
 
 // Every key optional/partial -- a caller only sends the categories they

@@ -97,6 +97,27 @@ export function getNotificationDestination(notification: {
     return { path: '/help', params: {} };
   }
 
+  if (category.startsWith('support.')) {
+    const messageText = (notification.message || '') + ' ' + (notification.title || '');
+    const ticketMatch = messageText.match(/FB-[A-F0-9]{8}/i);
+    const referenceId = ticketMatch ? ticketMatch[0].toUpperCase() : null;
+    if (!referenceId) return null;
+
+    const isAdminRoute =
+      category === 'support.submitted' ||
+      category === 'support.assigned' ||
+      category === 'support.reassigned' ||
+      category === 'support.user_reply' ||
+      category === 'support.reopened' ||
+      category === 'support.internal_note' ||
+      notification.metadata?.targetPath === '/admin/tickets';
+
+    if (isAdminRoute) {
+      return { path: '/admin/tickets', params: { ticket: referenceId } };
+    }
+    return { path: '/my-feedback', params: { ticket: referenceId } };
+  }
+
   // Unknown/future category with no mapping yet -- fail safe (no
   // navigation) rather than guessing a destination.
   return null;

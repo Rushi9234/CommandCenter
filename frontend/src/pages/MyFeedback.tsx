@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import * as api from '../services/api';
 import TicketDetailDrawer from '../components/TicketDetailDrawer';
@@ -17,6 +18,9 @@ export interface FeedbackRecord {
 }
 
 export default function MyFeedback() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const ticketParam = searchParams.get('ticket');
+
   const [reports, setReports] = useState<FeedbackRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +29,27 @@ export default function MyFeedback() {
   // Filter & Search state
   const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'waiting' | 'resolved' | 'closed'>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedRefId, setSelectedRefId] = useState<string | null>(null);
+  const [selectedRefId, setSelectedRefId] = useState<string | null>(ticketParam);
+
+  useEffect(() => {
+    if (ticketParam) {
+      setSelectedRefId(ticketParam);
+    }
+  }, [ticketParam]);
+
+  const handleOpenTicket = (refId: string) => {
+    setSelectedRefId(refId);
+    setSearchParams({ ticket: refId }, { replace: true });
+  };
+
+  const handleCloseDrawer = () => {
+    setSelectedRefId(null);
+    if (searchParams.has('ticket')) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete('ticket');
+      setSearchParams(nextParams, { replace: true });
+    }
+  };
 
   const fetchMyFeedback = async () => {
     setLoading(true);
@@ -234,7 +258,7 @@ export default function MyFeedback() {
             <motion.div
               key={report.reference_id}
               whileHover={{ y: -2 }}
-              onClick={() => setSelectedRefId(report.reference_id)}
+              onClick={() => handleOpenTicket(report.reference_id)}
               className="pro-card p-5 border border-slate-200 hover:border-blue-400 transition-all shadow-xs space-y-3 cursor-pointer group bg-white"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -282,7 +306,7 @@ export default function MyFeedback() {
       <TicketDetailDrawer
         referenceId={selectedRefId}
         isOpen={!!selectedRefId}
-        onClose={() => setSelectedRefId(null)}
+        onClose={handleCloseDrawer}
         isAdmin={false}
         onUpdated={fetchMyFeedback}
       />

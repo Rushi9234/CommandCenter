@@ -15,4 +15,5 @@ export const NOTIFICATION_PREFERENCE_LABELS: Record<string, string> = {
   password_change: 'Password security alerts',
   email_change: 'Email security alerts',
   phone_verification: 'Phone verification alerts',
+  support_ticket: 'Support ticket updates',
 };

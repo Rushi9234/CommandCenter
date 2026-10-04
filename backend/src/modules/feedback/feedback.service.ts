@@ -2,6 +2,8 @@ import { feedbackRepository, FeedbackReport, FeedbackStatus, FeedbackMessage, Fe
 import { BadRequestError, NotFoundError, ForbiddenError } from '../../common/errors';
 import { sendSupportNotificationEmail } from '../../services/emailService';
 import { authRepository } from '../auth/auth.repository';
+import { usersRepository } from '../users/users.repository';
+import { notificationsService } from '../notifications/notifications.service';
 import { env } from '../../config/env';
 
 export interface FeedbackAttachmentDTO {
@@ -25,6 +27,40 @@ export interface CreateFeedbackDTO {
 }
 
 export class FeedbackService {
+  private async notifySupportStaff(
+    actorUserId: string,
+    category: string,
+    title: string,
+    message: string,
+    assignedUserId?: string
+  ): Promise<void> {
+    try {
+      const recipients = new Set<string>();
+      if (assignedUserId && assignedUserId !== actorUserId) {
+        recipients.add(assignedUserId);
+      } else {
+        const staffList = await usersRepository.getSupportStaffUsers();
+        for (const staff of staffList) {
+          if (staff.user_id && staff.user_id !== actorUserId) {
+            recipients.add(staff.user_id);
+          }
+        }
+      }
+
+      for (const recipientUserId of recipients) {
+        await notificationsService.notifyUser({
+          recipientUserId,
+          category,
+          preferenceGroup: 'support_ticket',
+          title,
+          message,
+        });
+      }
+    } catch {
+      // Best-effort notification dispatch
+    }
+  }
+
   private validateAttachment(attachment?: FeedbackAttachmentDTO): { filename: string; contentType: string; size: number; content: Buffer } | undefined {
     if (!attachment) return undefined;
 
@@ -132,6 +168,14 @@ export class FeedbackService {
       report.delivery_status = 'saved_locally';
     }
 
+    // Notify support staff of new ticket submission
+    void this.notifySupportStaff(
+      userId,
+      'support.submitted',
+      'New Support Ticket Submitted',
+      `[${report.reference_id}] ${dto.report_type.toUpperCase()}: ${dto.subject.trim()}`
+    );
+
     return report;
   }
 
@@ -218,6 +262,35 @@ export class FeedbackService {
       }
     }
 
+    // Notification dispatches
+    if (isInternal) {
+      void this.notifySupportStaff(
+        userId,
+        'support.internal_note',
+        'Internal Support Note Added',
+        `[${referenceId}] Internal staff note added to ticket`,
+        report.assigned_to
+      );
+    } else if (isAdmin) {
+      if (report.user_id && report.user_id !== userId) {
+        void notificationsService.notifyUser({
+          recipientUserId: report.user_id,
+          category: 'support.reply',
+          preferenceGroup: 'support_ticket',
+          title: 'New Reply from Support',
+          message: `Support staff replied to your ticket [${referenceId}]`,
+        });
+      }
+    } else {
+      void this.notifySupportStaff(
+        userId,
+        'support.user_reply',
+        'User Replied to Ticket',
+        `[${referenceId}] User replied to support ticket`,
+        report.assigned_to
+      );
+    }
+
     return message;
   }
 
@@ -281,6 +354,57 @@ export class FeedbackService {
       throw new BadRequestError('Failed to update ticket status');
     }
 
+    // Status change notification dispatches
+    if (newStatus === 'in_progress') {
+      if (report.user_id && report.user_id !== userId) {
+        void notificationsService.notifyUser({
+          recipientUserId: report.user_id,
+          category: 'support.status_changed',
+          preferenceGroup: 'support_ticket',
+          title: 'Support Ticket In Progress',
+          message: `Your ticket [${referenceId}] is now in progress`,
+        });
+      }
+    } else if (newStatus === 'waiting_for_user') {
+      if (report.user_id && report.user_id !== userId) {
+        void notificationsService.notifyUser({
+          recipientUserId: report.user_id,
+          category: 'support.status_changed',
+          preferenceGroup: 'support_ticket',
+          title: 'Action Needed on Support Ticket',
+          message: `Support staff is waiting for your response on ticket [${referenceId}]`,
+        });
+      }
+    } else if (newStatus === 'resolved') {
+      if (report.user_id && report.user_id !== userId) {
+        void notificationsService.notifyUser({
+          recipientUserId: report.user_id,
+          category: 'support.resolved',
+          preferenceGroup: 'support_ticket',
+          title: 'Support Ticket Resolved',
+          message: `Your support ticket [${referenceId}] has been resolved`,
+        });
+      }
+    } else if (newStatus === 'reopened') {
+      void this.notifySupportStaff(
+        userId,
+        'support.reopened',
+        'Support Ticket Reopened',
+        `[${referenceId}] User reopened support ticket`,
+        report.assigned_to
+      );
+    } else if (newStatus === 'closed') {
+      if (report.user_id && report.user_id !== userId) {
+        void notificationsService.notifyUser({
+          recipientUserId: report.user_id,
+          category: 'support.closed',
+          preferenceGroup: 'support_ticket',
+          title: 'Support Ticket Closed',
+          message: `Your support ticket [${referenceId}] has been closed`,
+        });
+      }
+    }
+
     return updated;
   }
 
@@ -293,9 +417,32 @@ export class FeedbackService {
       throw new BadRequestError('Assigned user ID is required');
     }
 
+    const report = await feedbackRepository.getFeedbackByReferenceId(referenceId, userId, true);
+    const previousAssignedTo = report?.assigned_to;
+
     const updated = await feedbackRepository.assignTicket(referenceId, userId, assignedToId);
     if (!updated) {
       throw new NotFoundError('Ticket not found or assignment failed');
+    }
+
+    if (assignedToId && assignedToId !== userId) {
+      void notificationsService.notifyUser({
+        recipientUserId: assignedToId,
+        category: 'support.assigned',
+        preferenceGroup: 'support_ticket',
+        title: 'Support Ticket Assigned',
+        message: `You have been assigned to support ticket [${referenceId}]`,
+      });
+    }
+
+    if (previousAssignedTo && previousAssignedTo !== assignedToId && previousAssignedTo !== userId) {
+      void notificationsService.notifyUser({
+        recipientUserId: previousAssignedTo,
+        category: 'support.reassigned',
+        preferenceGroup: 'support_ticket',
+        title: 'Support Ticket Reassigned',
+        message: `Support ticket [${referenceId}] has been reassigned to another staff member`,
+      });
     }
 
     return updated;

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import * as api from '../services/api';
 import TicketDetailDrawer from '../components/TicketDetailDrawer';
 
@@ -21,6 +22,9 @@ export interface AdminTicketRecord {
 }
 
 export default function SupportAdminQueue() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const ticketParam = searchParams.get('ticket');
+
   const [tickets, setTickets] = useState<AdminTicketRecord[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -30,7 +34,27 @@ export default function SupportAdminQueue() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [severityFilter, setSeverityFilter] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedRefId, setSelectedRefId] = useState<string | null>(null);
+  const [selectedRefId, setSelectedRefId] = useState<string | null>(ticketParam);
+
+  useEffect(() => {
+    if (ticketParam) {
+      setSelectedRefId(ticketParam);
+    }
+  }, [ticketParam]);
+
+  const handleOpenTicket = (refId: string) => {
+    setSelectedRefId(refId);
+    setSearchParams({ ticket: refId }, { replace: true });
+  };
+
+  const handleCloseDrawer = () => {
+    setSelectedRefId(null);
+    if (searchParams.has('ticket')) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete('ticket');
+      setSearchParams(nextParams, { replace: true });
+    }
+  };
 
   const fetchAdminTickets = async () => {
     setLoading(true);
@@ -45,7 +69,7 @@ export default function SupportAdminQueue() {
       if (res.data?.data) {
         setTickets(res.data.data);
         setTotalCount(res.data.total || res.data.data.length);
-        if (!selectedRefId && res.data.data.length > 0) {
+        if (!ticketParam && !selectedRefId && res.data.data.length > 0) {
           setSelectedRefId(res.data.data[0].reference_id);
         }
       }
@@ -253,7 +277,7 @@ export default function SupportAdminQueue() {
             {tickets.map((ticket) => (
               <div
                 key={ticket.reference_id}
-                onClick={() => setSelectedRefId(ticket.reference_id)}
+                onClick={() => handleOpenTicket(ticket.reference_id)}
                 className={`p-4 rounded-xl border transition-all cursor-pointer space-y-2.5 ${
                   selectedRefId === ticket.reference_id
                     ? 'bg-blue-50/70 border-blue-500 shadow-sm'
@@ -331,7 +355,7 @@ export default function SupportAdminQueue() {
       <TicketDetailDrawer
         referenceId={selectedRefId}
         isOpen={!!selectedRefId}
-        onClose={() => setSelectedRefId(null)}
+        onClose={handleCloseDrawer}
         isAdmin={true}
         onUpdated={fetchAdminTickets}
       />

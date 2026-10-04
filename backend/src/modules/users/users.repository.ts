@@ -53,6 +53,10 @@ export class UsersRepository {
     return query('SELECT * FROM users WHERE user_id = ANY($1)', [userIds]);
   }
 
+  async getSupportStaffUsers() {
+    return query("SELECT user_id, email, full_name, role FROM users WHERE role IN ('admin', 'leader')", []);
+  }
+
   // Milestone 41: previously returned every user in the entire database --
   // no WHERE clause of any kind -- to any authenticated caller regardless
   // of team membership, unlike every other collection endpoint in the app

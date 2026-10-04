@@ -44,6 +44,11 @@ export class NotificationsService {
   // the business event.
   async notifyUser(params: NotifyParams): Promise<void> {
     try {
+      const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+      if (!uuidRegex.test(params.recipientUserId)) {
+        return;
+      }
+
       const user = await usersRepository.getUserById(params.recipientUserId);
       if (!user) return;
 
