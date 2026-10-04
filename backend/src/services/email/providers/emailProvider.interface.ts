@@ -4,19 +4,19 @@
 // interface; emailService.ts only ever talks to it through
 // emailProviderFactory.ts, never to a concrete class.
 
+export interface EmailAttachment {
+  filename: string;
+  content: Buffer | string;
+  contentType?: string;
+}
+
 export interface EmailMessage {
   to: string;
   subject: string;
   body: string;
   html?: string;
-  // Whatever a real provider (SendGrid, SES, ...) would need to render or
-  // send the actual message later -- may contain sensitive values like a
-  // verification/reset URL. Providers decide for themselves what's safe
-  // to log; see consoleEmailProvider.ts for why it never logs this.
+  attachments?: EmailAttachment[];
   templateData?: Record<string, unknown>;
-  // Caller-supplied, already-safe-to-log fields (event name, recipient
-  // name, team name, etc.) -- never a token or a URL containing one.
-  // Providers may log this freely.
   metadata?: Record<string, unknown>;
 }
 

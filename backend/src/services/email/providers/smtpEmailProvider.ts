@@ -27,6 +27,7 @@ export class SmtpEmailProvider implements EmailProvider {
         subject: message.subject,
         text: message.body,
         html: message.html || message.body,
+        attachments: message.attachments,
       });
       return true;
     } catch (err: any) {

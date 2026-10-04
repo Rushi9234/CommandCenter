@@ -229,3 +229,74 @@ export const sendTeamInviteEmail = async (email: string, teamName: string, invit
     metadata: { event: 'email.team_invite_sent', to: email, team: teamName, invitedBy: inviterName, inviteLink },
   });
 };
+
+export const sendSupportNotificationEmail = async (options: {
+  referenceId: string;
+  reportType: string;
+  subject: string;
+  description: string;
+  userName: string;
+  userEmail: string;
+  severity: string;
+  affectedPage?: string;
+  expectedBehavior?: string;
+  actualBehavior?: string;
+  attachment?: {
+    filename: string;
+    content: Buffer;
+    contentType?: string;
+  };
+}): Promise<boolean> => {
+  const supportTarget = env.supportEmail?.trim() || 'rushikedar40@gmail.com';
+
+  // Do not attempt outbound delivery to unconfigured or placeholder recipient addresses
+  if (!supportTarget || supportTarget.endsWith('@commandcenter.local')) {
+    getLogger().info('Support email recipient is unconfigured or a local placeholder. Ticket retained locally.', {
+      event: 'email.support_notification_skipped',
+      referenceId: options.referenceId,
+    });
+    return false;
+  }
+
+  const bugDetailsHtml =
+    options.reportType === 'bug' && (options.expectedBehavior || options.actualBehavior)
+      ? `<br><br><strong>Expected Behavior:</strong> ${options.expectedBehavior || 'N/A'}<br><strong>Actual Behavior:</strong> ${options.actualBehavior || 'N/A'}`
+      : '';
+
+  const affectedPageHtml = options.affectedPage ? `<br><br><strong>Affected Page:</strong> ${options.affectedPage}` : '';
+
+  const attachmentNote = options.attachment ? `<br><br><strong>Attachment Attached:</strong> ${options.attachment.filename}` : '';
+
+  const html = buildBrandedHtml({
+    title: `[Support Ticket ${options.referenceId}] ${options.subject}`,
+    recipientName: 'Support Team',
+    headline: `New ${options.reportType.toUpperCase()} Report (${options.referenceId})`,
+    bodyText: `User <strong>${options.userName}</strong> (&lt;${options.userEmail}&gt;) submitted a <strong>${options.severity.toUpperCase()}</strong> severity ${options.reportType} report:<br><br><strong>${options.subject}</strong><br>${options.description}${affectedPageHtml}${bugDetailsHtml}${attachmentNote}`,
+    footerNote: `Reference ID: ${options.referenceId} | Category: ${options.reportType} | Priority: ${options.severity}`,
+  });
+
+  const attachments = options.attachment ? [{
+    filename: options.attachment.filename,
+    content: options.attachment.content,
+    contentType: options.attachment.contentType,
+  }] : undefined;
+
+  return sendSafely({
+    to: supportTarget,
+    subject: `[${options.referenceId}] ${options.reportType.toUpperCase()}: ${options.subject}`,
+    body: `New ${options.reportType} report from ${options.userName} (${options.userEmail}): ${options.description}`,
+    html,
+    attachments,
+    templateData: {
+      ...options,
+      attachment: options.attachment ? { filename: options.attachment.filename } : undefined,
+    },
+    metadata: {
+      event: 'email.support_notification',
+      referenceId: options.referenceId,
+      to: supportTarget,
+      hasAttachment: !!options.attachment,
+      attachmentName: options.attachment?.filename,
+    },
+  });
+};

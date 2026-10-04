@@ -125,7 +125,7 @@ export const authenticate = asyncHandler<AuthRequest>(async (req: AuthRequest, r
     return res.status(401).json({ error: 'Invalid token' });
   }
 
-  req.user = { userId: decoded.userId, role: decoded.role };
+  req.user = { userId: decoded.userId, role: invalidationFields?.role || decoded.role };
   req.authViaCookie = viaCookie;
 
   if (viaCookie && UNSAFE_METHODS.includes(req.method) && !csrfTokenMatches(req)) {

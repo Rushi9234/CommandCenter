@@ -8,17 +8,43 @@ export interface HelpChunk {
   sourceFile: string;
 }
 
+export interface HelpDoc {
+  id: string;
+  slug: string;
+  title: string;
+  category: string;
+  content: string;
+  sourceFile: string;
+  summary: string;
+}
+
 let cachedHelpChunks: HelpChunk[] | null = null;
+let cachedHelpDocs: HelpDoc[] | null = null;
+
+const getHelpDir = (): string | null => {
+  const candidates = [
+    path.join(process.cwd(), 'backend', 'data', 'help'),
+    path.join(process.cwd(), 'data', 'help'),
+    path.join(__dirname, '..', '..', '..', '..', 'data', 'help'),
+    path.join(__dirname, '..', '..', '..', '..', 'backend', 'data', 'help'),
+  ];
+  for (const cand of candidates) {
+    if (fs.existsSync(cand)) {
+      return cand;
+    }
+  }
+  return null;
+};
 
 const loadAndChunkHelpDocs = (): HelpChunk[] => {
   if (cachedHelpChunks) {
     return cachedHelpChunks;
   }
 
-  const helpDir = path.join(process.cwd(), 'data', 'help');
+  const helpDir = getHelpDir();
   const chunks: HelpChunk[] = [];
 
-  if (!fs.existsSync(helpDir)) {
+  if (!helpDir) {
     return [];
   }
 
@@ -47,7 +73,46 @@ const loadAndChunkHelpDocs = (): HelpChunk[] => {
   return chunks;
 };
 
-export const searchHelpCenterDocs = (queryStr: string, limit: number = 3): HelpChunk[] => {
+export const getHelpDocsList = (): HelpDoc[] => {
+  if (cachedHelpDocs) {
+    return cachedHelpDocs;
+  }
+
+  const helpDir = getHelpDir();
+  if (!helpDir) return [];
+
+  const files = fs.readdirSync(helpDir).filter((f) => f.endsWith('.md'));
+  const docs: HelpDoc[] = [];
+
+  for (const file of files) {
+    const filePath = path.join(helpDir, file);
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const lines = content.split('\n');
+    const docTitle = lines[0]?.replace(/^#\s*/, '').trim() || file;
+    const slug = file.replace(/\.md$/, '');
+
+    const summaryLine = lines.find((l) => l.trim().length > 0 && !l.startsWith('#')) || '';
+
+    let category = 'General';
+    if (file.includes('task')) category = 'Work & Tasks';
+    if (file.includes('team')) category = 'Teams & Roles';
+
+    docs.push({
+      id: slug,
+      slug,
+      title: docTitle,
+      category,
+      content,
+      sourceFile: file,
+      summary: summaryLine.trim(),
+    });
+  }
+
+  cachedHelpDocs = docs;
+  return docs;
+};
+
+export const searchHelpCenterDocs = (queryStr: string, limit: number = 5): HelpChunk[] => {
   const chunks = loadAndChunkHelpDocs();
   if (!queryStr || queryStr.trim().length === 0) {
     return chunks.slice(0, limit);

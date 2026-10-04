@@ -67,6 +67,9 @@ export class AuthService {
     const otpHash = hashToken(rawOtp);
     const otpExpires = new Date(Date.now() + OTP_TTL_MS);
 
+    const isDesignatedAdmin = email.trim().toLowerCase() === env.adminEmail;
+    const role = isDesignatedAdmin ? 'admin' : 'member';
+
     let user: any;
     if (existingByEmail && !existingByEmail.is_verified) {
       // Unverified account recovery: update existing unverified user row atomically
@@ -78,7 +81,8 @@ export class AuthService {
         verificationTokenHash,
         verificationExpires,
         otpHash,
-        otpExpires
+        otpExpires,
+        role
       );
     } else {
       // Fresh user registration: atomic INSERT with initial OTP columns
@@ -90,7 +94,8 @@ export class AuthService {
         verificationTokenHash,
         verificationExpires,
         otpHash,
-        otpExpires
+        otpExpires,
+        role
       );
     }
 

@@ -24,7 +24,18 @@ export const connectRealtime = async (req: AuthRequest, res: Response) => {
     if (!res.writableEnded) res.write(': heartbeat\n\n');
   }, 25000);
 
+  // Serverless execution timeout safety: close stream gracefully after 45s on Vercel
+  // EventSource in browser auto-reconnects seamlessly without client error
+  const maxLifetimeMs = process.env.VERCEL ? 45000 : 240000;
+  const maxLifetimeTimer = setTimeout(() => {
+    if (!res.writableEnded) {
+      res.write(': reconnect\n\n');
+      res.end();
+    }
+  }, maxLifetimeMs);
+
   const cleanup = () => {
+    clearTimeout(maxLifetimeTimer);
     clearInterval(heartbeat);
     unsubscribe();
   };

@@ -75,6 +75,19 @@ export const errorHandler = (err: any, req: Request, res: Response, _next: NextF
     return res.status(400).json({ error: 'Invalid JSON request body' });
   }
 
+  // Handle PayloadTooLargeError from express.json() cleanly as 413 Payload Too Large
+  if (err?.type === 'entity.too.large' || err?.status === 413 || err?.name === 'PayloadTooLargeError') {
+    logger.error('Request error', {
+      event: 'request.error',
+      requestId: req.requestId,
+      method: req.method,
+      path: req.path,
+      errorType: 'PayloadTooLargeError',
+      statusCode: 413,
+    });
+    return res.status(413).json({ error: 'Attachment file size exceeds maximum limit of 5 MB' });
+  }
+
   // Handle CORS rejection as 403 Forbidden instead of 500
   if (err?.message === 'Not allowed by CORS') {
     logger.error('Request error', {

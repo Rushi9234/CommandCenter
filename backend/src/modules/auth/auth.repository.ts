@@ -54,22 +54,24 @@ export class AuthRepository {
     verificationTokenHash: string | null,
     verificationTokenExpires: Date | null,
     otpHash: string | null,
-    otpExpires: Date | null
+    otpExpires: Date | null,
+    role: string = 'member'
   ) {
     return withTransaction(async (client) => {
       const res = await client.query(
         `INSERT INTO users (
-          email, username, full_name, password_hash, is_verified,
+          email, username, full_name, password_hash, role, is_verified,
           verification_token, verification_token_expires,
           email_otp_hash, email_otp_expires, email_otp_attempts
         )
-        VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8, 0)
+        VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8, $9, 0)
         RETURNING *`,
         [
           email,
           username,
           fullName,
           passwordHash,
+          role,
           verificationTokenHash,
           verificationTokenExpires,
           otpHash,
@@ -88,7 +90,8 @@ export class AuthRepository {
     verificationTokenHash: string | null,
     verificationTokenExpires: Date | null,
     otpHash: string | null,
-    otpExpires: Date | null
+    otpExpires: Date | null,
+    role: string = 'member'
   ) {
     return withTransaction(async (client) => {
       const res = await client.query(
@@ -96,10 +99,11 @@ export class AuthRepository {
          SET username = $2,
              full_name = $3,
              password_hash = $4,
-             verification_token = $5,
-             verification_token_expires = $6,
-             email_otp_hash = $7,
-             email_otp_expires = $8,
+             role = $5,
+             verification_token = $6,
+             verification_token_expires = $7,
+             email_otp_hash = $8,
+             email_otp_expires = $9,
              email_otp_attempts = 0,
              updated_at = CURRENT_TIMESTAMP
          WHERE user_id = $1 AND is_verified = false
@@ -109,6 +113,7 @@ export class AuthRepository {
           username,
           fullName,
           passwordHash,
+          role,
           verificationTokenHash,
           verificationTokenExpires,
           otpHash,
@@ -151,16 +156,17 @@ export class AuthRepository {
     username: string,
     fullName: string,
     provider: 'google' | 'microsoft',
-    providerId: string
+    providerId: string,
+    role: string = 'member'
   ) {
     const googleId = provider === 'google' ? providerId : null;
     const microsoftId = provider === 'microsoft' ? providerId : null;
     const text = `
-      INSERT INTO users (email, username, full_name, password_hash, is_verified, auth_provider, google_id, microsoft_id)
-      VALUES ($1, $2, $3, NULL, true, $4, $5, $6)
+      INSERT INTO users (email, username, full_name, password_hash, role, is_verified, auth_provider, google_id, microsoft_id)
+      VALUES ($1, $2, $3, NULL, $4, true, $5, $6, $7)
       RETURNING *
     `;
-    return queryOne<any>(text, [email, username, fullName, provider, googleId, microsoftId]);
+    return queryOne<any>(text, [email, username, fullName, role, provider, googleId, microsoftId]);
   }
 
   // Same allowlisted-update pattern introduced in Milestone 3 -- a client
@@ -209,9 +215,9 @@ export class AuthRepository {
   // rather than fetching the whole user row. Combined into one query
   // (rather than a second getEmailChangedAt-style method) so email-change
   // invalidation doesn't double this already-hot-path query.
-  async getSessionInvalidationFields(userId: string): Promise<{ password_changed_at: Date | null; email_changed_at: Date | null } | null> {
-    return queryOne<{ password_changed_at: Date | null; email_changed_at: Date | null }>(
-      'SELECT password_changed_at, email_changed_at FROM users WHERE user_id = $1',
+  async getSessionInvalidationFields(userId: string): Promise<{ password_changed_at: Date | null; email_changed_at: Date | null; role: string | null } | null> {
+    return queryOne<{ password_changed_at: Date | null; email_changed_at: Date | null; role: string | null }>(
+      'SELECT password_changed_at, email_changed_at, role FROM users WHERE user_id = $1',
       [userId]
     );
   }

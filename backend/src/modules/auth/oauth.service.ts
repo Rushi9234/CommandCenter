@@ -368,6 +368,10 @@ export class OAuthService {
         updates.auth_provider = provider;
       }
 
+      if (email.trim().toLowerCase() === env.adminEmail) {
+        updates.role = 'admin';
+      }
+
       const updatedUser = await authRepository.updateUser(existingByEmail.user_id, updates);
 
       getLogger().info('OAuth account linking success', {
@@ -397,12 +401,16 @@ export class OAuthService {
       }
     }
 
+    const isDesignatedAdmin = email.trim().toLowerCase() === env.adminEmail;
+    const role = isDesignatedAdmin ? 'admin' : 'member';
+
     const newUser = await authRepository.createOAuthUser(
       email,
       username,
       name,
       provider,
-      providerId
+      providerId,
+      role
     );
 
     getLogger().info('OAuth new user registered', {

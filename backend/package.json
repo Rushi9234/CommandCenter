@@ -6,11 +6,13 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
+    "vercel-build": "tsc",
     "start": "node dist/server.js",
     "migrate:create": "node-pg-migrate create --migration-file-language sql --",
     "migrate:up": "node-pg-migrate up",
     "migrate:down": "node-pg-migrate down",
     "cleanup:refresh-tokens": "ts-node --transpile-only src/jobs/cleanupRefreshTokens.ts",
+    "promote:admin": "ts-node --transpile-only scripts/promoteAdmin.ts",
     "test": "jest --runInBand --forceExit",
     "test:watch": "jest --runInBand --watch"
   },

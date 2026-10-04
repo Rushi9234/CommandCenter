@@ -40,6 +40,8 @@ export const env = {
   // only the factory does.
   emailProvider: process.env.EMAIL_PROVIDER || 'console',
   emailFrom: process.env.EMAIL_FROM || 'CommandCenter <commandcenter@gmail.com>',
+  supportEmail: process.env.SUPPORT_EMAIL || process.env.ADMIN_EMAIL || 'rushikedar40@gmail.com',
+  adminEmail: (process.env.ADMIN_EMAIL || process.env.SUPPORT_EMAIL || 'rushikedar40@gmail.com').toLowerCase(),
   // Phone verification (Profile Phase 4): which SmsProvider implementation
   // smsProviderFactory.ts's getSmsProvider() selects. 'console' (the free
   // default) if unset -- matching emailProvider's exact precedent, this

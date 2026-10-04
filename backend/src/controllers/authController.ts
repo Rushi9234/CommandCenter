@@ -1,5 +1,7 @@
 import { Request, Response } from 'express';
+import { AuthRequest } from '../middleware/auth';
 import { authService } from '../modules/auth/auth.service';
+import { usersRepository } from '../modules/users/users.repository';
 import { ACCESS_TOKEN_TTL_SECONDS } from '../modules/auth/jwt';
 import { setSessionCookies, clearSessionCookies } from '../common/middleware/auth-cookies';
 import { csrfTokenMatches } from '../common/security/csrf';
@@ -191,5 +193,25 @@ export const verifyEmailChange = async (req: Request, res: Response) => {
     // Same gated pattern as verifyEmail/resetPassword above -- only a
     // known (status-carrying) error's own message is safe to show.
     res.status(error.status || 400).json({ error: error.status ? error.message : 'Verification failed' });
+  }
+};
+
+export const getMe = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const user = await usersRepository.getUserById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const { password_hash, verification_token, password_reset_token_hash, ...safeUser } = user;
+    res.json({
+      success: true,
+      data: safeUser,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to fetch current user profile' });
   }
 };
