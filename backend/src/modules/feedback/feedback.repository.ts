@@ -457,13 +457,17 @@ export class FeedbackRepository {
       created_at: now,
     };
 
+    let client;
     try {
-      const query = `
+      client = await pgPool.connect();
+      await client.query('BEGIN');
+
+      const msgQuery = `
         INSERT INTO feedback_messages (message_id, reference_id, sender_id, sender_type, message, is_internal, created_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING *
       `;
-      const res = await pgPool.query(query, [
+      const res = await client.query(msgQuery, [
         message_id,
         referenceId,
         senderId,
@@ -475,30 +479,34 @@ export class FeedbackRepository {
       const insertedMsg = res.rows[0] as FeedbackMessage;
 
       if (attachmentPayload) {
-        try {
-          const attQuery = `
-            INSERT INTO feedback_attachments (attachment_id, reference_id, message_id, filename, mime_type, file_size, file_data, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-          `;
-          await pgPool.query(attQuery, [
-            this.generateUuid(),
-            referenceId,
-            message_id,
-            attachmentPayload.filename,
-            attachmentPayload.contentType,
-            attachmentPayload.size,
-            attachmentPayload.content,
-            now,
-          ]);
-        } catch (attErr: any) {
-          if (process.env.NODE_ENV !== 'test') {
-            throw new ServiceUnavailableError(attErr?.message || 'Failed to save message attachment data');
-          }
-        }
+        const attQuery = `
+          INSERT INTO feedback_attachments (attachment_id, reference_id, message_id, filename, mime_type, file_size, file_data, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `;
+        await client.query(attQuery, [
+          this.generateUuid(),
+          referenceId,
+          message_id,
+          attachmentPayload.filename,
+          attachmentPayload.contentType,
+          attachmentPayload.size,
+          attachmentPayload.content,
+          now,
+        ]);
       }
 
+      await client.query('COMMIT');
+      client.release();
       return insertedMsg;
     } catch (err: any) {
+      if (client) {
+        try {
+          await client.query('ROLLBACK');
+          client.release();
+        } catch {
+          // ignore rollback error
+        }
+      }
       if (process.env.NODE_ENV !== 'test') {
         throw new ServiceUnavailableError(
           err?.code === '42P01'

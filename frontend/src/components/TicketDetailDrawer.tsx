@@ -440,6 +440,7 @@ export default function TicketDetailDrawer({
                         {ticket.messages.map((msg: any) => {
                           const isSupport = msg.sender_type === 'support';
                           const isInternal = msg.is_internal;
+                          const msgAttachments = ticket.attachments?.filter((a: any) => a.message_id === msg.message_id) || [];
 
                           return (
                             <div
@@ -468,6 +469,30 @@ export default function TicketDetailDrawer({
                                   <span>{new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                                 </div>
                                 <p className="leading-relaxed whitespace-pre-wrap">{msg.message}</p>
+                                {msgAttachments.length > 0 && (
+                                  <div className="mt-2 pt-2 border-t border-slate-200/40 space-y-1">
+                                    {msgAttachments.map((att: any) => (
+                                      <div
+                                        key={att.attachment_id}
+                                        className={`flex items-center justify-between gap-2 p-2 rounded-lg text-[11px] ${
+                                          isSupport || isInternal ? 'bg-slate-100 text-slate-800' : 'bg-blue-700 text-white'
+                                        }`}
+                                      >
+                                        <span className="truncate font-semibold font-mono">📎 {att.filename}</span>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDownloadAttachment(att.attachment_id, att.filename, att.mime_type)}
+                                          disabled={downloadingId === att.attachment_id}
+                                          className={`font-bold underline text-[10px] whitespace-nowrap ${
+                                            isSupport || isInternal ? 'text-blue-700 hover:text-blue-900' : 'text-blue-100 hover:text-white'
+                                          }`}
+                                        >
+                                          {downloadingId === att.attachment_id ? 'Downloading...' : 'Download'}
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
                               </div>
                             </div>
                           );
