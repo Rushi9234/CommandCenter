@@ -14,7 +14,7 @@
     "axios": "^1.6.7",
     "framer-motion": "^11.0.5",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0",
+    "react-dom": "^19.2.8",
     "react-router-dom": "^6.22.0"
   },
   "devDependencies": {
@@ -22,7 +22,7 @@
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.3",
     "@types/react": "^18.2.55",
-    "@types/react-dom": "^18.2.19",
+    "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^4.2.1",
     "autoprefixer": "^10.4.17",
     "jsdom": "^29.1.1",
