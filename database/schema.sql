@@ -587,3 +587,14 @@ CREATE TABLE IF NOT EXISTS feedback_audit_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_feedback_audit_ref ON feedback_audit_logs(reference_id, created_at DESC);
+
+-- Migration 1794000000000: Persistent user avatars storage
+CREATE TABLE IF NOT EXISTS user_avatars (
+    user_id UUID PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+    mime_type VARCHAR(64) NOT NULL,
+    file_size INTEGER NOT NULL,
+    image_data BYTEA NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_avatars_updated ON user_avatars(updated_at DESC);

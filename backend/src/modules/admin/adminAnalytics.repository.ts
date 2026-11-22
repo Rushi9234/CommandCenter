@@ -212,6 +212,7 @@ export class AdminAnalyticsRepository {
       completedTasksRes,
       pendingTasksRes,
       inProgressTasksRes,
+      reviewTasksRes,
       overdueTasksRes,
       teams_created,
       classes_created,
@@ -236,6 +237,7 @@ export class AdminAnalyticsRepository {
       this.safeQuery("SELECT COUNT(*) FROM tasks WHERE status IN ('done', 'completed')", [], [{ count: '0' }]),
       this.safeQuery("SELECT COUNT(*) FROM tasks WHERE status = 'todo'", [], [{ count: '0' }]),
       this.safeQuery("SELECT COUNT(*) FROM tasks WHERE status IN ('in_progress', 'review', 'submitted_for_review')", [], [{ count: '0' }]),
+      this.safeQuery("SELECT COUNT(*) FROM tasks WHERE status IN ('review', 'submitted_for_review')", [], [{ count: '0' }]),
       this.safeQuery(`
         SELECT COUNT(*) FROM tasks t
         LEFT JOIN projects p ON t.project_id = p.project_id
@@ -299,7 +301,7 @@ export class AdminAnalyticsRepository {
         task_statuses: {
           done: kpis.completed_tasks,
           in_progress: kpis.in_progress_tasks,
-          review: 11,
+          review: parseInt(reviewTasksRes[0]?.count || '0', 10),
           todo: kpis.pending_tasks,
         },
       },

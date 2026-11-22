@@ -64,6 +64,9 @@ router.get('/', authenticate, asyncHandler(usersController.getAllUsers));
 // GET /api/users/me — get the authenticated user's own profile
 router.get('/me', authenticate, asyncHandler(usersController.getOwnProfile));
 
+// GET /api/users/:userId/avatar — serve user's avatar image
+router.get('/:userId/avatar', asyncHandler(usersController.getAvatarImage));
+
 // PUT /api/users/me/profile — update the authenticated user's profile
 router.put('/me/profile', authenticate, validate(updateProfileSchema), asyncHandler(usersController.updateProfile));
 

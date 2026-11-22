@@ -1,10 +1,11 @@
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import { AuthRequest } from '../../middleware/auth';
 import { ok } from '../../common/http/respond';
 import { usersService } from './users.service';
 import { notificationsService } from '../notifications/notifications.service';
 import { avatarService } from '../avatars/avatars.service';
 import { BadRequestError } from '../../common/errors';
+import { queryOne } from '../../db/client';
 
 export const getAllUsers = async (req: AuthRequest, res: Response) => {
   const users = await usersService.getAllUsers(req.user!.userId);
@@ -139,4 +140,18 @@ export const deleteAvatar = async (req: AuthRequest, res: Response) => {
   const userId = req.user!.userId;
   await avatarService.deleteAvatar(userId);
   res.status(204).send();
+};
+
+export const getAvatarImage = async (req: Request, res: Response) => {
+  const { userId } = req.params;
+  const row = await queryOne<{ mime_type: string; image_data: Buffer }>(
+    'SELECT mime_type, image_data FROM user_avatars WHERE user_id = $1',
+    [userId]
+  );
+  if (!row || !row.image_data) {
+    return res.status(404).json({ error: 'Avatar not found' });
+  }
+  res.setHeader('Content-Type', row.mime_type || 'image/jpeg');
+  res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+  return res.send(row.image_data);
 };
