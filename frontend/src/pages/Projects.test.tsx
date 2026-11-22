@@ -261,8 +261,8 @@ describe('Projects — project CRUD', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create Project' }));
 
     await waitFor(() => expect(api.createProject).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText('Create New Project')).not.toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'Solo Project' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Create New Project')).not.toBeInTheDocument());
   });
 
   it('prevents a duplicate project-create submission while the first is still in flight', async () => {
