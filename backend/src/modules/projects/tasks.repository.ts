@@ -71,7 +71,14 @@ export class TasksRepository {
   }
 
   async updateTask(taskId: string, updates: Record<string, any>) {
-    const built = buildSetClause(TASK_UPDATABLE_COLUMNS, updates, 2);
+    const toUpdate = { ...updates };
+    if (toUpdate.contributors !== undefined) {
+      toUpdate.contributors = JSON.stringify(Array.isArray(toUpdate.contributors) ? toUpdate.contributors : []);
+    }
+    if (toUpdate.dependencies !== undefined) {
+      toUpdate.dependencies = JSON.stringify(Array.isArray(toUpdate.dependencies) ? toUpdate.dependencies : []);
+    }
+    const built = buildSetClause(TASK_UPDATABLE_COLUMNS, toUpdate, 2);
     if (!built) {
       return this.getTask(taskId);
     }
@@ -150,7 +157,7 @@ export class TasksRepository {
     const text = `
       SELECT t.* FROM tasks t
       INNER JOIN projects p ON t.project_id = p.project_id
-      WHERE t.created_by = $1 OR p.team_id IN (
+      WHERE t.created_by = $1 OR t.owner = $1 OR p.team_id IN (
         SELECT team_id FROM team_members WHERE user_id = $1
       )
       ORDER BY t.created_at DESC

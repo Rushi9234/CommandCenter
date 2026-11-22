@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -29,21 +29,9 @@ import HelpCenter from './pages/HelpCenter';
 import MyFeedback from './pages/MyFeedback';
 import SupportAdminQueue from './pages/SupportAdminQueue';
 import AdminDashboard from './pages/AdminDashboard';
+import { ToastProvider } from './hooks/useToast';
+import { ToastContainer } from './components/common/ToastContainer';
 
-function RedirectClass() {
-  const { classId } = useParams();
-  return <Navigate to={`/analytics/classes/${classId}`} replace />;
-}
-
-function RedirectClassTeam() {
-  const { classId, teamId } = useParams();
-  return <Navigate to={`/analytics/classes/${classId}/teams/${teamId}`} replace />;
-}
-
-function RedirectClassTeamMember() {
-  const { classId, teamId, memberId } = useParams();
-  return <Navigate to={`/analytics/classes/${classId}/teams/${teamId}/members/${memberId}`} replace />;
-}
 
 export function ProtectedLayoutWithWalkthrough({ children }: { children: React.ReactNode }) {
   const { isOpen, onClose } = useQuickOverview();
@@ -168,11 +156,56 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
+      <Route
+        path="/overview/classes/:classId"
+        element={
+          <ProtectedRoute>
+            <Overview />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/overview/classes/:classId/teams/:teamId"
+        element={
+          <ProtectedRoute>
+            <Overview />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/overview/classes/:classId/teams/:teamId/members/:memberId"
+        element={
+          <ProtectedRoute>
+            <Overview />
+          </ProtectedRoute>
+        }
+      />
 
       <Route path="/classes" element={<Navigate to="/analytics" replace />} />
-      <Route path="/classes/:classId" element={<RedirectClass />} />
-      <Route path="/classes/:classId/teams/:teamId" element={<RedirectClassTeam />} />
-      <Route path="/classes/:classId/teams/:teamId/members/:memberId" element={<RedirectClassTeamMember />} />
+      <Route
+        path="/classes/:classId"
+        element={
+          <ProtectedRoute>
+            <Overview />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/classes/:classId/teams/:teamId"
+        element={
+          <ProtectedRoute>
+            <Overview />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/classes/:classId/teams/:teamId/members/:memberId"
+        element={
+          <ProtectedRoute>
+            <Overview />
+          </ProtectedRoute>
+        }
+      />
 
       <Route
         path="/projects"
@@ -262,6 +295,11 @@ function AppRoutes() {
             <SOSHub />
           </ProtectedRoute>
         }
+      />
+
+      <Route
+        path="/sos"
+        element={<Navigate to="/help" replace />}
       />
 
       <Route
@@ -391,7 +429,10 @@ export default function App() {
     <ErrorBoundary>
       <BrowserRouter>
         <AuthProvider>
-          <AppRoutes />
+          <ToastProvider>
+            <ToastContainer />
+            <AppRoutes />
+          </ToastProvider>
         </AuthProvider>
       </BrowserRouter>
     </ErrorBoundary>

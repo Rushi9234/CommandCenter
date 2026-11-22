@@ -53,5 +53,6 @@ export const updateBlockerSchema = z
     affected_tasks: z.array(z.string().uuid()).max(MAX_AFFECTED_TASKS_ARRAY_LENGTH),
     attempted_solutions: z.string().max(5000),
     status: z.enum(['open', 'resolved']),
+    resolution_notes: z.string().max(5000).optional(),
   })
   .partial();

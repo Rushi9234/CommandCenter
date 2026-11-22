@@ -21,7 +21,7 @@ export const SafeMarkdown: React.FC<SafeMarkdownProps> = ({ text, className = ''
         elements.push(
           <ul key={`ul-${keyPrefix}`} className="list-disc list-inside space-y-1 my-1.5 pl-1">
             {currentList.items.map((item, idx) => (
-              <li key={idx} className="text-slate-800 leading-relaxed font-normal">{item}</li>
+              <li key={idx} className="text-slate-800 dark:text-slate-200 leading-relaxed font-normal">{item}</li>
             ))}
           </ul>
         );
@@ -29,7 +29,7 @@ export const SafeMarkdown: React.FC<SafeMarkdownProps> = ({ text, className = ''
         elements.push(
           <ol key={`ol-${keyPrefix}`} className="list-decimal list-inside space-y-1 my-1.5 pl-1">
             {currentList.items.map((item, idx) => (
-              <li key={idx} className="text-slate-800 leading-relaxed font-normal">{item}</li>
+              <li key={idx} className="text-slate-800 dark:text-slate-200 leading-relaxed font-normal">{item}</li>
             ))}
           </ol>
         );
@@ -44,14 +44,14 @@ export const SafeMarkdown: React.FC<SafeMarkdownProps> = ({ text, className = ''
     return parts.map((part, idx) => {
       if ((part.startsWith('**') && part.endsWith('**')) || (part.startsWith('__') && part.endsWith('__'))) {
         return (
-          <strong key={idx} className="font-semibold text-slate-900">
+          <strong key={idx} className="font-semibold text-slate-900 dark:text-white">
             {part.slice(2, -2)}
           </strong>
         );
       }
       if (part.startsWith('`') && part.endsWith('`')) {
         return (
-          <code key={idx} className="bg-slate-100 px-1 py-0.5 rounded text-xs text-indigo-700 font-mono">
+          <code key={idx} className="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs text-indigo-700 dark:text-indigo-300 font-mono">
             {part.slice(1, -1)}
           </code>
         );
@@ -71,7 +71,7 @@ export const SafeMarkdown: React.FC<SafeMarkdownProps> = ({ text, className = ''
     if (trimmed.startsWith('# ')) {
       flushList(index);
       elements.push(
-        <h3 key={index} className="font-bold text-base text-slate-900 mt-2 mb-1 tracking-tight">
+        <h3 key={index} className="font-bold text-base text-slate-900 dark:text-white mt-2 mb-1 tracking-tight">
           {renderFormattedInline(trimmed.slice(2))}
         </h3>
       );
@@ -80,7 +80,7 @@ export const SafeMarkdown: React.FC<SafeMarkdownProps> = ({ text, className = ''
     if (trimmed.startsWith('## ')) {
       flushList(index);
       elements.push(
-        <h4 key={index} className="font-bold text-sm text-slate-900 mt-2 mb-1 tracking-tight">
+        <h4 key={index} className="font-bold text-sm text-slate-900 dark:text-white mt-2 mb-1 tracking-tight">
           {renderFormattedInline(trimmed.slice(3))}
         </h4>
       );
@@ -89,7 +89,7 @@ export const SafeMarkdown: React.FC<SafeMarkdownProps> = ({ text, className = ''
     if (trimmed.startsWith('### ')) {
       flushList(index);
       elements.push(
-        <h5 key={index} className="font-bold text-xs text-slate-900 mt-1.5 mb-1 tracking-tight">
+        <h5 key={index} className="font-bold text-xs text-slate-900 dark:text-white mt-1.5 mb-1 tracking-tight">
           {renderFormattedInline(trimmed.slice(4))}
         </h5>
       );

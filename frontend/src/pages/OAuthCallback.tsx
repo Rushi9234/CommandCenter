@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { mapAuthError } from '../utils/authErrorMapper';
@@ -9,27 +9,33 @@ export default function OAuthCallback() {
   const { handleOAuthCallback } = useAuth();
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
+  const processedRef = useRef(false);
 
   useEffect(() => {
     const processCallback = async () => {
+      if (processedRef.current) return;
+
       const code = searchParams.get('code');
       const state = searchParams.get('state');
       const providerError = searchParams.get('error') || searchParams.get('error_description');
 
       if (providerError) {
-        setError("Google sign-in couldn't be completed. Please try again.");
+        setError(`Google sign-in was cancelled or encountered an error (${providerError}). Please try again.`);
         return;
       }
 
       if (!code || !state || !provider) {
-        setError("Google sign-in couldn't be completed. Please try again.");
+        setError("Missing authorization parameters from Google. Please try again.");
         return;
       }
+
+      processedRef.current = true;
 
       try {
         await handleOAuthCallback(provider as 'google' | 'microsoft', code, state);
         navigate('/pulse');
       } catch (err: any) {
+        processedRef.current = false;
         const mapped = mapAuthError(err, "Google sign-in couldn't be completed. Please try again.");
         setError(mapped.message);
       }

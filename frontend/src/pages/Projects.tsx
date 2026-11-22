@@ -168,6 +168,7 @@ export default function Projects() {
   // card, and a failed save must not leave an unconfirmed edit visible.
   const [editingTask, setEditingTask] = useState<any>(null);
   const [editTaskDraft, setEditTaskDraft] = useState<typeof emptyTaskDraft & { status: string } | null>(null);
+  const [editTaskError, setEditTaskError] = useState<string | null>(null);
 
   // Stale-response/race-protection refs -- same version-token pattern
   // already proven in Teams.tsx/Goals.tsx/SOSHub.tsx, one per independent
@@ -694,6 +695,7 @@ export default function Projects() {
 
   const openEditTaskModal = (task: any) => {
     setEditingTask(task);
+    setEditTaskError(null);
     setEditTaskDraft({
       title: task.title,
       description: task.description || '',
@@ -711,6 +713,7 @@ export default function Projects() {
     if (!editingTask || !editTaskDraft || savingTaskEdit) return;
     const projectId = selectedProject?.project_id;
     setSavingTaskEdit(true);
+    setEditTaskError(null);
     try {
       // updateTaskSchema's owner/reviewer ARE .nullable() (unlike create)
       // -- an explicit null correctly clears a previous assignment,
@@ -734,7 +737,9 @@ export default function Projects() {
       // immediately, not a hand-reconstructed guess.
       await loadTasks(projectId);
     } catch (error: any) {
-      alert(error.response?.data?.error || 'Failed to update task');
+      const msg = error.response?.data?.error || 'Failed to update task';
+      setEditTaskError(msg);
+      alert(msg);
     } finally {
       setSavingTaskEdit(false);
     }
@@ -1932,6 +1937,14 @@ export default function Projects() {
               className="pro-card p-6 w-full max-w-md max-h-[90vh] overflow-auto"
             >
               <h2 className="text-xl font-bold text-gray-900 mb-4">Edit Task</h2>
+
+              {editTaskError && (
+                <div role="alert" className="p-3 mb-4 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg flex items-center justify-between">
+                  <span>⚠️ {editTaskError}</span>
+                  <button type="button" onClick={() => setEditTaskError(null)} className="text-red-500 hover:text-red-700 font-bold ml-2">✕</button>
+                </div>
+              )}
+
               <form onSubmit={handleSaveTaskEdit} className="space-y-4">
                 <div>
                   <label htmlFor="edit-task-title" className="block text-sm font-medium text-gray-700 mb-2">Task Title *</label>
@@ -1967,6 +1980,9 @@ export default function Projects() {
                       <option value="in_progress">In Progress</option>
                       <option value="review">Review</option>
                       <option value="done">Done</option>
+                      <option value="pending">Pending Approval</option>
+                      <option value="submitted_for_review">Submitted for Review</option>
+                      <option value="changes_requested">Changes Requested</option>
                     </select>
                   </div>
                   <div>
@@ -1993,7 +2009,7 @@ export default function Projects() {
                   <button
                     type="button"
                     disabled={savingTaskEdit}
-                    onClick={() => { setEditingTask(null); setEditTaskDraft(null); }}
+                    onClick={() => { setEditingTask(null); setEditTaskDraft(null); setEditTaskError(null); }}
                     className="btn-secondary flex-1 disabled:opacity-50"
                   >
                     Cancel

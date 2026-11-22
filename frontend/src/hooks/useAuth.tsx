@@ -43,14 +43,28 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [isInitializing, setIsInitializing] = useState(true);
 
   useEffect(() => {
-    const storedToken = localStorage.getItem('token');
-    const storedUser = localStorage.getItem('user');
+    const initAuth = async () => {
+      const storedToken = localStorage.getItem('token');
+      const storedUser = localStorage.getItem('user');
 
-    if (storedToken && storedUser) {
-      setToken(storedToken);
-      setUser(JSON.parse(storedUser));
-    }
-    setIsInitializing(false);
+      if (storedToken && storedUser) {
+        setToken(storedToken);
+        try {
+          const parsed = JSON.parse(storedUser);
+          setUser(parsed);
+          const meRes = await api.getMe();
+          if (meRes.data?.data) {
+            setUser(meRes.data.data);
+            localStorage.setItem('user', JSON.stringify(meRes.data.data));
+          }
+        } catch {
+          // Keep local session if getMe fails temporarily
+        }
+      }
+      setIsInitializing(false);
+    };
+
+    initAuth();
   }, []);
 
   const persistSession = (sessionUser: User, sessionToken: string) => {

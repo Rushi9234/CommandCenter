@@ -21,8 +21,15 @@ const WRITE_ROLES = ['owner', 'admin', 'manager', 'member'];
 const router = Router();
 
 router.get('/projects/public', authenticate, asyncHandler(projectsController.getAllPublicProjects));
+router.get('/projects/my', authenticate, asyncHandler(projectsController.getMyProjects));
 router.get(
   '/projects/:projectId/details',
+  authenticate,
+  validateUuidParams('projectId'),
+  asyncHandler(projectsController.getProjectDetails)
+);
+router.get(
+  '/projects/:projectId',
   authenticate,
   validateUuidParams('projectId'),
   asyncHandler(projectsController.getProjectDetails)
@@ -38,8 +45,6 @@ router.post(
   requireTeamRoleIfSpecified(teamIdFromBody, WRITE_ROLES),
   asyncHandler(projectsController.createProject)
 );
-
-router.get('/projects/my', authenticate, asyncHandler(projectsController.getMyProjects));
 
 router.get(
   '/teams/:teamId/projects',

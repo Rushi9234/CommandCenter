@@ -15,6 +15,7 @@ const BLOCKER_UPDATABLE_COLUMNS = [
   'similar_blockers',
   'suggested_helpers',
   'resolved_at',
+  'resolution_notes',
 ];
 
 // Moved verbatim from the old databaseService.ts (blocker + message methods).
@@ -76,7 +77,29 @@ export class BlockersRepository {
   }
 
   async updateBlocker(blockerId: string, updates: Record<string, any>) {
-    const built = buildSetClause(BLOCKER_UPDATABLE_COLUMNS, updates, 2);
+    const sanitizedUpdates = { ...updates };
+    if (sanitizedUpdates.ai_suggestions !== undefined) {
+      sanitizedUpdates.ai_suggestions = typeof sanitizedUpdates.ai_suggestions === 'object' && sanitizedUpdates.ai_suggestions !== null
+        ? JSON.stringify(sanitizedUpdates.ai_suggestions)
+        : sanitizedUpdates.ai_suggestions;
+    }
+    if (sanitizedUpdates.similar_blockers !== undefined) {
+      sanitizedUpdates.similar_blockers = typeof sanitizedUpdates.similar_blockers === 'object' && sanitizedUpdates.similar_blockers !== null
+        ? JSON.stringify(sanitizedUpdates.similar_blockers)
+        : sanitizedUpdates.similar_blockers;
+    }
+    if (sanitizedUpdates.affected_tasks !== undefined) {
+      sanitizedUpdates.affected_tasks = typeof sanitizedUpdates.affected_tasks === 'object' && sanitizedUpdates.affected_tasks !== null
+        ? JSON.stringify(sanitizedUpdates.affected_tasks)
+        : sanitizedUpdates.affected_tasks;
+    }
+    if (sanitizedUpdates.suggested_helpers !== undefined) {
+      sanitizedUpdates.suggested_helpers = typeof sanitizedUpdates.suggested_helpers === 'object' && sanitizedUpdates.suggested_helpers !== null
+        ? JSON.stringify(sanitizedUpdates.suggested_helpers)
+        : sanitizedUpdates.suggested_helpers;
+    }
+
+    const built = buildSetClause(BLOCKER_UPDATABLE_COLUMNS, sanitizedUpdates, 2);
     if (!built) {
       return this.getBlocker(blockerId);
     }
@@ -155,6 +178,41 @@ export class BlockersRepository {
     `;
     const result = await queryOne(text, [blockerId, userId]);
     return result !== null;
+  }
+
+  async getResolvedBlockersInScope(teamId: string) {
+    const text = `
+      SELECT 
+        b.blocker_id,
+        b.team_id,
+        b.title,
+        b.description,
+        b.blocker_type,
+        b.attempted_solutions,
+        b.resolution_notes,
+        b.created_at,
+        b.resolved_at,
+        u_res.full_name AS resolver_name,
+        u_res.username AS resolver_username,
+        t.team_name
+      FROM blockers b
+      JOIN teams t ON b.team_id = t.team_id
+      LEFT JOIN users u_res ON b.resolved_by = u_res.user_id
+      WHERE b.status = 'resolved'
+        AND (
+          b.team_id = $1
+          OR b.team_id IN (
+            SELECT t2.team_id FROM teams t1
+            JOIN teams t2 ON (t1.parent_team_id IS NOT NULL AND t2.parent_team_id = t1.parent_team_id)
+                          OR (t1.team_type = 'classroom' AND t2.parent_team_id = t1.team_id)
+                          OR (t2.team_id = t1.parent_team_id)
+            WHERE t1.team_id = $1
+          )
+        )
+      ORDER BY b.resolved_at DESC NULLS LAST
+      LIMIT 25
+    `;
+    return query<any>(text, [teamId]);
   }
 }
 

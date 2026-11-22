@@ -189,8 +189,18 @@ export default function AttentionActionCenter({ scope, teamId, title }: Props) {
 
   if (error) {
     return (
-      <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 text-sm text-rose-700" data-testid="action-center-error">
-        <span>⚠️ {error}</span>
+      <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-800 flex items-center justify-between gap-3" data-testid="action-center-error">
+        <div className="flex items-center gap-2">
+          <span>ℹ️</span>
+          <span>Action center telemetry syncing: {error}</span>
+        </div>
+        <button
+          type="button"
+          onClick={loadAttentionData}
+          className="px-2.5 py-1 bg-white hover:bg-amber-100 border border-amber-300 rounded text-xs font-semibold text-amber-900 transition-colors shadow-2xs whitespace-nowrap"
+        >
+          Retry
+        </button>
       </div>
     );
   }

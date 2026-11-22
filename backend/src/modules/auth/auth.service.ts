@@ -31,6 +31,8 @@ const generateNumericOTP = (): string => crypto.randomInt(100000, 1000000).toStr
 // value), not per-request.
 const DUMMY_PASSWORD_HASH = bcrypt.hashSync('a-fixed-dummy-password-used-only-for-timing-safety', BCRYPT_COST);
 
+import { avatarStorageService } from '../avatars/avatars.storage';
+
 const toPublicUser = (user: any) => ({
   user_id: user.user_id,
   email: user.email,
@@ -39,6 +41,8 @@ const toPublicUser = (user: any) => ({
   role: user.role,
   impact_score: user.impact_score,
   streak_count: user.streak_count,
+  avatar_key: user.avatar_key || null,
+  avatar_url: avatarStorageService.getAvatarUrl(user.avatar_key),
 });
 
 export class AuthService {

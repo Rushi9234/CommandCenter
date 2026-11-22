@@ -1,0 +1,75 @@
+# Dependencies
+node_modules/
+**/node_modules/
+yarn.lock
+# package-lock.json is intentionally tracked (Milestone 12) -- npm ci in
+# CI requires a committed lockfile.
+
+# Environment
+.env
+.env.*
+!.env.example
+!.env.docker
+!.env.test.example
+
+# Build
+dist/
+build/
+coverage/
+.next/
+out/
+
+# Logs
+*.log
+logs/
+
+# Cache
+.cache/
+.parcel-cache/
+*.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+*.sqlite
+*.db
+
+# Runtime
+tmp/
+temp/
+
+# Testing
+playwright-report/
+test-results/
+
+# Misc
+*.pem
+*.key
+*.crt
+
+.vercel
+.env*.local
+
+# Local production/Vercel secrets
+.vercel.prod.env
+
+# Ignored data/scratch directories
+uploads/
+scratch/
+performance/
+backend/uploads/
+audit_evidence/
+backend/debug_*.js
+backend/test_responses.js
+backend/provisionQA.js
+backend/verifyPrivacyMatrix.js
+preview_ui.html
+

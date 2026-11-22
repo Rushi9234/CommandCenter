@@ -32,3 +32,8 @@ export const getAIMentorAdvice = async (req: AuthRequest, res: Response) => {
   const advice = await blockersService.getAIMentorAdvice(req.params.blockerId, req.user!.userId);
   ok(res, advice);
 };
+
+export const autoResolveBlocker = async (req: AuthRequest, res: Response) => {
+  const resolution = await blockersService.autoResolveBlocker(req.params.blockerId, req.user!.userId);
+  ok(res, resolution, 'Blocker analyzed and resolved with institutional AI');
+};

@@ -171,6 +171,14 @@ describe('AI prompt PII masking -- Phase 3 security audit finding', () => {
       const prompt = promptSentToProvider();
       expect(prompt).not.toMatch(/[\w.-]+@[\w.-]+\.\w+/);
       expect(result.overall_assessment).toBe('ok');
+      expect(result.isFallback).toBe(false);
+    });
+
+    it('generateProductivityInsights returns isFallback: true on malformed or failing AI response', async () => {
+      mockGenerateCompletion.mockResolvedValue('Not a json response');
+      const result = await generateProductivityInsights([], [], 0);
+      expect(result.isFallback).toBe(true);
+      expect(result.strengths.length).toBeGreaterThan(0);
     });
   });
 

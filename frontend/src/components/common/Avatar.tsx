@@ -28,7 +28,9 @@ const COLOR_PALETTES = [
 
 function getInitials(name?: string | null): string {
   if (!name || !name.trim()) return '?';
-  const parts = name.trim().split(/\s+/);
+  const clean = name.replace(/[()[\]{}:;,\/\\<>"'?!@#$%^&*~`+=]/g, ' ').trim();
+  const parts = clean.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
   if (parts.length === 1) {
     return parts[0].slice(0, 2).toUpperCase();
   }

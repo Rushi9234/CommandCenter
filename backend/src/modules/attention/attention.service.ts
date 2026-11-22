@@ -641,8 +641,19 @@ export class AttentionService {
     let atRiskCount = 0;
     let needsAttentionCount = 0;
 
-    for (const child of childTeams) {
-      const childSignals = await attentionRepository.getRawTeamSignals(child.team_id);
+    const childSignalsList = await Promise.all(
+      childTeams.map(async (child) => {
+        try {
+          const raw = await attentionRepository.getRawTeamSignals(child.team_id);
+          return { child, raw };
+        } catch (err) {
+          console.error(`Failed to load child team signals for ${child.team_id}:`, err);
+          return { child, raw: null };
+        }
+      })
+    );
+
+    for (const { child, raw: childSignals } of childSignalsList) {
       if (childSignals) {
         const evalRes = this.evaluateSignals(childSignals);
         subTeamsEval.push(evalRes);

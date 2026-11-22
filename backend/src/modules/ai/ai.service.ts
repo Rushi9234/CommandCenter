@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { maskPII, AI_DISCLAIMERS, PRIVACY_CONFIG } from './privacy-config';
 import { getAIProvider } from './providers/aiProviderFactory';
 import { aiToolRegistry, AIToolContext } from './tools';
@@ -37,12 +38,15 @@ interface LogAnalysis {
   quality_score: number;
 }
 
-interface ProductivityInsights {
-  strengths: string[];
-  improvements: string[];
-  recommendations: string[];
-  overall_assessment: string;
-}
+export const ProductivityInsightsSchema = z.object({
+  strengths: z.array(z.string()).default([]),
+  improvements: z.array(z.string()).default([]),
+  recommendations: z.array(z.string()).default([]),
+  overall_assessment: z.string(),
+  isFallback: z.boolean().optional(),
+});
+
+export type ProductivityInsights = z.infer<typeof ProductivityInsightsSchema>;
 
 const parseAIJson = <T>(content: string): T => {
   if (!content || typeof content !== 'string') {
@@ -235,7 +239,6 @@ Return ONLY valid JSON:
 
   try {
     const content = await callAI([{ role: 'user', content: prompt }], { temperature: 0.2, max_tokens: 600 });
-    console.log('AI SUGGESTIONS RAW RESPONSE:', JSON.stringify(content));
     return parseAIJson(content);
   } catch (error) {
     console.error('AI Suggestions Error:', error);
@@ -247,7 +250,11 @@ Return ONLY valid JSON:
   }
 };
 
-export const generateProductivityInsights = async (logs: any[], tasks: any[], streakCount: number) => {
+export const generateProductivityInsights = async (
+  logs: any[],
+  tasks: any[],
+  streakCount: number
+): Promise<ProductivityInsights> => {
   const prompt = `Analyze productivity data briefly.
 
 Logs: ${logs.length}, Completed: ${tasks.filter((t) => t.status === 'done').length}, Streak: ${streakCount}
@@ -262,7 +269,24 @@ Return ONLY valid JSON:
 
   try {
     const content = await callAI([{ role: 'user', content: prompt }], { max_tokens: 400 });
-    return parseAIJson<ProductivityInsights>(content);
+    const rawParsed = parseAIJson<unknown>(content);
+    const parsed = ProductivityInsightsSchema.safeParse(rawParsed);
+
+    if (!parsed.success) {
+      console.warn('[AI] Productivity insights schema validation failed:', parsed.error.message);
+      return {
+        strengths: ['Consistent logging', 'Task completion'],
+        improvements: ['Time management', 'Documentation'],
+        recommendations: ['Set daily goals', 'Review progress weekly'],
+        overall_assessment: 'Keep up the good work!',
+        isFallback: true,
+      };
+    }
+
+    return {
+      ...parsed.data,
+      isFallback: false,
+    };
   } catch (error) {
     console.error('AI Insights Error:', error);
     return {
@@ -270,6 +294,7 @@ Return ONLY valid JSON:
       improvements: ['Time management', 'Documentation'],
       recommendations: ['Set daily goals', 'Review progress weekly'],
       overall_assessment: 'Keep up the good work!',
+      isFallback: true,
     };
   }
 };
@@ -1058,6 +1083,167 @@ Return ONLY valid JSON:
   }
 };
 
+export interface BlockerResolutionSynthesis {
+  root_cause: string;
+  recommended_fix_steps: string[];
+  suggested_solutions: string[];
+  matched_past_solutions: Array<{
+    blocker_id: string;
+    title: string;
+    team_name?: string;
+    resolver_name?: string;
+    resolution_notes: string;
+    relevance_explanation: string;
+  }>;
+  preventative_tip: string;
+}
+
+export const autoResolveBlockerWithHistoricalKnowledge = async (
+  currentBlocker: {
+    title: string;
+    description?: string;
+    blocker_type?: string;
+    attempted_solutions?: string;
+  },
+  pastResolvedBlockers: Array<{
+    blocker_id: string;
+    title: string;
+    description?: string;
+    attempted_solutions?: string;
+    resolution_notes?: string;
+    team_name?: string;
+    resolver_name?: string;
+  }>
+): Promise<BlockerResolutionSynthesis> => {
+  const sanitizedTitle = maskPII(currentBlocker.title || '');
+  const sanitizedDesc = maskPII(currentBlocker.description || '');
+  const sanitizedAttempted = maskPII(currentBlocker.attempted_solutions || '');
+  const blockerType = currentBlocker.blocker_type || 'technical';
+
+  const sanitizedPast = pastResolvedBlockers.slice(0, 8).map((b, idx) => ({
+    id: b.blocker_id,
+    ref: `#${idx + 1}`,
+    title: maskPII(b.title || ''),
+    description: maskPII(b.description || '').slice(0, 200),
+    resolution: maskPII(b.resolution_notes || b.attempted_solutions || 'Marked resolved without detailed notes'),
+    team: b.team_name || 'Team',
+    resolver: b.resolver_name || 'Teammate',
+  }));
+
+  const pastContext = sanitizedPast.length > 0
+    ? sanitizedPast
+        .map(
+          (p) =>
+            `${p.ref} [ID: ${p.id}] "${p.title}" (Team: ${p.team}, Resolved by: ${p.resolver})\nResolution: ${p.resolution}`
+        )
+        .join('\n\n')
+    : 'No historical resolved blockers available.';
+
+  const prompt = `You are the Automated Technical Blocker Resolver & Institutional Knowledge Engine for CommandCenter.
+Your task is to analyze an active blocker, compare it against historical resolved blockers from this team and classroom, and synthesize a concrete, step-by-step resolution.
+
+ACTIVE BLOCKER:
+Title: ${sanitizedTitle}
+Description: ${sanitizedDesc}
+Category: ${blockerType}
+Attempted Fixes: ${sanitizedAttempted}
+
+HISTORICAL RESOLVED BLOCKERS IN WORKSPACE:
+${pastContext}
+
+INSTRUCTIONS:
+1. Identify the likely technical root cause.
+2. Formulate 2 to 4 concrete, actionable step-by-step fix steps.
+3. Compare against the historical blockers above. If any past blocker is relevant, cite its ID and explain why the previous fix applies here.
+4. Provide 1 preventative tip for future engineering stability.
+5. Return ONLY valid JSON matching this schema:
+
+{
+  "root_cause": "concise explanation of why this error or issue occurs",
+  "recommended_fix_steps": [
+    "Step 1: Check ...",
+    "Step 2: Update configuration ...",
+    "Step 3: Run ..."
+  ],
+  "suggested_solutions": [
+    "High confidence recommendation ...",
+    "Alternative approach ..."
+  ],
+  "matched_past_solutions": [
+    {
+      "blocker_id": "exact ID from historical list if matched",
+      "relevance_explanation": "how past resolution applies to this problem"
+    }
+  ],
+  "preventative_tip": "how to prevent similar blockers in the future"
+}`;
+
+  try {
+    const content = await callAI([{ role: 'user', content: prompt }], { temperature: 0.2, max_tokens: 800 });
+    const parsed = parseAIJson<any>(content);
+
+    const matchedMap = new Map(pastResolvedBlockers.map((p) => [p.blocker_id, p]));
+    const matchedPast = Array.isArray(parsed.matched_past_solutions)
+      ? parsed.matched_past_solutions
+          .filter((m: any) => m && m.blocker_id && matchedMap.has(m.blocker_id))
+          .map((m: any) => {
+            const raw = matchedMap.get(m.blocker_id)!;
+            return {
+              blocker_id: raw.blocker_id,
+              title: raw.title,
+              team_name: raw.team_name,
+              resolver_name: raw.resolver_name,
+              resolution_notes: raw.resolution_notes || raw.attempted_solutions || 'Resolved',
+              relevance_explanation: m.relevance_explanation || 'Similar past issue resolved in workspace',
+            };
+          })
+      : [];
+
+    return {
+      root_cause: parsed.root_cause || 'Technical or environmental dependency conflict',
+      recommended_fix_steps: Array.isArray(parsed.recommended_fix_steps) && parsed.recommended_fix_steps.length > 0
+        ? parsed.recommended_fix_steps
+        : ['Verify service logs', 'Check environment configurations', 'Retry with debug logging enabled'],
+      suggested_solutions: Array.isArray(parsed.suggested_solutions) && parsed.suggested_solutions.length > 0
+        ? parsed.suggested_solutions
+        : ['Inspect stack trace and recent commits'],
+      matched_past_solutions: matchedPast,
+      preventative_tip: parsed.preventative_tip || 'Add integration tests or automated assertions for this subsystem',
+    };
+  } catch (error) {
+    console.error('AI Auto-Resolver Error:', error);
+    const keywords = (sanitizedTitle + ' ' + sanitizedDesc).toLowerCase().split(/\s+/).filter((k) => k.length > 3);
+    const keywordMatches = pastResolvedBlockers
+      .filter((b) => {
+        const text = (b.title + ' ' + (b.description || '')).toLowerCase();
+        return keywords.some((k) => text.includes(k));
+      })
+      .slice(0, 2)
+      .map((b) => ({
+        blocker_id: b.blocker_id,
+        title: b.title,
+        team_name: b.team_name,
+        resolver_name: b.resolver_name,
+        resolution_notes: b.resolution_notes || b.attempted_solutions || 'Resolved',
+        relevance_explanation: 'Keyword overlap with previously solved blocker in your workspace',
+      }));
+
+    return {
+      root_cause: 'Potential configuration mismatch or dependency issue',
+      recommended_fix_steps: [
+        'Inspect server and browser console logs for detailed error stack',
+        'Verify service environment variables and network endpoints',
+        'Check database connection status and credentials',
+      ],
+      suggested_solutions: [
+        sanitizedAttempted ? `Refine previous attempt: ${sanitizedAttempted}` : 'Consult related team members or review team work logs',
+      ],
+      matched_past_solutions: keywordMatches,
+      preventative_tip: 'Document root cause and resolution notes upon resolving this blocker.',
+    };
+  }
+};
+
 // Milestone 49: drafts a same-day work summary from a user's OWN raw
 // entries only -- unlike generateStandup (which aggregates every team
 // member's data into one prompt, an already-documented, deliberately
@@ -1119,7 +1305,6 @@ Note: ${AI_DISCLAIMERS.SUGGESTION}`;
         max_tokens: 600,
       }
     );
-    console.log('AI WORK SUMMARY RAW RESPONSE:', JSON.stringify(content));
 
     const result = parseAIJson<{
       summary?: string;

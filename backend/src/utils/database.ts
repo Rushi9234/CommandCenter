@@ -1,7 +1,36 @@
 import { Pool } from 'pg';
 import dotenv from 'dotenv';
+import dns from 'dns';
 
 dotenv.config();
+
+// Ensure Neon database hosts resolve reliably even if local network/router DNS blocks or refuses *.neon.tech lookups
+const origLookup = dns.lookup;
+const resolver = new dns.promises.Resolver();
+resolver.setServers(['8.8.8.8', '1.1.1.1']);
+
+(dns as any).lookup = function (hostname: any, options: any, callback: any) {
+  if (typeof options === 'function') {
+    callback = options;
+    options = {};
+  }
+  origLookup(hostname, options, (err: any, address: any, family: any) => {
+    if (err && typeof hostname === 'string' && hostname.includes('neon.tech')) {
+      resolver
+        .resolve(hostname)
+        .then((ips) => {
+          if (options && options.all) {
+            callback(null, [{ address: ips[0], family: 4 }]);
+          } else {
+            callback(null, ips[0], 4);
+          }
+        })
+        .catch(() => callback(err, address, family));
+    } else {
+      callback(err, address, family);
+    }
+  });
+};
 
 // The single PostgreSQL connection pool in the app. Every repository reaches
 // this through db/client.ts; nothing else should call `new Pool()` -- a
@@ -48,11 +77,13 @@ dotenv.config();
 // unbounded wait -- just one that reflects measured reality rather than
 // an arbitrary round number.
 export const pgPool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: process.env.DATABASE_URL || process.env.POSTGRES_URL,
   max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
+  idleTimeoutMillis: 15000,
+  connectionTimeoutMillis: 20000,
   statement_timeout: 30000,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10000,
 });
 
 // pg's Pool emits 'error' on idle-client errors (e.g. the server closing a
@@ -61,6 +92,12 @@ export const pgPool = new Pool({
 // beyond consolidation -- the original code had no listener at all.
 pgPool.on('error', (err) => {
   console.error('Unexpected error on idle PostgreSQL client:', err.message);
+});
+
+pgPool.on('connect', (client) => {
+  client.on('error', (err) => {
+    console.warn('PostgreSQL client socket error caught:', err.message);
+  });
 });
 
 // Drains the pool on shutdown so in-flight queries get a chance to finish

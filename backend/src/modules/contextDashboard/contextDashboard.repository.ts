@@ -1,19 +1,25 @@
 import { query } from '../../db/client';
 
-// Milestone 51: every method here is a bulk, ANY($1)/GROUP BY query
+export interface TaskProgressItem {
+  total: number;
+  completed: number;
+  in_progress: number;
+  review: number;
+  todo: number;
+  completed_recent: number;
+}
+
+export interface BlockerHealthItem {
+  open_count: number;
+  critical_count: number;
+  stale_count: number;
+}
+
+// Milestone 51 & Multi-Team Matrix: bulk, ANY($1)/GROUP BY queries
 // against a bounded set of child-team IDs -- never a per-team fan-out.
-// See contextDashboard.service.ts's own comment for the authorization
-// model this supports (narrow, read-only, aggregate-only visibility for
-// a parent team's owner/admin into its children -- NOT membership, NOT
-// a cascade into any child team's own resource endpoints).
+// Maintains strict child-team privacy boundaries while empowering
+// coordinators with actionable health and velocity telemetry.
 export class ContextDashboardRepository {
-  // Milestone 51: capped at 200 -- a classroom/hackathon realistically
-  // has tens of teams, not thousands, but nothing before this enforced
-  // that. Matches the array-length-bound convention M40/M46 already
-  // established elsewhere (searchTeams' own LIMIT 50) rather than
-  // leaving an unbounded aggregation surface. If a context genuinely
-  // needs more than this, the dashboard should paginate -- not silently
-  // aggregate an unbounded number of teams.
   async getChildTeams(parentTeamId: string) {
     const text = `
       SELECT team_id, team_name, description, team_type, is_public, created_at
@@ -36,12 +42,6 @@ export class ContextDashboardRepository {
     return counts;
   }
 
-  // Milestone 51: a boolean per team ("did ANY member submit today"),
-  // never which member or what they wrote -- the exact neutral-signal
-  // shape the milestone's own instructions require ("ACTIVE" not "who's
-  // slow"). Filters CURRENT_DATE in SQL, not a JS-computed date string --
-  // the same DATE-column/JS-Date mismatch class M46 already found and
-  // fixed once (never reintroduce it here).
   async getTeamsWithTodaysSubmission(teamIds: string[]): Promise<Set<string>> {
     if (teamIds.length === 0) return new Set();
     const rows = await query<{ team_id: string }>(
@@ -62,26 +62,89 @@ export class ContextDashboardRepository {
     return counts;
   }
 
-  // Milestone 51: neutral counts only (total/completed tasks), never a
-  // per-person breakdown -- the milestone's own instruction not to
-  // invent a productivity formula. One JOIN, one GROUP BY, regardless of
-  // how many teams/projects/tasks exist.
-  async getTaskProgress(teamIds: string[]): Promise<Record<string, { total: number; completed: number }>> {
+  async getBlockerHealth(teamIds: string[]): Promise<Record<string, BlockerHealthItem>> {
     if (teamIds.length === 0) return {};
-    const rows = await query<{ team_id: string; total: string; completed: string }>(
-      `SELECT p.team_id, COUNT(t.task_id) AS total, COUNT(*) FILTER (WHERE t.status = 'done') AS completed
+    const rows = await query<{
+      team_id: string;
+      open_count: string;
+      critical_count: string;
+      stale_count: string;
+    }>(
+      `SELECT 
+        team_id,
+        COUNT(*) AS open_count,
+        COUNT(*) FILTER (WHERE urgency IN ('high', 'critical') OR severity IN ('high', 'critical')) AS critical_count,
+        COUNT(*) FILTER (WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '24 hours') AS stale_count
+       FROM blockers
+       WHERE team_id = ANY($1) AND status = 'open'
+       GROUP BY team_id`,
+      [teamIds]
+    );
+    const health: Record<string, BlockerHealthItem> = {};
+    for (const row of rows) {
+      health[row.team_id] = {
+        open_count: Number(row.open_count),
+        critical_count: Number(row.critical_count),
+        stale_count: Number(row.stale_count),
+      };
+    }
+    return health;
+  }
+
+  async getTaskProgress(teamIds: string[]): Promise<Record<string, TaskProgressItem>> {
+    if (teamIds.length === 0) return {};
+    const rows = await query<{
+      team_id: string;
+      total: string;
+      completed: string;
+      in_progress: string;
+      review: string;
+      todo: string;
+      completed_recent: string;
+    }>(
+      `SELECT 
+        p.team_id,
+        COUNT(t.task_id) AS total,
+        COUNT(*) FILTER (WHERE t.status = 'done') AS completed,
+        COUNT(*) FILTER (WHERE t.status = 'in_progress') AS in_progress,
+        COUNT(*) FILTER (WHERE t.status = 'review') AS review,
+        COUNT(*) FILTER (WHERE t.status = 'todo' OR t.status IS NULL) AS todo,
+        COUNT(*) FILTER (WHERE t.status = 'done' AND (t.completed_at >= CURRENT_DATE - INTERVAL '7 days' OR (t.completed_at IS NULL AND t.updated_at >= CURRENT_DATE - INTERVAL '7 days'))) AS completed_recent
        FROM projects p
        INNER JOIN tasks t ON t.project_id = p.project_id
        WHERE p.team_id = ANY($1)
        GROUP BY p.team_id`,
       [teamIds]
     );
-    const progress: Record<string, { total: number; completed: number }> = {};
+    const progress: Record<string, TaskProgressItem> = {};
     for (const row of rows) {
-      progress[row.team_id] = { total: Number(row.total), completed: Number(row.completed) };
+      progress[row.team_id] = {
+        total: Number(row.total),
+        completed: Number(row.completed),
+        in_progress: Number(row.in_progress),
+        review: Number(row.review),
+        todo: Number(row.todo),
+        completed_recent: Number(row.completed_recent),
+      };
     }
     return progress;
+  }
+
+  async getAuditBlockers(teamIds: string[]): Promise<any[]> {
+    if (teamIds.length === 0) return [];
+    const rows = await query<any>(
+      `SELECT b.blocker_id, b.team_id, t.team_name, b.description, b.severity, b.status,
+              b.created_at, b.resolved_at
+       FROM blockers b
+       JOIN teams t ON t.team_id = b.team_id
+       WHERE b.team_id = ANY($1)
+       ORDER BY b.created_at DESC
+       LIMIT 100`,
+      [teamIds]
+    );
+    return rows;
   }
 }
 
 export const contextDashboardRepository = new ContextDashboardRepository();
+

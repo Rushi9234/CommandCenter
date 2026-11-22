@@ -34,6 +34,10 @@ export interface RateLimitProvider {
   // worth of legitimately-refreshing sessions.
   createRefreshLimiter(): RequestHandler;
 
+  // OAuth 2.0 rate limiting: IP-based limiter (60/15min) that prevents
+  // OAuth flows from being throttled by password brute-force limits.
+  createOAuthLimiter(): RequestHandler;
+
   // Password-change rate limiting: keyed by authenticated user ID (not IP),
   // since this is a sensitive account-modifying operation that requires
   // authentication. The limit is per-user, not per-IP, to prevent one user's

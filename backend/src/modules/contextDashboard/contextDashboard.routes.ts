@@ -20,4 +20,12 @@ router.get(
   asyncHandler(contextDashboardController.getContextDashboard)
 );
 
+router.get(
+  '/teams/:teamId/audit-report',
+  authenticate,
+  validateUuidParams('teamId'),
+  requireTeamRole(teamIdFromParams, ['owner', 'admin']),
+  asyncHandler(contextDashboardController.getAuditReport)
+);
+
 export default router;

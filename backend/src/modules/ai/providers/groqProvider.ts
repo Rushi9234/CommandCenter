@@ -5,7 +5,7 @@ import { AIProvider, AIMessage, AICompletionOptions, AIToolDefinition, AIComplet
 // stays isolated in this provider. Business logic never depends on
 // Groq-specific details.
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
+const getGroqModel = () => process.env.GROQ_MODEL || 'qwen/qwen3.8-27b';
 
 export class GroqProvider implements AIProvider {
   async generateCompletion(
@@ -18,12 +18,13 @@ export class GroqProvider implements AIProvider {
 
     const response = await fetch(GROQ_API_URL, {
       method: 'POST',
+      signal: AbortSignal.timeout(15000),
       headers: {
         Authorization: `Bearer ${env.groqApiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: GROQ_MODEL,
+        model: getGroqModel(),
         messages,
         temperature: options.temperature ?? 0.7,
         max_tokens: options.max_tokens ?? 500,
@@ -75,12 +76,13 @@ export class GroqProvider implements AIProvider {
 
     const response = await fetch(GROQ_API_URL, {
       method: 'POST',
+      signal: AbortSignal.timeout(15000),
       headers: {
         Authorization: `Bearer ${env.groqApiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: GROQ_MODEL,
+        model: getGroqModel(),
         messages,
         tools: groqTools.length > 0 ? groqTools : undefined,
         tool_choice: groqTools.length > 0 ? 'auto' : undefined,

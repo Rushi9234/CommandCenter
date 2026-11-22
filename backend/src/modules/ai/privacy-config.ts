@@ -87,7 +87,7 @@ export const USER_RIGHTS = {
 
 export const maskPII = (text: string): string => {
   text = text.replace(/[\w.-]+@[\w.-]+\.\w+/g, '[EMAIL]');
-  text = text.replace(/\b\d{3}[-.]?\d{3}[-.]?\d{4}\b/g, '[PHONE]');
+  text = text.replace(/(?:\+?\d{1,3}[-.\s]?)?(?:\(?\d{2,5}\)?[-.\s]?)\d{3,5}[-.\s]?\d{3,5}\b/g, '[PHONE]');
   text = text.replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, '[IP]');
   return text;
 };

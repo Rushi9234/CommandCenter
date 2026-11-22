@@ -8,7 +8,7 @@ import { blockersRepository } from './blockers.repository';
 import { teamsRepository } from '../teams/teams.repository';
 import { usersRepository } from '../users/users.repository';
 import { tasksRepository } from '../projects/tasks.repository';
-import { analyzeBlocker, generateMentorAdvice } from '../ai/ai.service';
+import { analyzeBlocker, generateMentorAdvice, autoResolveBlockerWithHistoricalKnowledge } from '../ai/ai.service';
 import { NotFoundError, BadRequestError } from '../../common/errors';
 import { privacyService, AI_DISABLED_MESSAGE } from '../privacy/privacy.service';
 import { notificationsService } from '../notifications/notifications.service';
@@ -66,10 +66,27 @@ export class BlockersService {
     await this.validateAffectedTasks(body.teamId, body.affectedTasks);
 
     const aiEnabled = await privacyService.isAiEnabledForUser(userId);
-    const aiSuggestions = aiEnabled
-      ? await generateBlockerSuggestions(body.title, body.description, body.blockerType, body.attemptedSolutions)
-      : [];
-    const similarBlockers = await findSimilarBlockers(body.teamId, body.title, body.description);
+    let aiSuggestions: any = null;
+    let similarBlockers: string[] = [];
+
+    const pastResolved = await blockersRepository.getResolvedBlockersInScope(body.teamId);
+
+    if (aiEnabled) {
+      aiSuggestions = await autoResolveBlockerWithHistoricalKnowledge(
+        {
+          title: body.title,
+          description: body.description,
+          blocker_type: body.blockerType,
+          attempted_solutions: body.attemptedSolutions,
+        },
+        pastResolved
+      );
+      similarBlockers = (aiSuggestions.matched_past_solutions || []).map((m: any) => m.blocker_id);
+    }
+
+    if (similarBlockers.length === 0) {
+      similarBlockers = await findSimilarBlockers(body.teamId, body.title, body.description);
+    }
     const suggestedHelpers = await suggestTeamHelpers(body.teamId);
 
     const blocker = await blockersRepository.createBlocker({
@@ -139,20 +156,24 @@ export class BlockersService {
       return blockers;
     }
 
-    const creatorIds = Array.from(new Set(blockers.map((b: any) => b.created_by)));
+    const creatorIds = blockers.map((b: any) => b.created_by);
+    const resolverIds = blockers.filter((b: any) => b.resolved_by).map((b: any) => b.resolved_by);
+    const allUserIds = Array.from(new Set([...creatorIds, ...resolverIds]));
     const blockerIds = blockers.map((b: any) => b.blocker_id);
 
-    const [creators, messageCounts] = await Promise.all([
-      usersRepository.getUsersByIds(creatorIds),
+    const [users, messageCounts] = await Promise.all([
+      usersRepository.getUsersByIds(allUserIds),
       blockersRepository.getMessageCounts(blockerIds),
     ]);
-    const creatorById = new Map(creators.map((u: any) => [u.user_id, u]));
+    const userById = new Map(users.map((u: any) => [u.user_id, u]));
 
     return blockers.map((blocker: any) => {
-      const creator = creatorById.get(blocker.created_by);
+      const creator = userById.get(blocker.created_by);
+      const resolver = blocker.resolved_by ? userById.get(blocker.resolved_by) : null;
       return {
         ...blocker,
         creator: creator ? { full_name: creator.full_name, username: creator.username } : null,
+        resolver: resolver ? { full_name: resolver.full_name, username: resolver.username } : null,
         message_count: messageCounts[blocker.blocker_id] || 0,
       };
     });
@@ -185,6 +206,7 @@ export class BlockersService {
     } else if (updates.status) {
       updates.resolved_by = null;
       updates.resolved_at = null;
+      updates.resolution_notes = null;
     }
 
     const updated = await blockersRepository.updateBlocker(blockerId, updates);
@@ -266,6 +288,44 @@ export class BlockersService {
     );
 
     return { advice };
+  }
+
+  async autoResolveBlocker(blockerId: string, userId: string) {
+    const blocker = await blockersRepository.getBlocker(blockerId);
+    if (!blocker) {
+      throw new NotFoundError('Blocker not found');
+    }
+
+    const aiEnabled = await privacyService.isAiEnabledForUser(userId);
+    if (!aiEnabled) {
+      return {
+        root_cause: 'AI analysis disabled in user privacy settings',
+        recommended_fix_steps: ['Check team documentation', 'Consult team leaders'],
+        suggested_solutions: [],
+        matched_past_solutions: [],
+        preventative_tip: AI_DISABLED_MESSAGE,
+      };
+    }
+
+    const pastResolved = (await blockersRepository.getResolvedBlockersInScope(blocker.team_id))
+      .filter((b: any) => b.blocker_id !== blockerId);
+
+    const resolution = await autoResolveBlockerWithHistoricalKnowledge(
+      {
+        title: blocker.title,
+        description: blocker.description,
+        blocker_type: blocker.blocker_type,
+        attempted_solutions: blocker.attempted_solutions,
+      },
+      pastResolved
+    );
+
+    await blockersRepository.updateBlocker(blockerId, {
+      ai_suggestions: resolution,
+      similar_blockers: (resolution.matched_past_solutions || []).map((m: any) => m.blocker_id),
+    });
+
+    return resolution;
   }
 }
 

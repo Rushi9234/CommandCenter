@@ -27,6 +27,7 @@ const AUTH_UPDATABLE_COLUMNS = [
   'google_id',
   'microsoft_id',
   'auth_provider',
+  'role',
 ];
 
 export class AuthRepository {

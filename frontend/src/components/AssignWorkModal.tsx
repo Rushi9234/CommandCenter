@@ -61,22 +61,23 @@ export const AssignWorkModal: React.FC<AssignWorkModalProps> = ({
   }, [selectedMember, effectiveTeams]);
 
   useEffect(() => {
+    if (!isOpen || !selectedMember) return;
     if (memberTeams.length > 0) {
-      if (!selectedIndividualTeam || !memberTeams.some((t) => t.team_id === selectedIndividualTeam)) {
-        setSelectedIndividualTeam(memberTeams[0].team_id);
-      }
+      setSelectedIndividualTeam(memberTeams[0].team_id);
     } else if (selectedMember?.team_id) {
       setSelectedIndividualTeam(selectedMember.team_id);
     }
-  }, [memberTeams, selectedMember]);
+  }, [isOpen, selectedMember]);
 
   useEffect(() => {
-    if (effectiveTeamId) {
-      setSelectedTargetTeam(effectiveTeamId);
-    } else if (effectiveTeams.length > 0) {
-      setSelectedTargetTeam('all');
+    if (isOpen) {
+      if (effectiveTeamId) {
+        setSelectedTargetTeam(effectiveTeamId);
+      } else if (effectiveTeams.length > 0) {
+        setSelectedTargetTeam('all');
+      }
     }
-  }, [effectiveTeamId, effectiveTeams]);
+  }, [isOpen]);
 
   useEffect(() => {
     if (recipientType === 'individual' && memberSearchQuery.trim()) {
@@ -244,6 +245,8 @@ export const AssignWorkModal: React.FC<AssignWorkModalProps> = ({
       setLoading(false);
     }
   };
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 sm:p-6 overflow-hidden" data-testid="assign-work-modal">

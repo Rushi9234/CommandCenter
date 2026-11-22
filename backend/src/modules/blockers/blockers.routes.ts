@@ -76,4 +76,13 @@ router.get(
   asyncHandler(blockersController.getAIMentorAdvice)
 );
 
+router.post(
+  '/blockers/:blockerId/auto-resolve',
+  authenticate,
+  getRateLimitProvider().createApiLimiter(),
+  validateUuidParams('blockerId'),
+  requireAccess((req) => blockersRepository.canAccessBlocker(req.user!.userId, req.params.blockerId), 'Access denied to this blocker'),
+  asyncHandler(blockersController.autoResolveBlocker)
+);
+
 export default router;

@@ -7,12 +7,46 @@ import { pgPool } from '../utils/database';
 // pool in the entire app as of Milestone 3.
 
 export const query = async <T = any>(text: string, params?: any[]): Promise<T[]> => {
-  const client = await pgPool.connect();
+  let client: PoolClient | null = null;
   try {
+    client = await pgPool.connect();
     const result = await client.query(text, params);
     return result.rows;
+  } catch (err: any) {
+    if (client) {
+      try {
+        client.release(true);
+      } catch {
+        /* ignore */
+      }
+      client = null;
+    }
+    const isTransientConnError =
+      err?.code === 'ECONNRESET' ||
+      err?.code === 'ETIMEDOUT' ||
+      (err?.message &&
+        (err.message.includes('Connection terminated') ||
+          err.message.includes('timeout exceeded') ||
+          err.message.includes('closed') ||
+          err.message.includes('ECONNRESET') ||
+          err.message.includes('socket disconnected') ||
+          err.message.includes('Client network socket')));
+
+    if (isTransientConnError) {
+      await new Promise((r) => setTimeout(r, 250));
+      const retryClient = await pgPool.connect();
+      try {
+        const retryResult = await retryClient.query(text, params);
+        return retryResult.rows;
+      } finally {
+        retryClient.release();
+      }
+    }
+    throw err;
   } finally {
-    client.release();
+    if (client) {
+      client.release();
+    }
   }
 };
 

@@ -86,6 +86,20 @@ export class ExpressRateLimitProvider implements RateLimitProvider {
     });
   }
 
+  createOAuthLimiter(): RequestHandler {
+    return rateLimit({
+      store: this.createStore(),
+      windowMs: 15 * 60 * 1000,
+      max: process.env.NODE_ENV === 'test' ? 10000 : 60,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req) => ipKeyGenerator(req.ip || ''),
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many OAuth attempts. Please try again later.' });
+      },
+    });
+  }
+
   // Password-change rate limiting: 3 attempts per hour, keyed by user ID.
   // This is a sensitive account-modifying operation, and we want to prevent
   // brute-force attacks while still allowing legitimate users to retry.

@@ -19,7 +19,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 10000, // 10 second timeout
+  timeout: 20000, // 20 second timeout for complex Neon database aggregations
 });
 
 // Add token to requests
@@ -151,10 +151,10 @@ export const getMyAttention = () =>
   api.get('/attention/me');
 
 export const getTeamAttentionDetails = (teamId: string) =>
-  api.get(`/attention/teams/${teamId}`);
+  api.get(`/attention/teams/${teamId}`, { timeout: 35000 });
 
 export const getClassroomAttentionDetails = (teamId: string) =>
-  api.get(`/attention/classrooms/${teamId}`);
+  api.get(`/attention/classrooms/${teamId}`, { timeout: 35000 });
 
 
 export const createWorkEntry = (teamId: string, entryText: string) =>
@@ -303,6 +303,9 @@ export const getMessages = (blockerId: string) =>
 
 export const getAIAdvice = (blockerId: string) =>
   api.get(`/blockers/${blockerId}/ai-advice`);
+
+export const autoResolveBlocker = (blockerId: string) =>
+  api.post(`/blockers/${blockerId}/auto-resolve`);
 
 export const chatWithAI = (message: string, context: string) =>
   api.post('/ai/chat', { message, context });
@@ -515,4 +518,24 @@ export const assignTicket = (referenceId: string, assigned_to: string) =>
 export const getPlatformAnalytics = (params?: { period?: string; startDate?: string; endDate?: string }) =>
   api.get('/admin/analytics/platform', { params });
 
+// Audit & Activity Report Exporter
+export const getAuditReport = (teamId: string) =>
+  api.get(`/teams/${teamId}/audit-report`);
+
+export const downloadAuditReportCsv = async (teamId: string, teamName?: string) => {
+  const response = await api.get(`/teams/${teamId}/audit-report?format=csv`, {
+    responseType: 'blob',
+  });
+  const url = window.URL.createObjectURL(new Blob([response.data], { type: 'text/csv' }));
+  const link = document.createElement('a');
+  link.href = url;
+  const safeName = (teamName || 'team').replace(/[^a-zA-Z0-9_-]/g, '_');
+  link.setAttribute('download', `CommandCenter_Audit_${safeName}_${new Date().toISOString().slice(0, 10)}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  link.parentNode?.removeChild(link);
+  window.URL.revokeObjectURL(url);
+};
+
 export default api;
+

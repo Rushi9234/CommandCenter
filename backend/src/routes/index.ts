@@ -44,6 +44,7 @@ import { authenticate } from '../middleware/auth';
 const router = Router();
 
 const authRateLimiter = getRateLimitProvider().createAuthLimiter();
+const oauthRateLimiter = getRateLimitProvider().createOAuthLimiter();
 
 // Auth routes. Milestone 4: all business logic now lives in
 // modules/auth/auth.service.ts; this file only wires paths to the
@@ -57,9 +58,9 @@ router.post('/auth/verify-otp', authRateLimiter, validate(verifyOtpSchema), asyn
 router.post('/auth/resend-otp', authRateLimiter, validate(resendOtpSchema), asyncHandler(authController.resendOtp));
 
 // OAuth 2.0 / OIDC routes (Phase 2: Google & Microsoft)
-router.get('/auth/oauth/:provider/init', authRateLimiter, asyncHandler(oauthController.initiateOAuth));
-router.get('/auth/oauth/:provider/callback', authRateLimiter, asyncHandler(oauthController.handleOAuthCallback));
-router.post('/auth/oauth/:provider/callback', authRateLimiter, asyncHandler(oauthController.handleOAuthCallback));
+router.get('/auth/oauth/:provider/init', oauthRateLimiter, asyncHandler(oauthController.initiateOAuth));
+router.get('/auth/oauth/:provider/callback', oauthRateLimiter, asyncHandler(oauthController.handleOAuthCallback));
+router.post('/auth/oauth/:provider/callback', oauthRateLimiter, asyncHandler(oauthController.handleOAuthCallback));
 
 // New in Milestone 4: refresh/logout read their token from a cookie first,
 // falling back to the request body, so these work whether or not the

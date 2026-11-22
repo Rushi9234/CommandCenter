@@ -5,6 +5,7 @@ import { usersRepository } from '../modules/users/users.repository';
 import { ACCESS_TOKEN_TTL_SECONDS } from '../modules/auth/jwt';
 import { setSessionCookies, clearSessionCookies } from '../common/middleware/auth-cookies';
 import { csrfTokenMatches } from '../common/security/csrf';
+import { avatarStorageService } from '../modules/avatars/avatars.storage';
 
 // Thin by design -- every branch of business logic (password hashing,
 // token generation, verification/reset lookups, session issuance) now
@@ -207,6 +208,7 @@ export const getMe = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ error: 'User not found' });
     }
     const { password_hash, verification_token, password_reset_token_hash, ...safeUser } = user;
+    (safeUser as any).avatar_url = avatarStorageService.getAvatarUrl(user.avatar_key);
     res.json({
       success: true,
       data: safeUser,

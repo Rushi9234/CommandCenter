@@ -560,3 +560,63 @@ describe('Phase 2A -- OTP-based Password Reset & Security Hardening', () => {
     }
   });
 });
+
+describe('Single Admin Account Setup & Authorization', () => {
+  it('automatically assigns admin role when designated admin email registers', async () => {
+    const adminUser = {
+      email: 'rushikedar40@gmail.com',
+      username: 'rushikedar40',
+      fullName: 'Rushi Kedar',
+      password: 'AdminPassword123!',
+    };
+
+    await register(adminUser).expect(201);
+
+    const loginRes = await login(adminUser.email, adminUser.password).expect(200);
+    expect(loginRes.body.data.user.role).toBe('admin');
+  });
+
+  it('assigns member role to standard user registrations', async () => {
+    const normalUser = buildUser('normal_user_role');
+    await register(normalUser).expect(201);
+
+    const loginRes = await login(normalUser.email, normalUser.password).expect(200);
+    expect(loginRes.body.data.user.role).toBe('member');
+  });
+
+  it('blocks non-admin users from admin ticket queue API', async () => {
+    const normalUser = buildUser('normal_blocked');
+    await register(normalUser).expect(201);
+
+    const loginRes = await login(normalUser.email, normalUser.password).expect(200);
+    const token = loginRes.body.data.token;
+
+    const res = await request(app)
+      .get('/api/admin/tickets')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(403);
+
+    expect(res.body.error).toMatch(/access denied|forbidden|admin|insufficient permissions/i);
+  });
+
+  it('allows admin users to access admin ticket queue API', async () => {
+    const adminUser = {
+      email: 'rushikedar40@gmail.com',
+      username: 'admin_queue_user',
+      fullName: 'Admin User',
+      password: 'AdminPassword123!',
+    };
+
+    await register(adminUser).expect(201);
+
+    const loginRes = await login(adminUser.email, adminUser.password).expect(200);
+    const token = loginRes.body.data.token;
+
+    const res = await request(app)
+      .get('/api/admin/tickets')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    expect(res.body.success).toBe(true);
+  });
+});

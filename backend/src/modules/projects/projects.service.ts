@@ -359,8 +359,12 @@ export class ProjectsService {
     for (const task of tasks) {
       if (task.owner) userIds.add(task.owner);
       if (task.reviewer) userIds.add(task.reviewer);
-      for (const id of task.contributors) userIds.add(id);
-      for (const id of task.dependencies) dependencyIds.add(id);
+      if (Array.isArray(task.contributors)) {
+        for (const id of task.contributors) userIds.add(id);
+      }
+      if (Array.isArray(task.dependencies)) {
+        for (const id of task.dependencies) dependencyIds.add(id);
+      }
     }
 
     const [users, dependencyTasks] = await Promise.all([
@@ -376,16 +380,23 @@ export class ProjectsService {
       return user ? { user_id: user.user_id, username: user.username, full_name: user.full_name } : null;
     };
 
-    return tasks.map((task: any) => ({
-      ...task,
-      owner_user: toPublicUser(task.owner),
-      contributor_users: task.contributors.map(toPublicUser).filter((u: any) => u !== null),
-      reviewer_user: toPublicUser(task.reviewer),
-      dependency_tasks: task.dependencies
-        .map((id: string) => taskById.get(id))
-        .filter((t: any) => t !== undefined)
-        .map((t: any) => ({ task_id: t.task_id, title: t.title, status: t.status })),
-    }));
+    return tasks.map((task: any) => {
+      const contributorsList: string[] = Array.isArray(task.contributors) ? task.contributors : [];
+      const dependenciesList: string[] = Array.isArray(task.dependencies) ? task.dependencies : [];
+
+      return {
+        ...task,
+        contributors: contributorsList,
+        dependencies: dependenciesList,
+        owner_user: toPublicUser(task.owner),
+        contributor_users: contributorsList.map(toPublicUser).filter((u: any) => u !== null),
+        reviewer_user: toPublicUser(task.reviewer),
+        dependency_tasks: dependenciesList
+          .map((id: string) => taskById.get(id))
+          .filter((t: any) => t !== undefined)
+          .map((t: any) => ({ task_id: t.task_id, title: t.title, status: t.status })),
+      };
+    });
   }
 
   private async getAssignmentAuthority(projectId: string, userId: string): Promise<boolean> {
