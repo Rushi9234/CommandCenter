@@ -468,3 +468,122 @@ CREATE INDEX IF NOT EXISTS idx_guidance_context ON guidance_items(context_type, 
 CREATE INDEX IF NOT EXISTS idx_guidance_recipient ON guidance_items(recipient_id);
 CREATE INDEX IF NOT EXISTS idx_guidance_author ON guidance_items(author_id);
 CREATE INDEX IF NOT EXISTS idx_guidance_status ON guidance_items(status);
+
+-- Migration 1789700000000 (backend/migrations/1789700000000_add-task-goal-id.sql):
+-- Add optional goal_id foreign key to tasks table for Goal -> Task linkage
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS goal_id UUID REFERENCES goals(goal_id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_tasks_goal_id ON tasks(goal_id);
+
+-- Migration 1789316717825 (backend/migrations/1789316717825_add-notification-conversation-id.sql):
+-- Add optional conversation_id foreign key to notifications table
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS conversation_id UUID REFERENCES conversations(conversation_id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_notifications_conversation_id ON notifications(conversation_id);
+
+-- Migration 1790000000000 (backend/migrations/1790000000000_add-ai-audit-logs.sql):
+-- AI Query Audit Logs Table
+CREATE TABLE IF NOT EXISTS ai_query_audit_logs (
+    log_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    intent_category VARCHAR(32) NOT NULL,
+    scope_type VARCHAR(32),
+    scope_id UUID,
+    tools_called TEXT[],
+    token_usage_input INT NOT NULL DEFAULT 0,
+    token_usage_output INT NOT NULL DEFAULT 0,
+    execution_time_ms INT NOT NULL DEFAULT 0,
+    status_code INT NOT NULL DEFAULT 200,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_query_audit_user_date ON ai_query_audit_logs(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_query_audit_scope ON ai_query_audit_logs(scope_type, scope_id);
+
+-- Migration 1790100000000 (backend/migrations/1790100000000_add-ai-conversation-sessions.sql):
+-- AI Conversation Sessions Table
+CREATE TABLE IF NOT EXISTS ai_conversation_sessions (
+    session_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    scope_type VARCHAR(32) NOT NULL,
+    scope_id UUID,
+    messages JSONB NOT NULL DEFAULT '[]'::jsonb,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_conversation_user_scope_id 
+ON ai_conversation_sessions(user_id, scope_type, scope_id) 
+WHERE scope_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_conversation_user_scope_null 
+ON ai_conversation_sessions(user_id, scope_type) 
+WHERE scope_id IS NULL;
+
+-- Migration 1793000000000 (backend/migrations/1793000000000_add-support-tickets-schema.sql):
+-- Support Ticket System & Admin Dashboard Schema
+CREATE TABLE IF NOT EXISTS feedback_reports (
+  reference_id VARCHAR(32) PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  report_type VARCHAR(32) NOT NULL CHECK (report_type IN ('bug', 'complaint', 'feature', 'suggestion', 'support', 'other')),
+  subject VARCHAR(255) NOT NULL,
+  description TEXT NOT NULL,
+  affected_page VARCHAR(255),
+  expected_behavior TEXT,
+  actual_behavior TEXT,
+  severity VARCHAR(16) NOT NULL DEFAULT 'medium' CHECK (severity IN ('low', 'medium', 'high', 'critical')),
+  contact_preference VARCHAR(16) NOT NULL DEFAULT 'email' CHECK (contact_preference IN ('email', 'in_app', 'none')),
+  attachment_url VARCHAR(500),
+  status VARCHAR(32) NOT NULL DEFAULT 'submitted' CHECK (status IN ('submitted', 'under_review', 'in_progress', 'waiting_for_user', 'resolved', 'reopened', 'closed')),
+  user_name VARCHAR(255),
+  user_email VARCHAR(255),
+  delivery_status VARCHAR(32) DEFAULT 'saved_locally',
+  assigned_to UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  resolution_notes TEXT,
+  resolved_at TIMESTAMP WITH TIME ZONE,
+  resolved_by UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  closed_at TIMESTAMP WITH TIME ZONE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_reports_status ON feedback_reports(status);
+CREATE INDEX IF NOT EXISTS idx_feedback_reports_assigned ON feedback_reports(assigned_to);
+CREATE INDEX IF NOT EXISTS idx_feedback_reports_user ON feedback_reports(user_id);
+
+CREATE TABLE IF NOT EXISTS feedback_messages (
+  message_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reference_id VARCHAR(32) NOT NULL REFERENCES feedback_reports(reference_id) ON DELETE CASCADE,
+  sender_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  sender_type VARCHAR(16) NOT NULL CHECK (sender_type IN ('user', 'support', 'system')),
+  message TEXT NOT NULL CHECK (char_length(message) BETWEEN 1 AND 5000),
+  is_internal BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_messages_ref ON feedback_messages(reference_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_feedback_messages_internal ON feedback_messages(reference_id, is_internal);
+
+CREATE TABLE IF NOT EXISTS feedback_attachments (
+  attachment_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reference_id VARCHAR(32) NOT NULL REFERENCES feedback_reports(reference_id) ON DELETE CASCADE,
+  message_id UUID REFERENCES feedback_messages(message_id) ON DELETE CASCADE,
+  filename VARCHAR(255) NOT NULL,
+  mime_type VARCHAR(64) NOT NULL,
+  file_size INTEGER NOT NULL CHECK (file_size <= 5242880),
+  file_data BYTEA NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_attachments_ref ON feedback_attachments(reference_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_attachments_msg ON feedback_attachments(message_id);
+
+CREATE TABLE IF NOT EXISTS feedback_audit_logs (
+  log_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reference_id VARCHAR(32) NOT NULL REFERENCES feedback_reports(reference_id) ON DELETE CASCADE,
+  actor_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  previous_status VARCHAR(32),
+  new_status VARCHAR(32) NOT NULL,
+  change_reason TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_audit_ref ON feedback_audit_logs(reference_id, created_at DESC);

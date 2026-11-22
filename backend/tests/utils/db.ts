@@ -17,6 +17,10 @@ export const testPool = new Pool({ connectionString: process.env.DATABASE_URL })
 // cascade-reachable table already listed here for clarity (e.g.
 // `messages` is likewise redundant with `blockers`'s cascade).
 const TABLES = [
+  'feedback_audit_logs',
+  'feedback_attachments',
+  'feedback_messages',
+  'feedback_reports',
   'ai_conversation_sessions',
   'ai_query_audit_logs',
   'guidance_items',
